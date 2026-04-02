@@ -36,5 +36,10 @@ tidy:
 test-runn:
     runn run tests/runn/*.yaml
 
+# Test notify-slack.sh: dry-run payload structure + bash/Go compress_gz round-trip
+# Requires: bash, gzip, base64, jq
+test-scripts:
+    go test ./internal/adapter/input/slack/... -run TestNotifyScript -v
+
 # Run all checks (used before commit)
 check: fmt lint test

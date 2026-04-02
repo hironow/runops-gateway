@@ -62,7 +62,7 @@ steps:
       - push-image
 
   # Step 4: Send Slack ChatOps notification with approval buttons.
-  # resource_names / targets use plural (CSV) fields as expected by handler.go.
+  # Payload logic lives in scripts/notify-slack.sh (tested via Go tests).
   - id: notify-slack
     name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
     entrypoint: bash
@@ -71,132 +71,12 @@ steps:
     args:
       - -c
       - |
-        set -euo pipefail
-        REVISIONS=$(cat /workspace/revisions.txt)
-        TIMESTAMP=$(date +%s)
-        BUILD_INFO="${BRANCH_NAME} @ ${COMMIT_SHA:0:7}"
-
-        # Slack header block text is limited to 150 chars.
-        # "Deploy Ready: " is 14 chars, leaving 135 for the service names.
-        # Cloud Run service names are ASCII-only so byte count == rune count.
-        SVC_DISPLAY="${_SERVICE_NAMES}"
-        if [ "${#SVC_DISPLAY}" -gt 135 ]; then
-          SVC_DISPLAY="${SVC_DISPLAY:0:134}…"
-        fi
-
-        # compress_gz compresses a JSON string to the "gz:<base64url>" format expected
-        # by parseActionValue in adapter/input/slack/handler.go.
-        # gzip -c writes to stdout; base64 -w 0 disables line-wrapping (Linux/Debian).
-        # tr converts standard base64 (+/) to URL-safe base64 (-_) and strips padding (=).
-        compress_gz() {
-          printf '%s' "$1" | gzip -c | base64 -w 0 | tr '+/' '-_' | tr -d '='
-        }
-
-        # Action value for the "run DB migration then canary" button.
-        # On completion the gateway will offer the canary button automatically.
-        JOB_ACTION=$(jq -n \
-          --arg rt   "job" \
-          --arg rn   "${_MIGRATION_JOB_NAME}" \
-          --arg t    "" \
-          --arg a    "migrate_apply" \
-          --argjson ia "${TIMESTAMP}" \
-          --arg nsn  "${_SERVICE_NAMES}" \
-          --arg nr   "${REVISIONS}" \
-          --arg na   "canary_10" \
-          '{resource_type:$rt, resource_names:$rn, targets:$t, action:$a,
-            issued_at:$ia, migration_done:false,
-            next_service_names:$nsn, next_revisions:$nr, next_action:$na}')
-
-        # Action value for the "skip migration, go straight to canary" button.
-        SRV_ACTION=$(jq -n \
-          --arg rt  "service" \
-          --arg rn  "${_SERVICE_NAMES}" \
-          --arg t   "${REVISIONS}" \
-          --arg a   "canary_10" \
-          --argjson ia "${TIMESTAMP}" \
-          '{resource_type:$rt, resource_names:$rn, targets:$t, action:$a,
-            issued_at:$ia, migration_done:true}')
-
-        # Deny action value (same resource bundle, no operation)
-        DENY_ACTION=$(jq -n \
-          --arg rt  "service" \
-          --arg rn  "${_SERVICE_NAMES}" \
-          --arg t   "${REVISIONS}" \
-          --arg a   "canary_10" \
-          --argjson ia "${TIMESTAMP}" \
-          '{resource_type:$rt, resource_names:$rn, targets:$t, action:$a, issued_at:$ia}')
-
-        # Compress all button values to gz: format.
-        # Matches marshalActionValue in adapter/output/slack/blockkit.go which always
-        # compresses so the decompression path is exercised on every button click.
-        JOB_VALUE="gz:$(compress_gz "$JOB_ACTION")"
-        SRV_VALUE="gz:$(compress_gz "$SRV_ACTION")"
-        DENY_VALUE="gz:$(compress_gz "$DENY_ACTION")"
-
-        PAYLOAD=$(jq -n \
-          --arg svc        "${SVC_DISPLAY}" \
-          --arg build_info "${BUILD_INFO}" \
-          --arg revisions  "${REVISIONS}" \
-          --arg job_val    "$JOB_VALUE" \
-          --arg srv_val    "$SRV_VALUE" \
-          --arg deny_val   "$DENY_VALUE" \
-          '{
-            blocks: [
-              {
-                type: "header",
-                text: {type: "plain_text", text: ("Deploy Ready: " + $svc), emoji: true}
-              },
-              {
-                type: "section",
-                text: {
-                  type: "mrkdwn",
-                  text: ("*Revision(s):* `" + $revisions + "`\n*Build:* " + $build_info)
-                },
-                accessory: {
-                  type: "image",
-                  image_url: "https://placehold.co/75x75/FF0000/FFFFFF?text=PROD",
-                  alt_text: "PROD environment"
-                }
-              },
-              {
-                type: "actions",
-                elements: [
-                  {
-                    type: "button",
-                    text: {type: "plain_text", emoji: true, text: "1. DB Migration \u2192 Canary"},
-                    style: "danger",
-                    action_id: "approve",
-                    value: $job_val
-                  },
-                  {
-                    type: "button",
-                    text: {type: "plain_text", emoji: true, text: "2. Canary (skip migration)"},
-                    style: "primary",
-                    action_id: "approve",
-                    value: $srv_val,
-                    confirm: {
-                      title: {type: "plain_text", text: "\u7d9a\u884c\u3057\u307e\u3059\u304b\uff1f"},
-                      text: {type: "mrkdwn", text: "DB\u30de\u30a4\u30b0\u30ec\u30fc\u30b7\u30e7\u30f3\u3092\u5b9f\u65bd\u3057\u307e\u3057\u305f\u304b\uff1f\u672a\u5b9f\u65bd\u306e\u5834\u5408\u306f\u5148\u306b\u5b9f\u884c\u3057\u3066\u304f\u3060\u3055\u3044\u3002"},
-                      confirm: {type: "plain_text", text: "\u306f\u3044\u3001\u7d9a\u884c\u3057\u307e\u3059"},
-                      deny: {type: "plain_text", text: "\u30ad\u30e3\u30f3\u30bb\u30eb"}
-                    }
-                  },
-                  {
-                    type: "button",
-                    text: {type: "plain_text", emoji: true, text: "\ud83d\udecf Deny"},
-                    style: "danger",
-                    action_id: "deny",
-                    value: $deny_val
-                  }
-                ]
-              }
-            ]
-          }')
-
-        curl -s -X POST \
-          -H "Content-Type: application/json" \
-          --data "${PAYLOAD}" \
-          "${SLACK_WEBHOOK_URL}"
+        /workspace/scripts/notify-slack.sh \
+          "${_SERVICE_NAMES}" \
+          "${_MIGRATION_JOB_NAME}" \
+          "${BRANCH_NAME}" \
+          "${COMMIT_SHA}" \
+          "$(cat /workspace/revisions.txt)"
     waitFor:
       - deploy-services
       - update-migration-job
