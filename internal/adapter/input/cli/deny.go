@@ -1,0 +1,43 @@
+package cli
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/hironow/runops-gateway/internal/core/domain"
+	"github.com/hironow/runops-gateway/internal/core/port"
+	"github.com/spf13/cobra"
+)
+
+func newDenyCmd(useCase port.RunOpsUseCase) *cobra.Command {
+	var approver string
+	var noSlack bool
+
+	cmd := &cobra.Command{
+		Use:   "deny <resource-type> <resource-name>",
+		Short: "Deny a pending ChatOps operation",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if approver == "" {
+				approver = gitUserEmail()
+			}
+			req := domain.ApprovalRequest{
+				ResourceType: domain.ResourceType(args[0]),
+				ResourceName: args[1],
+				ApproverID:   approver,
+				Source:       "cli",
+				IssuedAt:     0,
+				ResponseURL:  "",
+			}
+			if err := useCase.DenyAction(context.Background(), req); err != nil {
+				return fmt.Errorf("deny failed: %w", err)
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), "Operation denied.")
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&approver, "approver", "", "Approver ID or email")
+	cmd.Flags().BoolVar(&noSlack, "no-slack", false, "Disable Slack notifications")
+	return cmd
+}
