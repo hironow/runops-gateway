@@ -213,9 +213,9 @@ func TestApproveAction_UnauthorizedUser(t *testing.T) {
 	// when
 	err := svc.ApproveAction(context.Background(), req)
 
-	// then
-	if err != nil {
-		t.Fatalf("expected nil error, got %v", err)
+	// then — must return non-nil so CLI callers get a non-zero exit code
+	if err == nil {
+		t.Fatal("expected error for unauthorized user, got nil")
 	}
 	if !notifier.sendEphemeralCalled {
 		t.Error("expected SendEphemeral to be called")
@@ -236,9 +236,9 @@ func TestApproveAction_ExpiredButton(t *testing.T) {
 	// when
 	err := svc.ApproveAction(context.Background(), req)
 
-	// then
-	if err != nil {
-		t.Fatalf("expected nil error, got %v", err)
+	// then — must return non-nil so CLI callers get a non-zero exit code
+	if err == nil {
+		t.Fatal("expected error for expired request, got nil")
 	}
 	if !notifier.sendEphemeralCalled {
 		t.Error("expected SendEphemeral to be called")
@@ -458,9 +458,9 @@ func TestApproveAction_UnauthorizedTakesPriorityOverExpired(t *testing.T) {
 	// when
 	err := svc.ApproveAction(context.Background(), req)
 
-	// then — returns nil with ephemeral message (unauthorized path)
-	if err != nil {
-		t.Fatalf("expected nil error, got %v", err)
+	// then — error returned (unauthorized path takes priority)
+	if err == nil {
+		t.Fatal("expected error for unauthorized user, got nil")
 	}
 	if !notifier.sendEphemeralCalled {
 		t.Error("expected SendEphemeral to be called")
@@ -470,8 +470,8 @@ func TestApproveAction_UnauthorizedTakesPriorityOverExpired(t *testing.T) {
 	}
 }
 
-func TestDenyAction_NotifierError_ReturnsNil(t *testing.T) {
-	// given — ReplaceMessage fails; DenyAction must still return nil (errors are logged, not propagated)
+func TestDenyAction_NotifierError_ReturnsError(t *testing.T) {
+	// given — ReplaceMessage fails; DenyAction's only job is notification, so failure must propagate
 	gcp := &mockGCP{}
 	notifier := &mockNotifier{}
 	notifier.replaceErr = errors.New("slack down")
@@ -482,9 +482,9 @@ func TestDenyAction_NotifierError_ReturnsNil(t *testing.T) {
 	// when
 	err := svc.DenyAction(context.Background(), req)
 
-	// then
-	if err != nil {
-		t.Fatalf("expected nil error even when notifier fails, got %v", err)
+	// then — notification IS the operation; its failure is a real failure
+	if err == nil {
+		t.Fatal("expected error when denial notification fails, got nil")
 	}
 }
 
@@ -515,9 +515,9 @@ func TestApproveAction_DuplicateExecution(t *testing.T) {
 	// when — second call finds the key locked
 	err2 := svc.ApproveAction(context.Background(), req)
 
-	// then — second call should return nil and NOT call ShiftTraffic
-	if err2 != nil {
-		t.Fatalf("expected nil error on duplicate call, got %v", err2)
+	// then — second call should return non-nil (rejected) and NOT call ShiftTraffic
+	if err2 == nil {
+		t.Fatal("expected error on duplicate execution, got nil")
 	}
 	if gcp.shiftTrafficCalled {
 		t.Error("expected ShiftTraffic NOT to be called on duplicate execution")

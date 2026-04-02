@@ -35,7 +35,7 @@ func (s *RunOpsService) ApproveAction(ctx context.Context, req domain.ApprovalRe
 	key := port.OperationKey(req)
 	if !s.store.TryLock(key) {
 		_ = s.notifier.SendEphemeral(ctx, target, req.ApproverID, "⚠️ この操作は既に実行中です。")
-		return nil
+		return fmt.Errorf("usecase: operation already in progress: %s", key)
 	}
 	defer s.store.Release(key)
 
@@ -43,14 +43,14 @@ func (s *RunOpsService) ApproveAction(ctx context.Context, req domain.ApprovalRe
 		if err := s.notifier.SendEphemeral(ctx, target, req.ApproverID, "権限がありません。承認操作は許可されたユーザーのみ実行できます。"); err != nil {
 			slog.Error("SendEphemeral failed", "err", err)
 		}
-		return nil
+		return fmt.Errorf("usecase: unauthorized user: %s", req.ApproverID)
 	}
 
 	if s.auth.IsExpired(req.IssuedAt) {
 		if err := s.notifier.SendEphemeral(ctx, target, req.ApproverID, "このリクエストは期限切れです。再度操作を実行してください。"); err != nil {
 			slog.Error("SendEphemeral failed", "err", err)
 		}
-		return nil
+		return fmt.Errorf("usecase: request expired (issued_at=%d)", req.IssuedAt)
 	}
 
 	switch req.ResourceType {
@@ -74,7 +74,7 @@ func (s *RunOpsService) DenyAction(ctx context.Context, req domain.ApprovalReque
 
 	blocks := completionBlock(fmt.Sprintf(":x: 操作が拒否されました。リソース: *%s*", req.ResourceName))
 	if err := s.notifier.ReplaceMessage(ctx, target, blocks); err != nil {
-		slog.Error("ReplaceMessage failed on deny", "err", err)
+		return fmt.Errorf("usecase: deny notification failed: %w", err)
 	}
 	return nil
 }
