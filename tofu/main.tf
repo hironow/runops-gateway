@@ -27,18 +27,27 @@ resource "google_project_iam_member" "chatops_sql_admin" {
   }
 }
 
-# Secret Manager: Slack signing secret
+# Secret Manager: Slack signing secret (value added manually via gcloud or console)
 resource "google_secret_manager_secret" "slack_signing_secret" {
   secret_id = "slack-signing-secret"
-
-  replication {
-    auto {}
-  }
+  replication { auto {} }
 }
 
-# Allow SA to read the signing secret
+# Secret Manager: Slack incoming webhook URL (used by scripts/notify-slack.sh)
+resource "google_secret_manager_secret" "slack_webhook_url" {
+  secret_id = "slack-webhook-url"
+  replication { auto {} }
+}
+
+# Allow runtime SA to read both secrets
 resource "google_secret_manager_secret_iam_member" "chatops_signing_secret_accessor" {
   secret_id = google_secret_manager_secret.slack_signing_secret.secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.chatops_sa.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "chatops_webhook_url_accessor" {
+  secret_id = google_secret_manager_secret.slack_webhook_url.secret_id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.chatops_sa.email}"
 }
@@ -91,7 +100,9 @@ resource "google_cloud_run_v2_service" "runops_gateway" {
 
   lifecycle {
     ignore_changes = [
-      # Image is updated via Cloud Build, not Terraform
+      # Image is managed by the GitHub Actions CD pipeline (deploy job),
+      # not by OpenTofu. Tofu handles infrastructure; image updates are
+      # deployed via `gcloud run deploy` in .github/workflows/cd.yaml.
       template[0].containers[0].image,
     ]
   }
