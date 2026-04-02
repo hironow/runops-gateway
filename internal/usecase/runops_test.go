@@ -14,12 +14,14 @@ import (
 // --- mock implementations ---
 
 type mockGCP struct {
-	shiftTrafficCalled bool
-	shiftTrafficErr    error
-	executeJobCalled   bool
-	executeJobErr      error
-	triggerBackupCalled bool
-	triggerBackupErr   error
+	shiftTrafficCalled      bool
+	shiftTrafficErr         error
+	executeJobCalled        bool
+	executeJobErr           error
+	triggerBackupCalled     bool
+	triggerBackupErr        error
+	updateWorkerPoolCalled  bool
+	updateWorkerPoolErr     error
 }
 
 func (m *mockGCP) ShiftTraffic(_ context.Context, _, _ string, _ int32) error {
@@ -35,6 +37,11 @@ func (m *mockGCP) ExecuteJob(_ context.Context, _ string, _ []string) error {
 func (m *mockGCP) TriggerBackup(_ context.Context, _ string) error {
 	m.triggerBackupCalled = true
 	return m.triggerBackupErr
+}
+
+func (m *mockGCP) UpdateWorkerPool(_ context.Context, _, _ string, _ int32) error {
+	m.updateWorkerPoolCalled = true
+	return m.updateWorkerPoolErr
 }
 
 type mockNotifier struct {
@@ -183,8 +190,11 @@ func TestApproveAction_WorkerPool_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
-	if !gcp.shiftTrafficCalled {
-		t.Error("expected ShiftTraffic to be called")
+	if !gcp.updateWorkerPoolCalled {
+		t.Error("expected UpdateWorkerPool to be called")
+	}
+	if gcp.shiftTrafficCalled {
+		t.Error("expected ShiftTraffic NOT to be called for worker pool")
 	}
 	if !notifier.replaceMessageCalled {
 		t.Error("expected ReplaceMessage to be called")

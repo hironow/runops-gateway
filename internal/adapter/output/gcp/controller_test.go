@@ -106,3 +106,18 @@ func TestTriggerBackup_CancelledContext(t *testing.T) {
 		t.Error("expected error with cancelled context")
 	}
 }
+
+func TestUpdateWorkerPool_CancelledContext(t *testing.T) {
+	// given
+	ctrl, _ := gcp.NewController(gcp.Config{ProjectID: "test-project"})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // pre-cancel
+
+	// when
+	err := ctrl.UpdateWorkerPool(ctx, "my-pool", "my-revision", 20)
+
+	// then — should fail (either context error or GCP auth error in test env)
+	if err == nil {
+		t.Error("expected error with cancelled context")
+	}
+}

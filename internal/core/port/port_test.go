@@ -39,6 +39,10 @@ func (s *stubGCPController) TriggerBackup(_ context.Context, _ string) error {
 	return nil
 }
 
+func (s *stubGCPController) UpdateWorkerPool(_ context.Context, _, _ string, _ int32) error {
+	return nil
+}
+
 var _ port.GCPController = (*stubGCPController)(nil)
 
 // stubNotifier implements Notifier.

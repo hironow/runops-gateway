@@ -154,7 +154,7 @@ func (s *RunOpsService) approveWorkerPool(ctx context.Context, req domain.Approv
 	if percent == 0 {
 		percent = 10 // default for canary
 	}
-	if err := s.gcp.ShiftTraffic(ctx, req.ResourceName, req.Target, percent); err != nil {
+	if err := s.gcp.UpdateWorkerPool(ctx, req.ResourceName, req.Target, percent); err != nil {
 		if uerr := s.notifier.UpdateMessage(ctx, target, fmt.Sprintf("エラーが発生しました: %v", err)); uerr != nil {
 			slog.Error("UpdateMessage failed", "err", uerr)
 		}

@@ -27,6 +27,8 @@ type GCPController interface {
 	ExecuteJob(ctx context.Context, jobName string, args []string) error
 	// TriggerBackup initiates a database backup for the specified Cloud SQL instance.
 	TriggerBackup(ctx context.Context, instanceName string) error
+	// UpdateWorkerPool shifts instance allocation for a Cloud Run worker pool revision to the given percent.
+	UpdateWorkerPool(ctx context.Context, poolName, revision string, percent int32) error
 }
 
 // NotifyTarget describes where and how a notification should be delivered.

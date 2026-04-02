@@ -117,6 +117,50 @@ func (c *Controller) ExecuteJob(ctx context.Context, jobName string, args []stri
 	return nil
 }
 
+// UpdateWorkerPool shifts instance allocation for a Cloud Run Worker Pool revision to the given percent.
+func (c *Controller) UpdateWorkerPool(ctx context.Context, poolName, revision string, percent int32) error {
+	slog.InfoContext(ctx, "gcp: updating worker pool",
+		"pool", poolName, "revision", revision, "percent", percent)
+
+	client, err := run.NewWorkerPoolsClient(ctx)
+	if err != nil {
+		return fmt.Errorf("gcp: create worker pools client: %w", err)
+	}
+	defer client.Close()
+
+	poolPath := fmt.Sprintf("projects/%s/locations/%s/workerPools/%s",
+		c.cfg.ProjectID, c.cfg.Location, poolName)
+
+	req := &runpb.UpdateWorkerPoolRequest{
+		WorkerPool: &runpb.WorkerPool{
+			Name: poolPath,
+			InstanceSplits: []*runpb.InstanceSplit{
+				{
+					Type:     runpb.InstanceSplitAllocationType_INSTANCE_SPLIT_ALLOCATION_TYPE_REVISION,
+					Revision: revision,
+					Percent:  percent,
+				},
+				{
+					Type:    runpb.InstanceSplitAllocationType_INSTANCE_SPLIT_ALLOCATION_TYPE_LATEST,
+					Percent: 100 - percent,
+				},
+			},
+		},
+	}
+
+	op, err := client.UpdateWorkerPool(ctx, req)
+	if err != nil {
+		return fmt.Errorf("gcp: update worker pool: %w", err)
+	}
+	if _, err := op.Wait(ctx); err != nil {
+		return fmt.Errorf("gcp: wait update worker pool LRO: %w", err)
+	}
+
+	slog.InfoContext(ctx, "gcp: worker pool update complete",
+		"pool", poolName, "revision", revision, "percent", percent)
+	return nil
+}
+
 // TriggerBackup initiates an on-demand Cloud SQL backup and waits for completion.
 func (c *Controller) TriggerBackup(ctx context.Context, instanceName string) error {
 	slog.InfoContext(ctx, "gcp: triggering cloud sql backup", "instance", instanceName)
