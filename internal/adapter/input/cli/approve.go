@@ -37,7 +37,7 @@ func newApproveCmd(useCase port.RunOpsUseCase) *cobra.Command {
 				Action:       action,
 				ApproverID:   approver,
 				Source:       "cli",
-				IssuedAt:     0, // CLI mode: no expiry
+				IssuedAt:     0,  // CLI mode: no expiry
 				ResponseURL:  "", // CLI mode: no Slack response URL
 			}
 

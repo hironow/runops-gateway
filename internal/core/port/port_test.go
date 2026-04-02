@@ -66,7 +66,7 @@ var _ port.Notifier = (*stubNotifier)(nil)
 type stubAuthChecker struct{}
 
 func (s *stubAuthChecker) IsAuthorized(_ string) bool { return true }
-func (s *stubAuthChecker) IsExpired(_ int64) bool      { return false }
+func (s *stubAuthChecker) IsExpired(_ int64) bool     { return false }
 
 var _ port.AuthChecker = (*stubAuthChecker)(nil)
 

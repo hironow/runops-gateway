@@ -11,8 +11,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/hironow/runops-gateway/internal/adapter/output/auth"
 	slackadapter "github.com/hironow/runops-gateway/internal/adapter/input/slack"
+	"github.com/hironow/runops-gateway/internal/adapter/output/auth"
 	gcpadapter "github.com/hironow/runops-gateway/internal/adapter/output/gcp"
 	slacknotifier "github.com/hironow/runops-gateway/internal/adapter/output/slack"
 	"github.com/hironow/runops-gateway/internal/adapter/output/state"

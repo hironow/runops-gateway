@@ -22,12 +22,12 @@ func EnvironmentImageURL(env string) string {
 
 // DeploymentPayload holds the data needed to build a Slack approval message.
 type DeploymentPayload struct {
-	Environment  string    // "production", "staging", "development"
-	ResourceType string    // "service", "job", "worker-pool"
-	ResourceName string    // e.g. "frontend-service"
-	Target       string    // revision name (empty for jobs)
-	Action       string    // e.g. "canary_10"
-	BuildInfo    string    // e.g. "main @ a1b2c3d"
+	Environment  string // "production", "staging", "development"
+	ResourceType string // "service", "job", "worker-pool"
+	ResourceName string // e.g. "frontend-service"
+	Target       string // revision name (empty for jobs)
+	Action       string // e.g. "canary_10"
+	BuildInfo    string // e.g. "main @ a1b2c3d"
 	IssuedAt     time.Time
 	ApproveValue string // JSON string for approve button value
 	DenyValue    string // JSON string for deny button value

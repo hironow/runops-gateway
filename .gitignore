@@ -1,0 +1,26 @@
+# Binaries
+/runops-gateway
+/runops
+
+# Go build cache
+*.test
+*.out
+
+# Environment
+.env
+.env.*
+
+# OS
+.DS_Store
+
+# Editor
+.idea/
+.vscode/
+*.swp
+
+# Expedition state files (paintress)
+journal.tsv
+gradient.json
+lumina.md
+gommage.md
+continent-config.yaml

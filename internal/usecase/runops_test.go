@@ -14,14 +14,14 @@ import (
 // --- mock implementations ---
 
 type mockGCP struct {
-	shiftTrafficCalled      bool
-	shiftTrafficErr         error
-	executeJobCalled        bool
-	executeJobErr           error
-	triggerBackupCalled     bool
-	triggerBackupErr        error
-	updateWorkerPoolCalled  bool
-	updateWorkerPoolErr     error
+	shiftTrafficCalled     bool
+	shiftTrafficErr        error
+	executeJobCalled       bool
+	executeJobErr          error
+	triggerBackupCalled    bool
+	triggerBackupErr       error
+	updateWorkerPoolCalled bool
+	updateWorkerPoolErr    error
 }
 
 func (m *mockGCP) ShiftTraffic(_ context.Context, _, _ string, _ int32) error {
@@ -76,7 +76,7 @@ type mockAuth struct {
 }
 
 func (m *mockAuth) IsAuthorized(_ string) bool { return m.authorized }
-func (m *mockAuth) IsExpired(_ int64) bool      { return m.expired }
+func (m *mockAuth) IsExpired(_ int64) bool     { return m.expired }
 
 type mockStore struct{ locked bool }
 
