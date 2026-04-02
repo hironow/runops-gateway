@@ -49,13 +49,17 @@ gcloud secrets create slack-webhook-url --replication-policy=automatic
 gcloud secrets versions add slack-webhook-url \
   --data-file=<(echo -n "https://hooks.slack.com/services/YOUR/WEBHOOK/URL")
 
-# (2) Docker イメージをビルドして Artifact Registry に push
+# (2) OpenTofu リモートステート用の GCS バケットを作成 (CI/CD が使用)
+gcloud storage buckets create gs://YOUR_TOFU_STATE_BUCKET \
+  --location=asia-northeast1 --uniform-bucket-level-access
+
+# (3) Docker イメージをビルドして Artifact Registry に push
 docker build -t asia-northeast1-docker.pkg.dev/YOUR_PROJECT/runops/runops-gateway:latest .
 docker push asia-northeast1-docker.pkg.dev/YOUR_PROJECT/runops/runops-gateway:latest
 
-# (3) OpenTofu でインフラを構築 (Cloud Run / IAM / Secret Manager バインド)
+# (4) OpenTofu でインフラを構築 (Cloud Run / IAM / Secret Manager バインド)
 cd tofu
-tofu init
+tofu init -backend-config="bucket=YOUR_TOFU_STATE_BUCKET"
 tofu apply \
   -var="project_id=YOUR_PROJECT" \
   -var="image=asia-northeast1-docker.pkg.dev/YOUR_PROJECT/runops/runops-gateway:latest" \
@@ -63,7 +67,7 @@ tofu apply \
 ```
 
 ```bash
-# (4) Slack App の設定
+# (5) Slack App の設定
 #     Slack App 管理画面 > Interactivity & Shortcuts > Request URL に以下を設定:
 #     https://<CLOUD_RUN_SERVICE_URL>/slack/interactive
 #

@@ -13,26 +13,110 @@ permissions:
   contents: read
   id-token: write   # required for Workload Identity Federation
 
+# ---------------------------------------------------------------------------
+# Required GitHub repository variables (Settings > Secrets and variables >
+# Actions > Variables):
+#
+#   GCP_WORKLOAD_IDENTITY_PROVIDER
+#     e.g. projects/123/locations/global/workloadIdentityPools/github/providers/github
+#   GCP_SERVICE_ACCOUNT
+#     e.g. runops-gateway-deployer@YOUR_PROJECT.iam.gserviceaccount.com
+#   GCP_PROJECT_ID            e.g. your-gcp-project
+#   ARTIFACT_REGISTRY_LOCATION  e.g. asia-northeast1
+#   CLOUD_RUN_SERVICE           e.g. runops-gateway
+#   CLOUD_RUN_REGION            e.g. asia-northeast1
+#   TOFU_STATE_BUCKET           GCS bucket for OpenTofu remote state
+#   ALLOWED_SLACK_USERS         comma-separated Slack user IDs for approval
+# ---------------------------------------------------------------------------
+
 jobs:
-  deploy:
-    name: Build & Deploy
+  # -------------------------------------------------------------------------
+  # Detect which paths changed so downstream jobs can skip when irrelevant.
+  # -------------------------------------------------------------------------
+  check-changes:
+    name: Check changed paths
+    runs-on: ubuntu-24.04
+    outputs:
+      tofu: ${{ steps.filter.outputs.tofu }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            tofu:
+              - 'tofu/**'
+
+  # -------------------------------------------------------------------------
+  # Apply infrastructure changes.
+  # Runs only when tofu/** is modified; skipped on pure code pushes.
+  #
+  # NOTE: tofu/main.tf has `lifecycle { ignore_changes = [image] }` so
+  # Terraform never overwrites the container image that the deploy job manages.
+  # TF_VAR_image is therefore a placeholder value used only on first creation.
+  # -------------------------------------------------------------------------
+  infra:
+    name: Apply Infrastructure (OpenTofu)
+    needs: check-changes
+    if: needs.check-changes.outputs.tofu == 'true'
     runs-on: ubuntu-24.04
     environment: production
-
-    env:
-      IMAGE: ${{ vars.ARTIFACT_REGISTRY_LOCATION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/runops/runops-gateway
+    defaults:
+      run:
+        working-directory: tofu
 
     steps:
       - uses: actions/checkout@v4
 
-      # Authenticate to GCP via Workload Identity Federation (no long-lived key).
-      # Required GitHub variables (repository or environment level):
-      #   GCP_WORKLOAD_IDENTITY_PROVIDER  e.g. projects/123/locations/global/workloadIdentityPools/github/providers/github
-      #   GCP_SERVICE_ACCOUNT             e.g. runops-gateway-deployer@YOUR_PROJECT.iam.gserviceaccount.com
-      #   GCP_PROJECT_ID                  e.g. your-gcp-project
-      #   ARTIFACT_REGISTRY_LOCATION      e.g. asia-northeast1
-      #   CLOUD_RUN_SERVICE               e.g. runops-gateway
-      #   CLOUD_RUN_REGION                e.g. asia-northeast1
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      - uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: latest
+
+      - name: Init (remote state on GCS)
+        run: |
+          tofu init \
+            -backend-config="bucket=${{ vars.TOFU_STATE_BUCKET }}"
+
+      - name: Apply
+        run: tofu apply -auto-approve
+        env:
+          TF_VAR_project_id: ${{ vars.GCP_PROJECT_ID }}
+          TF_VAR_allowed_slack_users: ${{ vars.ALLOWED_SLACK_USERS }}
+          # Image is managed by the deploy job via `gcloud run deploy`.
+          # This value is only used on first resource creation; subsequent
+          # applies leave the image unchanged (ignore_changes in main.tf).
+          TF_VAR_image: >-
+            ${{ vars.ARTIFACT_REGISTRY_LOCATION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/runops/runops-gateway:latest
+
+  # -------------------------------------------------------------------------
+  # Build container image and deploy to Cloud Run.
+  # Always runs on push to main.
+  # Waits for infra when tofu/ changed; starts immediately when skipped.
+  # -------------------------------------------------------------------------
+  deploy:
+    name: Build & Deploy
+    needs: [check-changes, infra]
+    # Run if infra succeeded OR was skipped (pure code push). Never run if
+    # infra failed — a broken infra state should block the image deploy.
+    if: >-
+      always() &&
+      (needs.infra.result == 'success' || needs.infra.result == 'skipped')
+    runs-on: ubuntu-24.04
+    environment: production
+
+    env:
+      IMAGE: >-
+        ${{ vars.ARTIFACT_REGISTRY_LOCATION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/runops/runops-gateway
+
+    steps:
+      - uses: actions/checkout@v4
+
       - id: auth
         uses: google-github-actions/auth@v2
         with:
@@ -56,7 +140,7 @@ jobs:
           tags: |
             ${{ env.IMAGE }}:${{ github.sha }}
             ${{ env.IMAGE }}:latest
-          # Layer cache via GitHub Actions cache backend (no external registry needed).
+          # Layer cache via GitHub Actions cache backend — no separate registry needed.
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -66,6 +150,6 @@ jobs:
           service: ${{ vars.CLOUD_RUN_SERVICE }}
           region: ${{ vars.CLOUD_RUN_REGION }}
           image: ${{ env.IMAGE }}:${{ github.sha }}
-          # runops-gateway itself is deployed with immediate 100% traffic.
-          # (Canary approval flow is for managed applications, not the gateway itself.)
+          # runops-gateway itself is deployed with 100% traffic immediately.
+          # (The canary approval flow is for managed applications, not the gateway.)
           flags: --traffic=100
