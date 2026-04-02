@@ -45,7 +45,7 @@ variable "tofu_state_bucket" {
 variable "cloud_run_target_service" {
   description = "Default Cloud Run service name that runops-gateway is allowed to operate on"
   type        = string
-  default     = "frontend-service"
+  default     = "runops-gateway"
 }
 
 variable "cloud_sql_instance" {

@@ -12,6 +12,8 @@ resource "google_cloud_run_v2_service_iam_member" "chatops_run_developer" {
   name     = var.cloud_run_target_service
   role     = "roles/run.developer"
   member   = "serviceAccount:${google_service_account.chatops_sa.email}"
+
+  depends_on = [google_cloud_run_v2_service.runops_gateway]
 }
 
 # Cloud SQL admin for backup (scoped to project level — Cloud SQL has no resource-level IAM for backups)
@@ -30,13 +32,40 @@ resource "google_project_iam_member" "chatops_sql_admin" {
 # Secret Manager: Slack signing secret (value added manually via gcloud or console)
 resource "google_secret_manager_secret" "slack_signing_secret" {
   secret_id = "slack-signing-secret"
-  replication { auto {} }
+  replication {
+    auto {}
+  }
 }
 
 # Secret Manager: Slack incoming webhook URL (used by scripts/notify-slack.sh)
 resource "google_secret_manager_secret" "slack_webhook_url" {
   secret_id = "slack-webhook-url"
-  replication { auto {} }
+  replication {
+    auto {}
+  }
+}
+
+# Placeholder secret versions — replace with real values via gcloud after tofu apply:
+#   gcloud secrets versions add slack-signing-secret --data-file=<(echo -n "REAL_VALUE")
+#   gcloud secrets versions add slack-webhook-url --data-file=<(echo -n "REAL_VALUE")
+# These resources are managed by tofu only for the initial bootstrap.
+# The lifecycle ignore_changes prevents tofu from overwriting real values on subsequent applies.
+resource "google_secret_manager_secret_version" "slack_signing_secret_placeholder" {
+  secret      = google_secret_manager_secret.slack_signing_secret.id
+  secret_data = "placeholder"
+
+  lifecycle {
+    ignore_changes = [secret_data]
+  }
+}
+
+resource "google_secret_manager_secret_version" "slack_webhook_url_placeholder" {
+  secret      = google_secret_manager_secret.slack_webhook_url.id
+  secret_data = "placeholder"
+
+  lifecycle {
+    ignore_changes = [secret_data]
+  }
 }
 
 # Allow runtime SA to read both secrets
@@ -54,8 +83,9 @@ resource "google_secret_manager_secret_iam_member" "chatops_webhook_url_accessor
 
 # runops-gateway Cloud Run service
 resource "google_cloud_run_v2_service" "runops_gateway" {
-  name     = "runops-gateway"
-  location = var.region
+  name               = "runops-gateway"
+  location           = var.region
+  deletion_protection = true
 
   template {
     service_account = google_service_account.chatops_sa.email
@@ -90,11 +120,18 @@ resource "google_cloud_run_v2_service" "runops_gateway" {
           }
         }
       }
+
+      resources {
+        limits = {
+          cpu    = "1"
+          memory = "512Mi"
+        }
+      }
     }
 
     scaling {
       min_instance_count = 0
-      max_instance_count = 3
+      max_instance_count = 1
     }
   }
 

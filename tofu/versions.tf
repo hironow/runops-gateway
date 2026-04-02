@@ -1,5 +1,5 @@
 terraform {
-  required_version = ">= 1.8.0"
+  required_version = ">= 1.11.0"
 
   # Remote state on GCS.
   # Bucket and prefix are injected at init time via -backend-config so that
@@ -13,7 +13,7 @@ terraform {
   required_providers {
     google = {
       source  = "hashicorp/google"
-      version = "~> 6.0"
+      version = ">= 7.26.0"
     }
   }
 }

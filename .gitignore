@@ -18,6 +18,14 @@
 .vscode/
 *.swp
 
+# OpenTofu / Terraform
+tofu/.terraform/
+tofu/.terraform.lock.hcl
+tofu/*.tfvars
+tofu/terraform.tfstate
+tofu/terraform.tfstate.backup
+tofu/override.tf
+
 # Expedition state files (paintress)
 journal.tsv
 gradient.json

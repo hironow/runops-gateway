@@ -38,7 +38,7 @@ resource "google_iam_workload_identity_pool_provider" "github" {
 
 # Service account for the GitHub Actions deployer (separate from the runtime SA).
 resource "google_service_account" "github_deployer" {
-  account_id   = "github-deployer"
+  account_id   = "chatops-github-deployer"
   display_name = "GitHub Actions Deployer"
   description  = "Impersonated by GitHub Actions CD via Workload Identity Federation"
 }
