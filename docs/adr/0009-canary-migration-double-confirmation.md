@@ -160,17 +160,20 @@ Slack クライアントが confirm ダイアログを表示
 ## Consequences
 
 ### Positive
+
 - マイグレーション完了後はフリクションなく canary を実行できる
 - マイグレーション未実施でも「はい」を押せば続行できる（スキーマ変更なしのデプロイに対応）
 - Slack の UI が状態を正確に反映する（ボタンの有無・ダイアログの有無）
 - 段階的カナリア（ADR 0008）とのメッセージ更新フローが統一される
 
 ### Negative
+
 - `actionValue` に `next_*` フィールドが追加されて構造が複雑になる
 - `approveJob` がカナリアの情報（service name / revision）を知る必要が生じ、ジョブとサービスが結合する
 - スキーマ変更のないデプロイでも `migration_done: false` でメッセージが届くため、Cloud Build 側で制御が必要（将来的には `include_migration: bool` を substitution で指定する）
 
 ### Neutral
+
 - `migration_done` フィールドは後方互換性がある（旧クライアントは無視する）
 - `RequireConfirm` の判定は blockkit 層で完結するため、UseCase の変更は最小限
 

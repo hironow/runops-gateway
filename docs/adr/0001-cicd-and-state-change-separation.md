@@ -23,13 +23,16 @@ runops-gateway がすべて担うゲートウェイとなる。
 ## Consequences
 
 ### Positive
+
 - CI/CD のパイプライン実行時間が最小化される
 - 人間が Slack から明示的に承認するまで本番環境の状態が変わらない
 - 状態変更の単一責任が runops-gateway に集約され、監査・認可が効きやすい
 
 ### Negative
+
 - Slack 通知から実際の切り替えまでのフローが 2 ステップになる
 - runops-gateway 自体の可用性がデプロイ運用の可用性に直結する
 
 ### Neutral
+
 - Cloud Build の cloudbuild.yaml は薄いままに保たれる

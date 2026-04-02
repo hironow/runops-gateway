@@ -1,4 +1,17 @@
-# runops-gateway task runner
+# https://just.systems
+
+set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
+
+# External commands
+MARKDOWNLINT := "mise exec -- markdownlint-cli2"
+
+# Default: show help
+default: help
+
+# Help: list available recipes
+help:
+    @just --list --unsorted
+
 
 # Build all binaries
 build:
@@ -19,6 +32,9 @@ test-v:
 # Run linting
 lint:
     go vet ./...
+
+lint-md:
+    @{{MARKDOWNLINT}} --fix "*.md" "docs/**/*.md"
 
 # Format code
 fmt:
@@ -42,4 +58,4 @@ test-scripts:
     go test ./internal/adapter/input/slack/... -run TestNotifyScript -v
 
 # Run all checks (used before commit)
-check: fmt lint test
+check: fmt lint lint-md test

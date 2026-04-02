@@ -70,6 +70,7 @@ approveService:
 ```
 
 冪等性は 2 層で保証する:
+
 - `StateStore.TryLock`: 同一 `(resource_names, action, issued_at)` の二重実行をブロック
 - `ShiftTraffic` 自体の冪等性: 同じ % に再設定しても Cloud Run の状態は変わらない
 
@@ -195,6 +196,7 @@ JOB_ACTION=$(printf '{"resource_type":"job","resource_names":"%s","targets":"","
 ## Consequences
 
 ### Positive
+
 - **All-or-Nothing 保証**: 補償ロールバックで部分状態が発生しない
 - **冪等性**: `StateStore.TryLock` + `ShiftTraffic` の冪等性で安全に再試行可能
 - **疎結合**: `port.Notifier` に変更なし。`PostNewMessage` 不要
@@ -202,11 +204,13 @@ JOB_ACTION=$(printf '{"resource_type":"job","resource_names":"%s","targets":"","
 - **スケール**: サービス数が増えても gateway / port の変更は不要
 
 ### Negative
+
 - `ApprovalRequest.ResourceName → ResourceNames` のリネームは既存コード全体に影響する
 - 補償ロールバックはベストエフォート: ロールバック自体が失敗するケースをアラートで検知すべき
 - 逐次実行のため N サービスの Canary 完了時間は N 倍になる（並列化は将来 issue）
 
 ### Neutral
+
 - 旧フォーマット (`resource_name` 単数形) は handler のフォールバックで引き続き動作する
 - Worker Pool も同じパターンで対応（`approveWorkerPool` も同様に複数対応）
 - `blockkit.DeploymentPayload.ResourceName` は初期メッセージ表示用に単一のまま維持

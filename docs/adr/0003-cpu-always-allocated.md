@@ -22,12 +22,15 @@ run.googleapis.com/cpu-throttling = "false"
 ## Consequences
 
 ### Positive
+
 - Goroutine が HTTP レスポンス後も安定して動作する
 - LRO の待機が凍結せずに正常完了する
 
 ### Negative
+
 - HTTP リクエスト処理外でも CPU が割り当てられるため、アイドル時のコストが若干増加する
 - 最小インスタンス数 1 以上を設定すると常時コストが発生する
 
 ### Neutral
+
 - 最小インスタンス数 0（コールドスタート許容）であれば実質的なコスト増は軽微

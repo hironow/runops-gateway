@@ -23,13 +23,16 @@ CLI アダプターは `--response-url` フラグまたは `--slack-ts`（タイ
 ## Consequences
 
 ### Positive
+
 - CLI 実行後も Slack 上の状態と一致する
 - 二重実行を防止できる
 - オペレーション履歴が Slack チャンネルに一元化される
 
 ### Negative
+
 - CLI 使用時に `SLACK_BOT_TOKEN` と更新対象の特定情報が必要になる
 - `chat.update` を使うには Slack App に `chat:write` スコープが必要
 
 ### Neutral
+
 - response_url と chat.update の両方に対応する Notifier 実装が必要になる

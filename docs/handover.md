@@ -94,22 +94,26 @@ runops-gateway/
 ### 実装済み主要機能
 
 #### マルチリソース対応（ADR 0010）
+
 - `ApprovalRequest.ResourceNames / Targets` が CSV 形式で複数リソースを保持
 - `approveService` / `approveWorkerPool` が CSV を展開して逐次実行
 - 途中失敗時は **補償ロールバック**（先行成功分を 0% に戻す）を実行
 - `handler.go` に後方互換フォールバック（`resource_name` 単数形 → `resource_names` 複数形）
 
 #### Slack Block Kit フィールド長制限の強制
+
 - `maxHeaderText=150`, `maxSectionText=3000`, `maxButtonValue=2000`, `maxButtonLabel=75`
 - `safeTrunc(s, max)` — rune 単位の安全な切り捨て（`…` サフィックス付き）
 - `buttonValueError` — 圧縮後も 2,000 文字超の場合に専用エラーメッセージを Slack 投稿
 
 #### ボタン値の常時 gzip 圧縮（ADR 0011）
+
 - `compressButtonValue(s)` — `gz:` + gzip + base64url (RawURLEncoding) を**常に**適用
 - `parseActionValue(s)` — `gz:` プレフィックスを検出して透過的に展開、旧 JSON も互換
 - bash 側 `compress_gz()` (`scripts/notify-slack.sh`) と Go 側で同一アルゴリズム
 
 #### Cloud Build 通知の外部化
+
 - Slack 通知ロジックを `scripts/notify-slack.sh` に抽出
 - `--dry-run` フラグで標準出力にペイロードを出力（テスト用）
 - `TestNotifyScript_EndToEnd_PostToMockSlack_ButtonValuesDecodable` で bash→Go のラウンドトリップを保証
@@ -124,19 +128,19 @@ runops-gateway/
 
 ### 中優先度
 
-3. **Slack `chat.update` API 対応** — CLI 実行時に既存 Slack メッセージを更新する `SlackAPINotifier` が未実装（ADR 0006）。現在は `--no-slack` 時に stdout のみ
+1. **Slack `chat.update` API 対応** — CLI 実行時に既存 Slack メッセージを更新する `SlackAPINotifier` が未実装（ADR 0006）。現在は `--no-slack` 時に stdout のみ
 
-4. **状態管理の永続化** — 現在の `MemoryStore` はプロセス再起動でリセットされる。Firestore または Redis を `StateStore` インターフェースの実装として差し替えることで対応可能
+2. **状態管理の永続化** — 現在の `MemoryStore` はプロセス再起動でリセットされる。Firestore または Redis を `StateStore` インターフェースの実装として差し替えることで対応可能
 
-5. **自動ロールバック** — Cloud Monitoring 連携による 5xx 閾値超過時の自動ロールバックが未実装
+3. **自動ロールバック** — Cloud Monitoring 連携による 5xx 閾値超過時の自動ロールバックが未実装
 
 ### 低優先度
 
-6. **Four-Eyes Principle** — コミット者と承認者の同一人物チェックが未実装
+1. **Four-Eyes Principle** — コミット者と承認者の同一人物チェックが未実装
 
-7. **`output/gcp` の統合テスト** — 現在 58.8%。実 GCP SDK を呼ぶため、emulator またはモックサーバーでの integration テストが必要
+2. **`output/gcp` の統合テスト** — 現在 58.8%。実 GCP SDK を呼ぶため、emulator またはモックサーバーでの integration テストが必要
 
-8. **`cmd/runops` の統合テスト** — `cmd/runops/main.go` にテストなし
+3. **`cmd/runops` の統合テスト** — `cmd/runops/main.go` にテストなし
 
 ## ローカル動作確認
 

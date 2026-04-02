@@ -11,6 +11,7 @@
 ### `tests/runn/approve_canary.yaml`
 
 Agent がカナリアデプロイを承認するシナリオ:
+
 1. Slack 署名付き POST `/slack/interactive` (action_id=approve, resource_type=service)
 2. 200 OK が返ること
 3. レスポンスボディが空であること（非同期処理のため）
@@ -18,18 +19,21 @@ Agent がカナリアデプロイを承認するシナリオ:
 ### `tests/runn/deny_operation.yaml`
 
 Agent が操作を拒否するシナリオ:
+
 1. Slack 署名付き POST `/slack/interactive` (action_id=deny)
 2. 200 OK が返ること
 
 ### `tests/runn/invalid_signature.yaml`
 
 不正署名リクエストのシナリオ:
+
 1. 署名なし POST `/slack/interactive`
 2. 401 Unauthorized が返ること
 
 ### `tests/runn/healthz.yaml`
 
 ヘルスチェックシナリオ:
+
 1. GET `/healthz`
 2. 200 OK、`{"status":"ok"}` が返ること
 

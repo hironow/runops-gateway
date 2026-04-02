@@ -22,6 +22,7 @@ func ParseAction(s string) (Action, error)
 ```
 
 パース仕様:
+
 - `"canary_10"` → `Action{Name:"canary", Percent:10}`
 - `"canary_50"` → `Action{Name:"canary", Percent:50}`
 - `"migrate_apply"` → `Action{Name:"migrate_apply", Percent:0}`

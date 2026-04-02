@@ -31,14 +31,17 @@ runops approve job db-migrate-job --action=migrate_apply --no-slack
 ## Consequences
 
 ### Positive
+
 - Slack 障害時でも本番運用が停止しない（Single Point of Failure の排除）
 - インシデント対応時に迅速な操作が可能
 - Notifier の依存関係が疎結合になり、テストが容易になる
 
 ### Negative
+
 - Slack へのフィードバックが届かないため、チャンネルにボタンが残り続ける可能性がある
   （Slack 復旧後に `runops sync-slack` 等で後から更新するオペレーションが必要になる場合がある）
 - 操作ログを別途保管する仕組みが必要（Cloud Logging へのダイレクト書き込みを推奨）
 
 ### Neutral
+
 - `StdoutNotifier` と `SlackNotifier` を差し替え可能にする設計は ADR 0005 の Ports and Adapters が前提

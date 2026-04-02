@@ -20,12 +20,15 @@ Slack UI 上に「エラー」が表示される。
 ## Consequences
 
 ### Positive
+
 - Slack 上でのエラー表示を回避できる
 - LRO の進捗をリアルタイムにフィードバックできる
 
 ### Negative
+
 - Goroutine のライフサイクル管理が必要（CPU スロットリング問題 → ADR 0003 参照）
 - HTTP レスポンス後のエラーはユーザーへの通知手段を別途確保する必要がある
 
 ### Neutral
+
 - `response_url` の有効期限は 30 分のため、長時間処理の場合は考慮が必要

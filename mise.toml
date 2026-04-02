@@ -1,3 +1,4 @@
 [tools]
 go = "latest"
 just = "latest"
+markdownlint-cli2 = "latest"
