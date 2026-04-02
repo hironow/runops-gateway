@@ -115,3 +115,61 @@ func TestParseAction_NonNumericSuffix(t *testing.T) {
 		t.Errorf("expected Percent 0, got %d", got.Percent)
 	}
 }
+
+func TestParseAction_BoundaryPercent0(t *testing.T) {
+	// given / when — percent=0 is within valid range
+	got, err := domain.ParseAction("canary_0")
+
+	// then
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Name != "canary" {
+		t.Errorf("expected Name %q, got %q", "canary", got.Name)
+	}
+	if got.Percent != 0 {
+		t.Errorf("expected Percent 0, got %d", got.Percent)
+	}
+}
+
+func TestParseAction_BoundaryPercent100(t *testing.T) {
+	// given / when — percent=100 is the maximum valid value
+	got, err := domain.ParseAction("canary_100")
+
+	// then
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Name != "canary" {
+		t.Errorf("expected Name %q, got %q", "canary", got.Name)
+	}
+	if got.Percent != 100 {
+		t.Errorf("expected Percent 100, got %d", got.Percent)
+	}
+}
+
+func TestParseAction_MultipleUnderscores_NumericSuffix(t *testing.T) {
+	// given — "foo_bar_10": SplitN(...,2) → ["foo","bar_10"]; "bar_10" is not int → whole string is name
+	got, err := domain.ParseAction("foo_bar_10")
+
+	// then
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Name != "foo_bar_10" {
+		t.Errorf("expected Name %q, got %q", "foo_bar_10", got.Name)
+	}
+	if got.Percent != 0 {
+		t.Errorf("expected Percent 0, got %d", got.Percent)
+	}
+}
+
+func TestParseAction_Percent101(t *testing.T) {
+	// given — 101 is strictly over the maximum
+	_, err := domain.ParseAction("canary_101")
+
+	// then
+	if err == nil {
+		t.Fatal("expected error for percent=101, got nil")
+	}
+}

@@ -49,6 +49,7 @@ type mockNotifier struct {
 	updateMessageErr     error
 	replaceMessageCalled bool
 	replaceMessageBlocks any
+	replaceErr           error
 	sendEphemeralCalled  bool
 	sendEphemeralText    string
 }
@@ -61,7 +62,7 @@ func (m *mockNotifier) UpdateMessage(_ context.Context, _ port.NotifyTarget, _ s
 func (m *mockNotifier) ReplaceMessage(_ context.Context, _ port.NotifyTarget, blocks any) error {
 	m.replaceMessageCalled = true
 	m.replaceMessageBlocks = blocks
-	return nil
+	return m.replaceErr
 }
 
 func (m *mockNotifier) SendEphemeral(_ context.Context, _ port.NotifyTarget, _ string, text string) error {
@@ -340,6 +341,150 @@ func TestApproveAction_CLIMode(t *testing.T) {
 	}
 	if !gcp.shiftTrafficCalled {
 		t.Error("expected ShiftTraffic to be called")
+	}
+}
+
+func TestApproveAction_Service_InvalidAction(t *testing.T) {
+	// given — action string that produces a ParseAction error (percent > 100)
+	gcp := &mockGCP{}
+	notifier := &mockNotifier{}
+	auth := &mockAuth{authorized: true, expired: false}
+	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
+	req := newServiceReq()
+	req.Action = "canary_101" // invalid: percent > 100
+
+	// when
+	err := svc.ApproveAction(context.Background(), req)
+
+	// then — error returned, ShiftTraffic never called
+	if err == nil {
+		t.Fatal("expected error for invalid action, got nil")
+	}
+	if gcp.shiftTrafficCalled {
+		t.Error("expected ShiftTraffic NOT to be called after parse error")
+	}
+}
+
+func TestApproveAction_WorkerPool_InvalidAction(t *testing.T) {
+	// given — action string that produces a ParseAction error
+	gcp := &mockGCP{}
+	notifier := &mockNotifier{}
+	auth := &mockAuth{authorized: true, expired: false}
+	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
+	req := newWorkerPoolReq()
+	req.Action = "canary_-1" // invalid: negative percent
+
+	// when
+	err := svc.ApproveAction(context.Background(), req)
+
+	// then
+	if err == nil {
+		t.Fatal("expected error for invalid action, got nil")
+	}
+	if gcp.updateWorkerPoolCalled {
+		t.Error("expected UpdateWorkerPool NOT to be called after parse error")
+	}
+}
+
+func TestApproveAction_Job_TriggerBackupError(t *testing.T) {
+	// given — TriggerBackup fails; ExecuteJob must not be called
+	gcp := &mockGCP{triggerBackupErr: errors.New("backup failed")}
+	notifier := &mockNotifier{}
+	auth := &mockAuth{authorized: true, expired: false}
+	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
+	req := newJobReq()
+
+	// when
+	err := svc.ApproveAction(context.Background(), req)
+
+	// then
+	if err == nil {
+		t.Fatal("expected error when TriggerBackup fails, got nil")
+	}
+	if gcp.executeJobCalled {
+		t.Error("expected ExecuteJob NOT to be called when backup fails")
+	}
+}
+
+func TestApproveAction_Job_ExecuteJobError(t *testing.T) {
+	// given — backup succeeds but migration job fails
+	gcp := &mockGCP{executeJobErr: errors.New("job failed")}
+	notifier := &mockNotifier{}
+	auth := &mockAuth{authorized: true, expired: false}
+	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
+	req := newJobReq()
+
+	// when
+	err := svc.ApproveAction(context.Background(), req)
+
+	// then — error propagated, backup was called
+	if err == nil {
+		t.Fatal("expected error when ExecuteJob fails, got nil")
+	}
+	if !gcp.triggerBackupCalled {
+		t.Error("expected TriggerBackup to have been called before job failure")
+	}
+}
+
+func TestApproveAction_Service_PercentZeroDefaultsTo10(t *testing.T) {
+	// given — action has no percent suffix; UseCase should default to 10
+	gcp := &mockGCP{}
+	notifier := &mockNotifier{}
+	auth := &mockAuth{authorized: true, expired: false}
+	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
+	req := newServiceReq()
+	req.Action = "rollback" // Percent will be 0 → defaults to 10
+
+	// when
+	err := svc.ApproveAction(context.Background(), req)
+
+	// then
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if !gcp.shiftTrafficCalled {
+		t.Error("expected ShiftTraffic to be called")
+	}
+}
+
+func TestApproveAction_UnauthorizedTakesPriorityOverExpired(t *testing.T) {
+	// given — both unauthorized and expired; unauthorized check runs first
+	gcp := &mockGCP{}
+	notifier := &mockNotifier{}
+	auth := &mockAuth{authorized: false, expired: true}
+	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
+	req := newServiceReq()
+
+	// when
+	err := svc.ApproveAction(context.Background(), req)
+
+	// then — returns nil with ephemeral message (unauthorized path)
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if !notifier.sendEphemeralCalled {
+		t.Error("expected SendEphemeral to be called")
+	}
+	if gcp.shiftTrafficCalled {
+		t.Error("expected ShiftTraffic NOT to be called")
+	}
+}
+
+func TestDenyAction_NotifierError_ReturnsNil(t *testing.T) {
+	// given — ReplaceMessage fails; DenyAction must still return nil (errors are logged, not propagated)
+	gcp := &mockGCP{}
+	notifier := &mockNotifier{}
+	notifier.replaceErr = errors.New("slack down")
+	auth := &mockAuth{authorized: true, expired: false}
+	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
+	req := newServiceReq()
+
+	// when
+	err := svc.DenyAction(context.Background(), req)
+
+	// then
+	if err != nil {
+		t.Fatalf("expected nil error even when notifier fails, got %v", err)
 	}
 }
 

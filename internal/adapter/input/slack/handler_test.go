@@ -230,6 +230,83 @@ func TestHandler_UnknownActionID(t *testing.T) {
 	}
 }
 
+func TestHandler_MalformedActionValue(t *testing.T) {
+	// given — action_id is valid but Value is not parseable JSON
+	secret := "test-secret"
+	mock := newMockUseCase()
+	handler := NewHandler(mock, secret)
+
+	payload := interactivePayload{}
+	payload.User.ID = "U123"
+	payload.Actions = []struct {
+		ActionID string `json:"action_id"`
+		Value    string `json:"value"`
+	}{
+		{ActionID: "approve", Value: "not-valid-json"},
+	}
+	payloadBytes, _ := json.Marshal(payload)
+
+	req := buildValidRequest(t, secret, string(payloadBytes))
+	rr := httptest.NewRecorder()
+
+	// when
+	handler.ServeHTTP(rr, req)
+
+	// then — must return 200 (Slack would retry on non-2xx)
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rr.Code)
+	}
+	// ApproveAction must NOT have been called
+	select {
+	case <-mock.approveCh:
+		t.Error("expected ApproveAction NOT to be called on malformed action value")
+	default:
+	}
+}
+
+func TestHandler_MultipleActions_OnlyFirstProcessed(t *testing.T) {
+	// given — two actions in the payload; only the first must be dispatched
+	secret := "test-secret"
+	mock := newMockUseCase()
+	handler := NewHandler(mock, secret)
+
+	av := actionValue{ResourceType: "service", ResourceName: "svc", IssuedAt: time.Now().Unix()}
+	avBytes, _ := json.Marshal(av)
+
+	payload := interactivePayload{}
+	payload.User.ID = "U123"
+	payload.Actions = []struct {
+		ActionID string `json:"action_id"`
+		Value    string `json:"value"`
+	}{
+		{ActionID: "approve", Value: string(avBytes)},
+		{ActionID: "deny", Value: string(avBytes)},
+	}
+	payloadBytes, _ := json.Marshal(payload)
+
+	req := buildValidRequest(t, secret, string(payloadBytes))
+	rr := httptest.NewRecorder()
+
+	// when
+	handler.ServeHTTP(rr, req)
+
+	// then — 200 OK, ApproveAction called, DenyAction NOT called
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rr.Code)
+	}
+	select {
+	case <-mock.approveCh:
+		// expected
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for ApproveAction")
+	}
+	select {
+	case <-mock.denyCh:
+		t.Error("expected DenyAction NOT to be called (only first action processed)")
+	default:
+	}
+}
+
 func TestHandler_MalformedPayloadJSON(t *testing.T) {
 	// given
 	secret := "test-secret"

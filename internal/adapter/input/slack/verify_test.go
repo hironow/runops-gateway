@@ -71,6 +71,39 @@ func TestVerifySignature_MissingHeaders(t *testing.T) {
 	}
 }
 
+func TestVerifySignature_EmptyBody(t *testing.T) {
+	// given — empty body is valid if signature matches
+	secret := "test-secret"
+	timestamp := "1234567890"
+	body := []byte{}
+	sig := validSignature(secret, timestamp, body)
+	header := buildHeader(timestamp, sig)
+
+	// when
+	err := VerifySignature(header, body, secret)
+
+	// then
+	if err != nil {
+		t.Errorf("expected no error for empty body with valid sig, got: %v", err)
+	}
+}
+
+func TestVerifySignature_TamperedTimestamp(t *testing.T) {
+	// given — signature was computed with one timestamp, request uses another
+	secret := "test-secret"
+	body := []byte("payload=test")
+	sig := validSignature(secret, "1111111111", body) // signed with different timestamp
+	header := buildHeader("9999999999", sig)          // but request claims different timestamp
+
+	// when
+	err := VerifySignature(header, body, secret)
+
+	// then
+	if err == nil {
+		t.Error("expected error when timestamp was tampered, got nil")
+	}
+}
+
 func TestVerifySignature_MissingSignature(t *testing.T) {
 	// given
 	body := []byte("payload=test")
