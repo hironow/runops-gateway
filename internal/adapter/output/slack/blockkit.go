@@ -1,6 +1,12 @@
 package slack
 
-import "time"
+import (
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"github.com/hironow/runops-gateway/internal/core/domain"
+)
 
 // Environment indicator image URLs (replace with GCS-hosted images in production).
 var environmentImages = map[string]string{
@@ -22,15 +28,16 @@ func EnvironmentImageURL(env string) string {
 
 // DeploymentPayload holds the data needed to build a Slack approval message.
 type DeploymentPayload struct {
-	Environment  string // "production", "staging", "development"
-	ResourceType string // "service", "job", "worker-pool"
-	ResourceName string // e.g. "frontend-service"
-	Target       string // revision name (empty for jobs)
-	Action       string // e.g. "canary_10"
-	BuildInfo    string // e.g. "main @ a1b2c3d"
-	IssuedAt     time.Time
-	ApproveValue string // JSON string for approve button value
-	DenyValue    string // JSON string for deny button value
+	Environment    string // "production", "staging", "development"
+	ResourceType   string // "service", "job", "worker-pool"
+	ResourceName   string // e.g. "frontend-service"
+	Target         string // revision name (empty for jobs)
+	Action         string // e.g. "canary_10"
+	BuildInfo      string // e.g. "main @ a1b2c3d"
+	IssuedAt       time.Time
+	ApproveValue   string // JSON string for approve button value
+	DenyValue      string // JSON string for deny button value
+	RequireConfirm bool   // when true, approve button shows a confirm dialog
 }
 
 // BuildApprovalMessage constructs a Block Kit payload for the approval request message.
@@ -74,13 +81,7 @@ func BuildApprovalMessage(p DeploymentPayload) map[string]any {
 			{
 				"type": "actions",
 				"elements": []map[string]any{
-					{
-						"type":      "button",
-						"action_id": "approve",
-						"style":     "primary",
-						"text":      map[string]any{"type": "plain_text", "emoji": true, "text": "✅ Approve"},
-						"value":     p.ApproveValue,
-					},
+					buildApproveButton(p.ApproveValue, p.RequireConfirm),
 					{
 						"type":      "button",
 						"action_id": "deny",
@@ -130,4 +131,111 @@ func BuildDenialMessage(denierID, summary string) map[string]any {
 			},
 		},
 	}
+}
+
+// BuildProgressMessage constructs a Block Kit payload for a mid-rollout progress message.
+// If nextReq is non-nil, an "advance" button is added. If stopReq is also non-nil, a
+// "stop / rollback" or "deny" button is added alongside it.
+func BuildProgressMessage(summary string, nextReq *domain.ApprovalRequest, stopReq *domain.ApprovalRequest) map[string]any {
+	blocks := []map[string]any{
+		{
+			"type": "section",
+			"text": map[string]any{"type": "mrkdwn", "text": summary},
+		},
+	}
+
+	if nextReq != nil {
+		elements := []map[string]any{
+			{
+				"type":      "button",
+				"action_id": "approve",
+				"style":     "primary",
+				"text":      map[string]any{"type": "plain_text", "emoji": true, "text": canaryBtnLabel(nextReq)},
+				"value":     marshalActionValue(nextReq),
+			},
+		}
+		if stopReq != nil {
+			stopActionID := "approve"
+			stopLabel := "🛑 停止・ロールバック"
+			if stopReq.Action != "rollback" {
+				stopActionID = "deny"
+				stopLabel = "🚫 Deny"
+			}
+			elements = append(elements, map[string]any{
+				"type":      "button",
+				"action_id": stopActionID,
+				"style":     "danger",
+				"text":      map[string]any{"type": "plain_text", "emoji": true, "text": stopLabel},
+				"value":     marshalActionValue(stopReq),
+			})
+		}
+		blocks = append(blocks, map[string]any{
+			"type":     "actions",
+			"elements": elements,
+		})
+	}
+
+	return map[string]any{
+		"replace_original": true,
+		"blocks":           blocks,
+	}
+}
+
+// buildApproveButton returns the approve button element, optionally with a confirm dialog.
+func buildApproveButton(value string, requireConfirm bool) map[string]any {
+	btn := map[string]any{
+		"type":      "button",
+		"action_id": "approve",
+		"style":     "primary",
+		"text":      map[string]any{"type": "plain_text", "emoji": true, "text": "✅ Approve"},
+		"value":     value,
+	}
+	if requireConfirm {
+		btn["confirm"] = map[string]any{
+			"title":   map[string]any{"type": "plain_text", "text": "続行しますか？"},
+			"text":    map[string]any{"type": "mrkdwn", "text": "DBマイグレーションを実施しましたか？未実施の場合は先に実行してください。"},
+			"confirm": map[string]any{"type": "plain_text", "text": "はい、続行します"},
+			"deny":    map[string]any{"type": "plain_text", "text": "キャンセル"},
+		}
+	}
+	return btn
+}
+
+// canaryBtnLabel returns a human-readable label for the next canary step button.
+func canaryBtnLabel(req *domain.ApprovalRequest) string {
+	act, err := domain.ParseAction(req.Action)
+	if err != nil || act.Percent == 0 {
+		return "✅ Canary"
+	}
+	return fmt.Sprintf("✅ %d%% に昇格", act.Percent)
+}
+
+// progressActionValue mirrors the handler's actionValue for button serialization.
+type progressActionValue struct {
+	ResourceType    string `json:"resource_type"`
+	ResourceName    string `json:"resource_name"`
+	Target          string `json:"target"`
+	Action          string `json:"action"`
+	IssuedAt        int64  `json:"issued_at"`
+	MigrationDone   bool   `json:"migration_done"`
+	NextServiceName string `json:"next_service_name,omitempty"`
+	NextRevision    string `json:"next_revision,omitempty"`
+	NextAction      string `json:"next_action,omitempty"`
+}
+
+// marshalActionValue serializes an ApprovalRequest into the Slack button value JSON.
+func marshalActionValue(req *domain.ApprovalRequest) string {
+	v := progressActionValue{
+		ResourceType:    string(req.ResourceType),
+		ResourceName:    req.ResourceName,
+		Target:          req.Target,
+		Action:          req.Action,
+		IssuedAt:        req.IssuedAt,
+		MigrationDone:   req.MigrationDone,
+		NextServiceName: req.NextServiceName,
+		NextRevision:    req.NextRevision,
+		NextAction:      req.NextAction,
+	}
+	b, _ := json.Marshal(v)
+	return string(b)
 }

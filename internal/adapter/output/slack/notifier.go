@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/hironow/runops-gateway/internal/core/domain"
 	"github.com/hironow/runops-gateway/internal/core/port"
 )
 
@@ -58,6 +59,19 @@ func (n *ResponseURLNotifier) SendEphemeral(ctx context.Context, target port.Not
 		"replace_original": false,
 		"text":             fmt.Sprintf("<@%s> %s", userID, text),
 	}
+	return n.post(ctx, target.ResponseURL, payload)
+}
+
+// OfferContinuation replaces the message with a completion summary and optional next/stop buttons.
+func (n *ResponseURLNotifier) OfferContinuation(ctx context.Context, target port.NotifyTarget, summary string, nextReq *domain.ApprovalRequest, stopReq *domain.ApprovalRequest) error {
+	if target.Mode == "stdout" {
+		slog.InfoContext(ctx, "[stdout notifier] continuation", "summary", summary)
+		if nextReq != nil {
+			slog.InfoContext(ctx, "[stdout notifier] next step available", "action", nextReq.Action)
+		}
+		return nil
+	}
+	payload := BuildProgressMessage(summary, nextReq, stopReq)
 	return n.post(ctx, target.ResponseURL, payload)
 }
 
