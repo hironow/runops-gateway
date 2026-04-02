@@ -2,6 +2,10 @@ package slack
 
 import (
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -113,6 +117,90 @@ func TestNotifyScript_DryRun_ButtonValuesGzPrefixed(t *testing.T) {
 		if !strings.HasPrefix(v, "gz:") {
 			t.Errorf("button value must start with 'gz:', got %q", v[:min(30, len(v))])
 		}
+	}
+}
+
+// TestNotifyScript_EndToEnd is the full pipeline test:
+//
+//	notify-slack.sh → curl POST → mock Slack server → parseActionValue
+//
+// This confirms that the script's output can be received and decoded by the Go
+// handler without any --dry-run bypass — the same path taken in production.
+func TestNotifyScript_EndToEnd_PostToMockSlack_ButtonValuesDecodable(t *testing.T) {
+	skipIfToolMissing(t, "bash", "gzip", "base64", "jq", "curl")
+
+	// given — mock Slack webhook server that captures the full POST body
+	var receivedBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedBody, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	// when — run the script for real (no --dry-run), targeting the mock server
+	cmd := exec.Command("bash", notifyScript(t),
+		"frontend-service,backend-service",
+		"db-migrate-job",
+		"main",
+		"abc1234567890abcdef",
+		"frontend-service-00001-abc,backend-service-00001-def",
+	)
+	cmd.Env = append(os.Environ(), "SLACK_WEBHOOK_URL="+srv.URL)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("script failed: %v\noutput: %s", err, out)
+	}
+
+	// then — mock server must have received a POST
+	if len(receivedBody) == 0 {
+		t.Fatal("mock Slack server received no payload")
+	}
+
+	// then — payload is valid JSON with a blocks array
+	var payload map[string]any
+	if err := json.Unmarshal(receivedBody, &payload); err != nil {
+		t.Fatalf("payload is not valid JSON: %v\nbody: %s", err, receivedBody)
+	}
+	blocks, ok := payload["blocks"].([]any)
+	if !ok || len(blocks) == 0 {
+		t.Fatal("expected non-empty blocks array in payload")
+	}
+
+	// then — every button value is gz: prefixed AND decodable by parseActionValue
+	var checked int
+	for _, b := range blocks {
+		block, ok := b.(map[string]any)
+		if !ok || block["type"] != "actions" {
+			continue
+		}
+		elements, ok := block["elements"].([]any)
+		if !ok {
+			continue
+		}
+		for _, e := range elements {
+			el, ok := e.(map[string]any)
+			if !ok {
+				continue
+			}
+			val, ok := el["value"].(string)
+			if !ok {
+				continue
+			}
+			if !strings.HasPrefix(val, "gz:") {
+				t.Errorf("button value must start with 'gz:', got %q", val[:min(30, len(val))])
+			}
+			av, err := parseActionValue(val)
+			if err != nil {
+				t.Errorf("parseActionValue failed: %v (value prefix: %q)", err, val[:min(30, len(val))])
+				continue
+			}
+			if av.ResourceNames == "" && av.ResourceName == "" {
+				t.Error("decoded action value has no resource name")
+			}
+			checked++
+		}
+	}
+	if checked == 0 {
+		t.Error("no button values found to validate")
 	}
 }
 
