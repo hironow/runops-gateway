@@ -96,19 +96,21 @@ gcloud run deploy runops-gateway \
 
 ```bash
 # (5) GitHub リポジトリ変数を設定 (GitHub Actions CD パイプラインが使用)
+#     tofu output の値を gh CLI で直接流し込む (tofu/ ディレクトリで実行)
 cd tofu
-tofu output workload_identity_provider   # → GCP_WORKLOAD_IDENTITY_PROVIDER に設定
-tofu output github_deployer_sa_email     # → GCP_SERVICE_ACCOUNT に設定
-tofu output artifact_registry_repository # → ARTIFACT_REGISTRY_LOCATION と合わせて確認
+REPO="YOUR_ORG/runops-gateway"
 
-# gh CLI で設定する場合:
-gh variable set GCP_PROJECT_ID            --body "YOUR_PROJECT"
-gh variable set GCP_WORKLOAD_IDENTITY_PROVIDER --body "$(tofu output -raw workload_identity_provider)"
-gh variable set GCP_SERVICE_ACCOUNT       --body "$(tofu output -raw github_deployer_sa_email)"
-gh variable set ARTIFACT_REGISTRY_LOCATION --body "asia-northeast1"
-gh variable set TOFU_STATE_BUCKET         --body "YOUR_TOFU_STATE_BUCKET"
-gh variable set CLOUD_RUN_LOCATION        --body "asia-northeast1"
-gh variable set ALLOWED_SLACK_USERS       --body "U0123ABCD,U0456EFGH"
+gh variable set GCP_PROJECT_ID                 --body "YOUR_PROJECT"                              --repo "${REPO}"
+gh variable set GCP_WORKLOAD_IDENTITY_PROVIDER --body "$(tofu output -raw workload_identity_provider)"   --repo "${REPO}"
+gh variable set GCP_SERVICE_ACCOUNT            --body "$(tofu output -raw github_deployer_sa_email)"     --repo "${REPO}"
+gh variable set ARTIFACT_REGISTRY_LOCATION     --body "asia-northeast1"                           --repo "${REPO}"
+gh variable set TOFU_STATE_BUCKET              --body "YOUR_TOFU_STATE_BUCKET"                    --repo "${REPO}"
+gh variable set CLOUD_RUN_LOCATION             --body "asia-northeast1"                           --repo "${REPO}"
+# ALLOWED_SLACK_USERS は空文字非対応のため、実際の Slack ユーザー ID が確定してから設定:
+# gh variable set ALLOWED_SLACK_USERS          --body "U0123ABCD,U0456EFGH"                       --repo "${REPO}"
+
+# 設定確認:
+gh variable list --repo "${REPO}"
 ```
 
 ```bash
