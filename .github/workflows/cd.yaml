@@ -151,6 +151,4 @@ jobs:
           service: runops-gateway
           region: ${{ vars.CLOUD_RUN_LOCATION }}
           image: ${{ env.IMAGE }}:${{ github.sha }}
-          # runops-gateway itself is deployed with 100% traffic immediately.
-          # (The canary approval flow is for managed applications, not the gateway.)
-          flags: --traffic=100
+          # deploy-cloudrun@v2 routes 100% traffic to the new revision by default.
