@@ -76,6 +76,14 @@ steps:
         TIMESTAMP=$(date +%s)
         BUILD_INFO="${BRANCH_NAME} @ ${COMMIT_SHA:0:7}"
 
+        # Slack header block text is limited to 150 chars.
+        # "Deploy Ready: " is 14 chars, leaving 135 for the service names.
+        # Cloud Run service names are ASCII-only so byte count == rune count.
+        SVC_DISPLAY="${_SERVICE_NAMES}"
+        if [ "${#SVC_DISPLAY}" -gt 135 ]; then
+          SVC_DISPLAY="${SVC_DISPLAY:0:134}…"
+        fi
+
         # Action value for the "run DB migration then canary" button.
         # On completion the gateway will offer the canary button automatically.
         JOB_ACTION=$(jq -n \
@@ -111,7 +119,7 @@ steps:
           '{resource_type:$rt, resource_names:$rn, targets:$t, action:$a, issued_at:$ia}')
 
         PAYLOAD=$(jq -n \
-          --arg svc        "${_SERVICE_NAMES}" \
+          --arg svc        "${SVC_DISPLAY}" \
           --arg build_info "${BUILD_INFO}" \
           --arg revisions  "${REVISIONS}" \
           --arg job_val    "$JOB_ACTION" \

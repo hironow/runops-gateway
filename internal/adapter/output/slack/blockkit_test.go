@@ -1,6 +1,7 @@
 package slack
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -372,6 +373,158 @@ func TestBuildProgressMessage_NilNextReq_NoActionsBlock(t *testing.T) {
 		if block["type"] == "actions" {
 			t.Error("expected no actions block when nextReq is nil")
 		}
+	}
+}
+
+func TestSafeTrunc_ShortString_Unchanged(t *testing.T) {
+	// given
+	s := "hello"
+
+	// when
+	got := safeTrunc(s, 10)
+
+	// then
+	if got != s {
+		t.Errorf("expected unchanged string %q, got %q", s, got)
+	}
+}
+
+func TestSafeTrunc_ExactLimit_Unchanged(t *testing.T) {
+	// given
+	s := "hello"
+
+	// when
+	got := safeTrunc(s, 5)
+
+	// then
+	if got != s {
+		t.Errorf("expected unchanged string %q, got %q", s, got)
+	}
+}
+
+func TestSafeTrunc_OverLimit_TruncatedWithEllipsis(t *testing.T) {
+	// given
+	s := "hello world"
+
+	// when
+	got := safeTrunc(s, 5)
+
+	// then
+	if len([]rune(got)) != 5 {
+		t.Errorf("expected 5 runes, got %d: %q", len([]rune(got)), got)
+	}
+	if !strings.HasSuffix(got, "…") {
+		t.Errorf("expected truncated string to end with '…', got %q", got)
+	}
+}
+
+func TestSafeTrunc_MultibyteSafe(t *testing.T) {
+	// given — 10 Japanese characters (each is a multibyte rune)
+	s := "あいうえおかきくけこ"
+
+	// when
+	got := safeTrunc(s, 5)
+
+	// then — must be 5 runes, not 5 bytes
+	runes := []rune(got)
+	if len(runes) != 5 {
+		t.Errorf("expected 5 runes, got %d: %q", len(runes), got)
+	}
+	if !strings.HasSuffix(got, "…") {
+		t.Errorf("expected '…' suffix, got %q", got)
+	}
+}
+
+func TestBuildApprovalMessage_LongResourceName_SectionTextWithinLimit(t *testing.T) {
+	// given — resource name and target that together are 1200 chars (well over reasonable but under 3000)
+	longName := strings.Repeat("a", 600)
+	longTarget := strings.Repeat("b", 600)
+	p := DeploymentPayload{
+		Environment:  "production",
+		ResourceType: "service",
+		ResourceName: longName,
+		Target:       longTarget,
+		Action:       "canary_10",
+		BuildInfo:    "main @ abc1234",
+		IssuedAt:     time.Now(),
+		ApproveValue: `{"action":"approve"}`,
+		DenyValue:    `{"action":"deny"}`,
+	}
+
+	// when
+	msg := BuildApprovalMessage(p)
+
+	// then — the section text must be ≤ maxSectionText runes
+	blocks, ok := msg["blocks"].([]map[string]any)
+	if !ok {
+		t.Fatal("expected blocks to be []map[string]any")
+	}
+	for _, block := range blocks {
+		if block["type"] != "section" {
+			continue
+		}
+		textObj, ok := block["text"].(map[string]any)
+		if !ok {
+			continue
+		}
+		text, ok := textObj["text"].(string)
+		if !ok {
+			continue
+		}
+		if len([]rune(text)) > maxSectionText {
+			t.Errorf("section text exceeds maxSectionText (%d): got %d runes", maxSectionText, len([]rune(text)))
+		}
+	}
+}
+
+func TestMarshalActionValue_LongBundle_ReturnsValidJSON(t *testing.T) {
+	// given — 10 services with long names (worst-case bundle)
+	names := strings.Join([]string{
+		"very-long-service-name-frontend-001",
+		"very-long-service-name-backend-002",
+		"very-long-service-name-worker-003",
+		"very-long-service-name-api-gw-004",
+		"very-long-service-name-auth-svc-005",
+		"very-long-service-name-notify-006",
+		"very-long-service-name-audit-007",
+		"very-long-service-name-batch-008",
+		"very-long-service-name-report-009",
+		"very-long-service-name-admin-010",
+	}, ",")
+	revs := strings.Join([]string{
+		"very-long-service-name-frontend-001-00010-abc",
+		"very-long-service-name-backend-002-00010-def",
+		"very-long-service-name-worker-003-00010-ghi",
+		"very-long-service-name-api-gw-004-00010-jkl",
+		"very-long-service-name-auth-svc-005-00010-mno",
+		"very-long-service-name-notify-006-00010-pqr",
+		"very-long-service-name-audit-007-00010-stu",
+		"very-long-service-name-batch-008-00010-vwx",
+		"very-long-service-name-report-009-00010-yza",
+		"very-long-service-name-admin-010-00010-bcd",
+	}, ",")
+	req := &domain.ApprovalRequest{
+		ResourceType:     domain.ResourceTypeService,
+		ResourceNames:    names,
+		Targets:          revs,
+		Action:           "canary_10",
+		IssuedAt:         1700000000,
+		NextServiceNames: names,
+		NextRevisions:    revs,
+		NextAction:       "canary_30",
+	}
+
+	// when
+	val := marshalActionValue(req)
+
+	// then — result must be valid JSON regardless of length
+	if val == "" {
+		t.Fatal("expected non-empty JSON string")
+	}
+	// Verify it's parseable JSON
+	var out map[string]any
+	if err := json.Unmarshal([]byte(val), &out); err != nil {
+		t.Errorf("marshalActionValue returned invalid JSON: %v", err)
 	}
 }
 

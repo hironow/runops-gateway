@@ -3,10 +3,30 @@ package slack
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/hironow/runops-gateway/internal/core/domain"
 )
+
+// Slack Block Kit field length limits (docs.slack.dev/reference/block-kit, 2026-03).
+const (
+	maxHeaderText  = 150  // header block plain_text
+	maxSectionText = 3000 // section / mrkdwn text
+	maxButtonValue = 2000 // button element value
+	maxButtonLabel = 75   // button element text.text
+)
+
+// safeTrunc truncates s to at most max runes, appending "…" if truncated.
+// Use this before embedding user-controlled strings into Block Kit fields to
+// guarantee Slack API limits are respected.
+func safeTrunc(s string, max int) string {
+	runes := []rune(s)
+	if len(runes) <= max {
+		return s
+	}
+	return string(runes[:max-1]) + "…"
+}
 
 // Environment indicator image URLs (replace with GCS-hosted images in production).
 var environmentImages = map[string]string{
@@ -46,12 +66,14 @@ func BuildApprovalMessage(p DeploymentPayload) map[string]any {
 	expiry := p.IssuedAt.Add(2 * time.Hour)
 	imageURL := EnvironmentImageURL(p.Environment)
 
-	detailText := "*環境:* `" + p.Environment + "`\n" +
-		"*リソース種別:* " + p.ResourceType + "\n" +
-		"*リソース名:* `" + p.ResourceName + "`\n" +
-		"*対象:* `" + p.Target + "`\n" +
-		"*アクション:* " + p.Action + "\n" +
-		"*ビルド:* " + p.BuildInfo + "\n" +
+	// Each field is individually bounded so the combined detailText stays well
+	// under the 3,000-rune section text limit.
+	detailText := "*環境:* `" + safeTrunc(p.Environment, 50) + "`\n" +
+		"*リソース種別:* " + safeTrunc(p.ResourceType, 20) + "\n" +
+		"*リソース名:* `" + safeTrunc(p.ResourceName, 500) + "`\n" +
+		"*対象:* `" + safeTrunc(p.Target, 500) + "`\n" +
+		"*アクション:* " + safeTrunc(p.Action, 50) + "\n" +
+		"*ビルド:* " + safeTrunc(p.BuildInfo, 200) + "\n" +
 		"*発行:* " + p.IssuedAt.Format(time.RFC3339) + "\n" +
 		"*有効期限:* " + expiry.Format(time.RFC3339)
 
@@ -98,6 +120,8 @@ func BuildApprovalMessage(p DeploymentPayload) map[string]any {
 // BuildCompletionMessage constructs a Block Kit payload after the operation completes.
 // It does NOT include action buttons (prevents double-execution).
 func BuildCompletionMessage(approverID, summary, env string) map[string]any {
+	// Reserve ~80 runes for the fixed prefix/suffix around summary.
+	body := "✅ *承認済み・実行完了*\n" + safeTrunc(summary, maxSectionText-80) + "\n承認者: <@" + approverID + ">"
 	return map[string]any{
 		"replace_original": true,
 		"blocks": []map[string]any{
@@ -105,7 +129,7 @@ func BuildCompletionMessage(approverID, summary, env string) map[string]any {
 				"type": "section",
 				"text": map[string]any{
 					"type": "mrkdwn",
-					"text": "✅ *承認済み・実行完了*\n" + summary + "\n承認者: <@" + approverID + ">",
+					"text": body,
 				},
 				"accessory": map[string]any{
 					"type":      "image",
@@ -119,6 +143,7 @@ func BuildCompletionMessage(approverID, summary, env string) map[string]any {
 
 // BuildDenialMessage constructs a Block Kit payload after the operation is denied.
 func BuildDenialMessage(denierID, summary string) map[string]any {
+	body := "🚫 *拒否済み*\n" + safeTrunc(summary, maxSectionText-80) + "\n拒否者: <@" + denierID + ">"
 	return map[string]any{
 		"replace_original": true,
 		"blocks": []map[string]any{
@@ -126,7 +151,7 @@ func BuildDenialMessage(denierID, summary string) map[string]any {
 				"type": "section",
 				"text": map[string]any{
 					"type": "mrkdwn",
-					"text": "🚫 *拒否済み*\n" + summary + "\n拒否者: <@" + denierID + ">",
+					"text": body,
 				},
 			},
 		},
@@ -140,7 +165,7 @@ func BuildProgressMessage(summary string, nextReq *domain.ApprovalRequest, stopR
 	blocks := []map[string]any{
 		{
 			"type": "section",
-			"text": map[string]any{"type": "mrkdwn", "text": summary},
+			"text": map[string]any{"type": "mrkdwn", "text": safeTrunc(summary, maxSectionText)},
 		},
 	}
 
@@ -224,6 +249,9 @@ type progressActionValue struct {
 }
 
 // marshalActionValue serializes an ApprovalRequest into the Slack button value JSON.
+// Slack limits button value to 2,000 characters. If the serialized JSON approaches
+// that limit (e.g. large multi-service CSV bundles), a warning is logged and the
+// caller should reduce the bundle size.
 func marshalActionValue(req *domain.ApprovalRequest) string {
 	v := progressActionValue{
 		ResourceType:     string(req.ResourceType),
@@ -237,5 +265,11 @@ func marshalActionValue(req *domain.ApprovalRequest) string {
 		NextAction:       req.NextAction,
 	}
 	b, _ := json.Marshal(v)
-	return string(b)
+	result := string(b)
+	if len(result) > maxButtonValue {
+		slog.Warn("button value exceeds Slack limit; reduce service bundle size",
+			"len", len(result), "limit", maxButtonValue,
+			"resource_names", req.ResourceNames)
+	}
+	return result
 }
