@@ -163,31 +163,31 @@ APP_PROJECT      : 管理対象アプリが稼働するプロジェクト (例: 
 ```
 
 ```
-+-----------------------------------------------+    +-----------------------------------------------+
-|  GATEWAY_PROJECT                              |    |  APP_PROJECT                                  |
-|                                               |    |                                               |
-|  +------------------------+                  |    |  +------------------+  +-------------------+  |
-|  | runops-gateway         |                  |    |  | Cloud Run Service|  | Cloud Run Jobs    |  |
-|  | (Cloud Run)            |                  |    |  | (your-service)   |  | (db-migrate-job)  |  |
-|  |                        |  roles/           |    |  +------------------+  +-------------------+  |
-|  |  SA: slack-chatops-sa  | -run.developer -> |    |         ^                      ^              |
-|  +------------------------+  (cross-project)  |    |         |                      |              |
-|                               ----------------+----+-> grant in APP_PROJECT         |              |
-|  +------------------------+                  |    |                                               |
-|  | Secret Manager         |                  |    |  +------------------+                        |
-|  | slack-webhook-url      |                  |    |  | Cloud SQL        |                        |
-|  +------------------------+                  |    |  +------------------+                        |
-|          ^                                   |    |         ^                                     |
-|          | roles/secretmanager.secretAccessor|    |         | roles/cloudsql.admin               |
-|          | (cross-project)                   |    |         | (grant in APP_PROJECT)              |
-|          |                                   |    |         |                                     |
-|          +-----------------------------------+----+----+    |                                     |
-|                                               |    |   |    |                                     |
-|                                               |    |  +-----+--------------------+               |
-|                                               |    |  | CI/CD SA                 |               |
-|                                               |    |  | (Cloud Build default SA) |               |
-|                                               |    |  +--------------------------+               |
-+-----------------------------------------------+    +-----------------------------------------------+
++-----------------------------------------------+    +----------------------------------------------------------+
+|  GATEWAY_PROJECT                              |    |  APP_PROJECT                                             |
+|                                               |    |                                                          |
+|  +------------------------+                  |    |  +------------------+  +---------------+  +-----------+  |
+|  | runops-gateway         |                  |    |  | Cloud Run Service|  | Cloud Run     |  | Cloud Run |  |
+|  | (Cloud Run)            |                  |    |  | (your-service)   |  | Worker Pool   |  | Jobs      |  |
+|  |                        |  roles/           |    |  +------------------+  +---------------+  +-----------+  |
+|  |  SA: slack-chatops-sa  | -run.developer -> |    |         ^                    ^                  ^        |
+|  +------------------------+  (cross-project)  |    |         |                    |                  |        |
+|                               ----------------+----+-> grant in APP_PROJECT (all 3 resources)        |        |
+|  +------------------------+                  |    |                                                          |
+|  | Secret Manager         |                  |    |  +------------------+                                   |
+|  | slack-webhook-url      |                  |    |  | Cloud SQL        |                                   |
+|  +------------------------+                  |    |  +------------------+                                   |
+|          ^                                   |    |         ^                                                |
+|          | roles/secretmanager.secretAccessor|    |         | roles/cloudsql.admin                          |
+|          | (cross-project)                   |    |         | (grant in APP_PROJECT)                        |
+|          |                                   |    |         |                                                |
+|          +-----------------------------------+----+----+    |                                                |
+|                                               |    |   |    |                                                |
+|                                               |    |  +-----+--------------------+                          |
+|                                               |    |  | CI/CD SA                 |                          |
+|                                               |    |  | (Cloud Build default SA) |                          |
+|                                               |    |  +--------------------------+                          |
++-----------------------------------------------+    +----------------------------------------------------------+
 ```
 
 Legend:
@@ -195,7 +195,7 @@ Legend:
 - GATEWAY_PROJECT: runops-gateway が稼働する GCP プロジェクト
 - APP_PROJECT: 管理対象アプリが稼働する GCP プロジェクト
 - slack-chatops-sa: runops-gateway の Cloud Run ランタイムサービスアカウント
-- roles/run.developer: Cloud Run Service/Jobs の操作権限（APP_PROJECT 側のリソースに付与）
+- roles/run.developer: Cloud Run Service / Worker Pool / Jobs の操作権限（APP_PROJECT 側のリソースに付与）
 - roles/cloudsql.admin: Cloud SQL バックアップ権限（APP_PROJECT 側に付与）
 - roles/secretmanager.secretAccessor: Webhook URL 読み取り権限（GATEWAY_PROJECT 側のシークレットに付与）
 - CI/CD SA: 管理対象アプリの CI/CD サービスアカウント（notify-slack.sh 実行主体）
@@ -209,6 +209,13 @@ CHATOPS_SA="slack-chatops-sa@GATEWAY_PROJECT.iam.gserviceaccount.com"
 
 # Cloud Run Service のトラフィック切り替え権限
 gcloud run services add-iam-policy-binding YOUR_SERVICE_NAME \
+  --project=APP_PROJECT \
+  --region=asia-northeast1 \
+  --member="serviceAccount:${CHATOPS_SA}" \
+  --role="roles/run.developer"
+
+# Cloud Run Worker Pool のトラフィック切り替え権限 (Worker Pool を使う場合)
+gcloud run worker-pools add-iam-policy-binding YOUR_WORKER_POOL_NAME \
   --project=APP_PROJECT \
   --region=asia-northeast1 \
   --member="serviceAccount:${CHATOPS_SA}" \
