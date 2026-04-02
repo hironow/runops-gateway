@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"github.com/hironow/runops-gateway/internal/core/domain"
 	"github.com/hironow/runops-gateway/internal/core/port"
 )
 
@@ -145,6 +147,82 @@ func TestUpdateMessage_EmptyResponseURL(t *testing.T) {
 	// then
 	if err == nil {
 		t.Fatal("expected error for empty response_url, got nil")
+	}
+}
+
+func TestOfferContinuation_TooLongButtonValue_SendsErrorMessage(t *testing.T) {
+	// given — resource_names large enough to push marshalActionValue over 2,000 chars
+	longNames := strings.Repeat("x", 600) + "," + strings.Repeat("y", 600)
+	nextReq := &domain.ApprovalRequest{
+		ResourceType:     domain.ResourceTypeService,
+		ResourceNames:    longNames,
+		Targets:          longNames,
+		Action:           "canary_10",
+		IssuedAt:         1700000000,
+		NextServiceNames: longNames,
+		NextRevisions:    longNames,
+		NextAction:       "canary_30",
+	}
+
+	var received map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&received)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	n := NewResponseURLNotifier()
+	target := port.NotifyTarget{ResponseURL: srv.URL, Mode: "slack"}
+
+	// when
+	err := n.OfferContinuation(context.Background(), target, "✅ 完了", nextReq, nil)
+
+	// then — no HTTP error (message was sent successfully)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	// Must have sent a text error message, not a blocks payload with buttons
+	text, ok := received["text"].(string)
+	if !ok || text == "" {
+		t.Fatal("expected error text message, got none")
+	}
+	if !strings.Contains(text, "⚠️") {
+		t.Errorf("expected warning sign in error message, got: %s", text)
+	}
+	if _, hasBlocks := received["blocks"]; hasBlocks {
+		t.Error("error fallback must not include blocks (no broken buttons)")
+	}
+}
+
+func TestOfferContinuation_NormalLength_SendsBlocksMessage(t *testing.T) {
+	// given — short request well within button value limit
+	nextReq := &domain.ApprovalRequest{
+		ResourceType:  domain.ResourceTypeService,
+		ResourceNames: "frontend-service",
+		Targets:       "frontend-service-00001-abc",
+		Action:        "canary_30",
+		IssuedAt:      1700000000,
+	}
+
+	var received map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&received)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	n := NewResponseURLNotifier()
+	target := port.NotifyTarget{ResponseURL: srv.URL, Mode: "slack"}
+
+	// when
+	err := n.OfferContinuation(context.Background(), target, "✅ 完了", nextReq, nil)
+
+	// then — normal blocks message with buttons
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if _, hasBlocks := received["blocks"]; !hasBlocks {
+		t.Error("expected blocks in normal continuation message")
 	}
 }
 

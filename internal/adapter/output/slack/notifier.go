@@ -63,6 +63,8 @@ func (n *ResponseURLNotifier) SendEphemeral(ctx context.Context, target port.Not
 }
 
 // OfferContinuation replaces the message with a completion summary and optional next/stop buttons.
+// If any button value would exceed Slack's 2,000-char limit the buttons cannot be used, so an
+// explicit error message is posted instead to prevent silent failure.
 func (n *ResponseURLNotifier) OfferContinuation(ctx context.Context, target port.NotifyTarget, summary string, nextReq *domain.ApprovalRequest, stopReq *domain.ApprovalRequest) error {
 	if target.Mode == "stdout" {
 		slog.InfoContext(ctx, "[stdout notifier] continuation", "summary", summary)
@@ -71,8 +73,40 @@ func (n *ResponseURLNotifier) OfferContinuation(ctx context.Context, target port
 		}
 		return nil
 	}
+
+	// Pre-validate button value lengths before building the message.
+	// A value that exceeds the Slack limit causes the button to be non-functional
+	// (silently broken), so we surface an explicit error to the operator instead.
+	if errMsg, over := buttonValueError(nextReq, stopReq); over {
+		return n.post(ctx, target.ResponseURL, map[string]any{
+			"replace_original": true,
+			"text":             errMsg,
+		})
+	}
+
 	payload := BuildProgressMessage(summary, nextReq, stopReq)
 	return n.post(ctx, target.ResponseURL, payload)
+}
+
+// buttonValueError checks whether any of the provided requests would produce a button
+// value that exceeds Slack's 2,000-character limit.
+// Returns the user-facing error message and true when the limit would be exceeded.
+func buttonValueError(reqs ...*domain.ApprovalRequest) (string, bool) {
+	for _, req := range reqs {
+		if req == nil {
+			continue
+		}
+		v := marshalActionValue(req)
+		if len(v) > maxButtonValue {
+			return fmt.Sprintf(
+				"⚠️ 操作は完了しましたが、次のステップボタンを生成できませんでした。"+
+					"ボタン値が %d 文字で Slack の上限 (%d 文字) を超えています。"+
+					"サービス数を減らして再実行してください。リソース: %s",
+				len(v), maxButtonValue, req.ResourceNames,
+			), true
+		}
+	}
+	return "", false
 }
 
 func (n *ResponseURLNotifier) post(ctx context.Context, url string, payload any) error {
