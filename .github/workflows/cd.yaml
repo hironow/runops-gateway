@@ -20,11 +20,10 @@ permissions:
 #   GCP_WORKLOAD_IDENTITY_PROVIDER
 #     e.g. projects/123/locations/global/workloadIdentityPools/github/providers/github
 #   GCP_SERVICE_ACCOUNT
-#     e.g. runops-gateway-deployer@YOUR_PROJECT.iam.gserviceaccount.com
-#   GCP_PROJECT_ID            e.g. your-gcp-project
+#     e.g. chatops-github-deployer@YOUR_PROJECT.iam.gserviceaccount.com
+#   GCP_PROJECT_ID              e.g. your-gcp-project
 #   ARTIFACT_REGISTRY_LOCATION  e.g. asia-northeast1
-#   CLOUD_RUN_SERVICE           e.g. runops-gateway
-#   CLOUD_RUN_REGION            e.g. asia-northeast1
+#   CLOUD_RUN_LOCATION          e.g. asia-northeast1
 #   TOFU_STATE_BUCKET           GCS bucket for OpenTofu remote state
 #   ALLOWED_SLACK_USERS         comma-separated Slack user IDs for approval
 # ---------------------------------------------------------------------------
@@ -88,6 +87,8 @@ jobs:
         env:
           TF_VAR_project_id: ${{ vars.GCP_PROJECT_ID }}
           TF_VAR_allowed_slack_users: ${{ vars.ALLOWED_SLACK_USERS }}
+          TF_VAR_github_repo: ${{ github.repository }}
+          TF_VAR_tofu_state_bucket: ${{ vars.TOFU_STATE_BUCKET }}
           # Image is managed by the deploy job via `gcloud run deploy`.
           # This value is only used on first resource creation; subsequent
           # applies leave the image unchanged (ignore_changes in main.tf).
@@ -147,8 +148,8 @@ jobs:
       - name: Deploy to Cloud Run
         uses: google-github-actions/deploy-cloudrun@v2
         with:
-          service: ${{ vars.CLOUD_RUN_SERVICE }}
-          region: ${{ vars.CLOUD_RUN_REGION }}
+          service: runops-gateway
+          region: ${{ vars.CLOUD_RUN_LOCATION }}
           image: ${{ env.IMAGE }}:${{ github.sha }}
           # runops-gateway itself is deployed with 100% traffic immediately.
           # (The canary approval flow is for managed applications, not the gateway.)
