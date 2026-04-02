@@ -4,33 +4,38 @@
 
 ## 実装済み内容
 
-全 16 Issue を TDD で実装完了。`just test && just build && just lint` がすべて通る状態。
+全 16 Issue を TDD で実装完了。その後、ADR 0008〜0011 に基づく追加機能を実装。
+`just test && just build && just lint` がすべて通る状態。
 
-### コミット履歴
+### コミット履歴（主要なもの）
 
 | コミット | 内容 |
 |---|---|
 | `a3895a0` | feat: #0002 core domain & ports |
-| `6b4ef99` | fix: #0002 use any instead of interface{} (Go 1.18+) |
 | `666b51c` | feat: #0003 usecase approve/deny orchestration |
 | `ae487a8` | feat: #0004 slack http handler adapter |
 | `abac6d1` | feat: #0005 cli adapter (cobra) |
 | `3080ae9` | feat: #0006 gcp controller adapter |
 | `ca814e0` | feat: #0007 slack notifier adapter (stdout fallback) |
 | `d5d82ad` | feat: #0008 auth checker adapter |
-| `871b351` | refactor: #0008 simplify IsAuthorized with slices.Contains |
 | `20e21bc` | feat: #0009 cmd/server http server with wiring |
 | `1cbdb58` | feat: #0010 opentofu infrastructure |
 | `58f7def` | feat: #0011 cloud build pipeline |
 | `084e301` | feat: #0012 block kit templates |
-| `475f57e` | feat: wire cmd/runops cli entrypoint |
 | `136c1d4` | feat: #0013 domain.ParseAction (action 文字列パース) |
 | `3cf83a2` | feat: #0015 in-memory StateStore (二重実行防止) |
 | `f7306e0` | fix: #0014 UpdateWorkerPool in GCPController |
 | `29565d2` | feat: #0016 runn scenario tests |
-| `985ac60` | refactor: rename opentofu/ to tofu/ |
-| `bf9783e` | fix: cloudbuild.yaml python3 → jq |
-| `0739ecd` | test: edge case tests across all packages |
+| `300d609` | feat: CanarySteps, NextCanaryPercent, OfferContinuation port (ADR 0008/0009) |
+| `8d1ef2d` | feat: blockkit RequireConfirm, BuildProgressMessage, OfferContinuation notifier |
+| `61fe93a` | feat: approveService/Job/WorkerPool with canary progression and rollback |
+| `903778b` | feat: handler actionValue CSV fields and migration_done/confirm (ADR 0009) |
+| `15c593b` | feat: multi-resource atomic deployment with compensating rollback (ADR 0010) |
+| `9a03c58` | feat: enforce Slack Block Kit field length limits |
+| `8e8b58e` | fix: surface explicit error when button value exceeds Slack 2,000-char limit |
+| `8761c04` | feat: always compress button values (gzip+base64url) (ADR 0011) |
+| `4f15e0a` | refactor: extract cloudbuild Slack notification to scripts/notify-slack.sh |
+| `aeda34a` | test: end-to-end test for notify-slack.sh via mock Slack server |
 
 ### ディレクトリ構成
 
@@ -49,55 +54,99 @@ runops-gateway/
 │   │   └── runops.go         # ApproveAction/DenyAction オーケストレーション
 │   └── adapter/
 │       ├── input/
-│       │   ├── slack/        # HTTP Handler + HMAC 署名検証
+│       │   ├── slack/        # HTTP Handler + HMAC 署名検証 + parseActionValue (gz: 展開)
 │       │   └── cli/          # Cobra コマンド (approve/deny)
 │       └── output/
 │           ├── gcp/          # Cloud Run (Service/Job/WorkerPool) + Cloud SQL API
-│           ├── slack/        # response_url Notifier + Block Kit テンプレート
+│           ├── slack/        # response_url Notifier + Block Kit テンプレート + compressButtonValue
 │           ├── auth/         # EnvAuthChecker (allowlist + 有効期限)
 │           └── state/        # MemoryStore (TryLock/Release)
+├── scripts/
+│   └── notify-slack.sh       # Cloud Build から呼ばれる Slack 通知スクリプト (--dry-run 対応)
 ├── tests/
-│   └── runn/                 # シナリオテスト (healthz/approve/deny/invalid_sig)
+│   └── runn/                 # シナリオテスト (healthz/approve/deny/invalid_sig/approve_canary)
 ├── tofu/                     # GCP インフラ (Cloud Run, IAM, Secret Manager)
-├── cloudbuild.yaml           # CI/CD パイプライン
+├── cloudbuild.yaml           # CI/CD パイプライン (multi-service CSV 対応)
 ├── Dockerfile                # multi-stage build (distroless)
 └── justfile                  # タスクランナー
 ```
 
 ### テスト状況
 
-`go test -race ./...` が全パッケージで通過。
+`go test ./...` が全パッケージで通過。総カバレッジ **77.3%**。
 
-| パッケージ | テストケース数 |
-|---|---|
-| `internal/core/domain` | 13 |
-| `internal/core/port` | 3 |
-| `internal/usecase` | 18 |
-| `internal/adapter/input/slack` | 13 |
-| `internal/adapter/input/cli` | 7 |
-| `internal/adapter/output/gcp` | 7 |
-| `internal/adapter/output/slack` | 11 |
-| `internal/adapter/output/auth` | 17 |
-| `internal/adapter/output/state` | 9 |
-| `cmd/server` | 4 |
+| パッケージ | テスト数 | カバレッジ |
+|---|---|---|
+| `internal/core/domain` | 23 | 100% |
+| `internal/core/port` | 2 | — |
+| `internal/usecase` | 30 | 88.7% |
+| `internal/adapter/input/slack` | 24 | 87.5% |
+| `internal/adapter/input/cli` | 7 | 82.5% |
+| `internal/adapter/output/gcp` | 7 | 58.8% |
+| `internal/adapter/output/slack` | 36 | 92.9% |
+| `internal/adapter/output/auth` | 17 | 94.7% |
+| `internal/adapter/output/state` | 9 | 100% |
+| `cmd/server` | 4 | 25.6% |
+
+`output/gcp` が低い理由: 実際の Cloud SDK を呼ぶためユニットテストでのカバーは不適切。
+`cmd/server` が低い理由: `main()` 関数は計装されない仕様。
+
+### 実装済み主要機能
+
+#### マルチリソース対応（ADR 0010）
+- `ApprovalRequest.ResourceNames / Targets` が CSV 形式で複数リソースを保持
+- `approveService` / `approveWorkerPool` が CSV を展開して逐次実行
+- 途中失敗時は **補償ロールバック**（先行成功分を 0% に戻す）を実行
+- `handler.go` に後方互換フォールバック（`resource_name` 単数形 → `resource_names` 複数形）
+
+#### Slack Block Kit フィールド長制限の強制
+- `maxHeaderText=150`, `maxSectionText=3000`, `maxButtonValue=2000`, `maxButtonLabel=75`
+- `safeTrunc(s, max)` — rune 単位の安全な切り捨て（`…` サフィックス付き）
+- `buttonValueError` — 圧縮後も 2,000 文字超の場合に専用エラーメッセージを Slack 投稿
+
+#### ボタン値の常時 gzip 圧縮（ADR 0011）
+- `compressButtonValue(s)` — `gz:` + gzip + base64url (RawURLEncoding) を**常に**適用
+- `parseActionValue(s)` — `gz:` プレフィックスを検出して透過的に展開、旧 JSON も互換
+- bash 側 `compress_gz()` (`scripts/notify-slack.sh`) と Go 側で同一アルゴリズム
+
+#### Cloud Build 通知の外部化
+- Slack 通知ロジックを `scripts/notify-slack.sh` に抽出
+- `--dry-run` フラグで標準出力にペイロードを出力（テスト用）
+- `TestNotifyScript_EndToEnd_PostToMockSlack_ButtonValuesDecodable` で bash→Go のラウンドトリップを保証
 
 ## 今後の課題
 
 ### 高優先度
 
-1. **Block Kit テンプレートの画像 URL** — `buildkit.go` の `EnvironmentImageURL` が `placehold.co` の仮 URL を使用。GCS に本番用画像をホストして差し替えが必要
-2. **Cloud SQL インスタンス名の設定** — `approveJob` で `TriggerBackup(ctx, req.ResourceName)` としているが、運用では Cloud SQL インスタンス名と Cloud Run ジョブ名が異なる場合がある。`ApprovalRequest` にフィールド追加またはマッピング設定の導入を検討
+1. **Block Kit テンプレートの画像 URL** — `EnvironmentImageURL` が `placehold.co` の仮 URL を使用。GCS に本番用画像をホストして差し替えが必要
+
+2. **Cloud SQL インスタンス名の設定** — `approveJob` で `TriggerBackup(ctx, req.ResourceNames)` としているが、運用では Cloud SQL インスタンス名と Cloud Run ジョブ名が異なる場合がある。`ApprovalRequest` にフィールド追加またはマッピング設定の導入を検討
 
 ### 中優先度
 
 3. **Slack `chat.update` API 対応** — CLI 実行時に既存 Slack メッセージを更新する `SlackAPINotifier` が未実装（ADR 0006）。現在は `--no-slack` 時に stdout のみ
+
 4. **状態管理の永続化** — 現在の `MemoryStore` はプロセス再起動でリセットされる。Firestore または Redis を `StateStore` インターフェースの実装として差し替えることで対応可能
-5. **自動ロールバック** — Cloud Monitoring 連携による `5xx` 閾値超過時の自動ロールバックが未実装
+
+5. **自動ロールバック** — Cloud Monitoring 連携による 5xx 閾値超過時の自動ロールバックが未実装
 
 ### 低優先度
 
 6. **Four-Eyes Principle** — コミット者と承認者の同一人物チェックが未実装
-7. **`cmd/runops` の統合テスト** — `cmd/runops/main.go` にテストなし（`no test files`）
+
+7. **`output/gcp` の統合テスト** — 現在 58.8%。実 GCP SDK を呼ぶため、emulator またはモックサーバーでの integration テストが必要
+
+8. **`cmd/runops` の統合テスト** — `cmd/runops/main.go` にテストなし
+
+## ローカル動作確認
+
+詳細は [`docs/local-verification.md`](local-verification.md) を参照。
+
+| パターン | 概要 |
+|---|---|
+| **A. 操作対象なし** | GCP・Slack 不要。`just test-runn` + `--dry-run` + curl で署名検証とペイロード構造を確認 |
+| **B. 操作対象あり (CLI)** | `go run ./cmd/runops approve ... --no-slack` で実 GCP を操作 |
+| **B. 操作対象あり (Slack E2E)** | `tailscale funnel 8080` でローカルサーバーを公開し、実 Slack ボタンから GCP 操作まで全パスを確認 |
 
 ## デプロイ手順
 
@@ -107,6 +156,9 @@ runops-gateway/
 # 1. Secret Manager にシークレットを登録
 gcloud secrets versions add slack-signing-secret \
   --data-file=<(echo -n "YOUR_SLACK_SIGNING_SECRET")
+
+gcloud secrets versions add slack-webhook-url \
+  --data-file=<(echo -n "https://hooks.slack.com/services/YOUR/WEBHOOK/URL")
 
 # 2. OpenTofu でインフラを構築
 cd tofu
@@ -121,12 +173,18 @@ tofu apply \
 #    - 例: https://runops-gateway-xxxx-an.a.run.app/slack/interactive
 ```
 
-### 通常デプロイ
+### 通常デプロイ（単一サービス）
 
 ```bash
-# Cloud Build をトリガー（GitHub push で自動実行）
 gcloud builds submit --config=cloudbuild.yaml \
-  --substitutions="_SERVICE_NAME=frontend-service,_REGION=asia-northeast1"
+  --substitutions="_SERVICE_NAMES=frontend-service,_REGION=asia-northeast1"
+```
+
+### 複数サービス同時デプロイ
+
+```bash
+gcloud builds submit --config=cloudbuild.yaml \
+  --substitutions="_SERVICE_NAMES=frontend-service,backend-service,_REGION=asia-northeast1"
 ```
 
 ### CLI での緊急操作（Slack ダウン時）
@@ -138,6 +196,10 @@ export ALLOWED_SLACK_USERS=your-email@example.com
 # カナリアリリース (10%)
 runops approve service frontend-service \
   --action=canary_10 --target=REVISION_NAME --no-slack
+
+# 複数サービス同時カナリア
+runops approve service "frontend-service,backend-service" \
+  --action=canary_10 --target="frontend-v2,backend-v2" --no-slack
 
 # DB マイグレーション
 runops approve job db-migrate-job --action=migrate_apply --no-slack

@@ -421,6 +421,58 @@ func TestHandler_CompressedButtonValue_Dispatched(t *testing.T) {
 	}
 }
 
+func TestParseActionValue_LegacySingularFields_FallbackToResourceNames(t *testing.T) {
+	// given — legacy payload uses singular field names (resource_name, target, etc.)
+	legacy := `{"resource_type":"service","resource_name":"frontend","target":"rev-001","action":"canary_10","issued_at":1700000000}`
+
+	// when
+	got, err := parseActionValue(legacy)
+
+	// then — singular fields must be accessible via ResourceName/Target
+	// and the handler maps them via firstNonEmpty(ResourceNames, ResourceName)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// ResourceName (singular) is populated; ResourceNames (plural) is empty
+	if got.ResourceName != "frontend" {
+		t.Errorf("ResourceName: got %q, want %q", got.ResourceName, "frontend")
+	}
+	if got.Target != "rev-001" {
+		t.Errorf("Target: got %q, want %q", got.Target, "rev-001")
+	}
+	// Plural fields are empty — handler uses firstNonEmpty(ResourceNames, ResourceName)
+	if got.ResourceNames != "" {
+		t.Errorf("ResourceNames should be empty for legacy payload, got %q", got.ResourceNames)
+	}
+}
+
+func TestParseActionValue_InvalidBase64_ReturnsError(t *testing.T) {
+	// given — gz: prefix but the base64 part is invalid
+	invalid := "gz:!!!not-base64!!!"
+
+	// when
+	_, err := parseActionValue(invalid)
+
+	// then
+	if err == nil {
+		t.Fatal("expected error for invalid base64, got nil")
+	}
+}
+
+func TestParseActionValue_CorruptGzip_ReturnsError(t *testing.T) {
+	// given — gz: prefix with valid base64 but the decoded bytes are not a valid gzip stream
+	notGzip := base64.RawURLEncoding.EncodeToString([]byte("this is not gzip data"))
+	corrupt := "gz:" + notGzip
+
+	// when
+	_, err := parseActionValue(corrupt)
+
+	// then
+	if err == nil {
+		t.Fatal("expected error for corrupt gzip, got nil")
+	}
+}
+
 func TestHandler_MalformedPayloadJSON(t *testing.T) {
 	// given
 	secret := "test-secret"

@@ -214,11 +214,15 @@ runops-gateway/
 │   ├── usecase/          # コアビジネスロジック（Approve / Deny）
 │   └── adapter/
 │       ├── input/
-│       │   ├── slack/    # HTTP Handler, 署名検証, JSON パース
+│       │   ├── slack/    # HTTP Handler, 署名検証, parseActionValue (gz: 展開)
 │       │   └── cli/      # Cobra コマンド実装
 │       └── output/
 │           ├── gcp/      # Cloud Run / Cloud SQL API クライアント
-│           └── slack/    # Slack メッセージ更新ロジック
+│           ├── slack/    # Slack メッセージ更新ロジック + compressButtonValue
+│           ├── auth/     # EnvAuthChecker (allowlist + 有効期限)
+│           └── state/    # MemoryStore (TryLock/Release)
+├── scripts/
+│   └── notify-slack.sh   # Cloud Build から呼ばれる Slack 通知スクリプト
 ├── tofu/             # インフラ定義（Cloud Run, IAM 等）
 ├── go.mod
 └── Dockerfile
@@ -228,8 +232,53 @@ Legend:
 - internal/core/: ドメインとポート定義（外部依存なし）
 - internal/usecase/: ビジネスロジック
 - internal/adapter/: 入出力アダプター
+- scripts/: CI/CD から呼ばれるシェルスクリプト
 - tofu/: IaC（Infrastructure as Code）
 ```
+
+---
+
+---
+
+## ボタン値の圧縮・制限管理
+
+### Slack Block Kit フィールド長制限
+
+Block Kit の各フィールドには Slack 側の文字数制限がある。
+
+| フィールド | 上限 |
+|---|---|
+| header block `plain_text` | 150 文字 |
+| section `mrkdwn` text | 3,000 文字 |
+| button `value` | **2,000 文字** |
+| button `text.text` | 75 文字 |
+
+`safeTrunc(s, max)` で表示フィールドを rune 単位で切り詰める。
+ボタン値は JSON → gzip → base64url 圧縮で制限内に収める。
+
+### ボタン値の常時 gzip 圧縮（ADR 0011）
+
+`ApprovalRequest` を JSON シリアライズした後、**常に** gzip + base64url 圧縮して `gz:` プレフィックスを付与する。
+
+```
+encode: JSON → gzip → base64url (RawURLEncoding) → "gz:" + ...
+decode: "gz:" 検出 → base64url decode → gunzip → JSON parse
+```
+
+常時圧縮にすることで `parseActionValue` のデコードパスが全てのボタンクリックで実行され、
+ラウンドトリップのバグを早期に検出できる。
+
+圧縮後も 2,000 文字を超える稀なケースでは `buttonValueError` が検知し、
+ボタンを壊す代わりに専用エラーメッセージを Slack に投稿する。
+
+### scripts/notify-slack.sh
+
+Cloud Build の Slack 通知ロジックを `scripts/notify-slack.sh` に外部化している。
+
+- CI/CD パイプライン (`cloudbuild.yaml`) から呼ばれる
+- `--dry-run` フラグで JSON ペイロードを標準出力に出力（テスト用）
+- `compress_gz()` 関数が Go の `compressButtonValue` と同一アルゴリズムを実装
+- Go テスト (`notify_script_test.go`) で bash→Go のラウンドトリップを保証
 
 ---
 
@@ -245,3 +294,8 @@ Legend:
 | 0004 | マイグレーション前バックアップの分離 | バックアップは gateway 側でトリガー（最小権限の原則） |
 | 0005 | Ports and Adapters パターンの採用 | Slack / CLI を対等な Driving Adapter として扱う |
 | 0006 | CLI 操作時の Slack メッセージ同期 | CLI 実行時も `chat.update` で Slack 上のボタンを無効化 |
+| 0007 | CLI モードの Slack 独立性 | `--no-slack` で Slack なし緊急操作を可能にする |
+| 0008 | Progressive Canary Rollout | `OfferContinuation` で段階的カナリア昇格ボタンを動的生成 |
+| 0009 | Canary/Migration ダブル確認 | DB マイグレーション後にカナリアボタンを再提示 |
+| 0010 | Multi-Resource Deployment | CSV バンドル + 補償ロールバックで複数リソースの All-or-Nothing を保証 |
+| 0011 | ボタン値の常時 gzip 圧縮 | 無条件圧縮でデコードパスを常時テスト・2,000 文字制限を透過的に回避 |

@@ -584,6 +584,66 @@ func TestMarshalActionValue_LargeBundle_RoundtripDecodesCorrectly(t *testing.T) 
 	}
 }
 
+func TestBuildProgressMessage_StopReqNonRollback_UsesDenyActionID(t *testing.T) {
+	// given — stopReq with action != "rollback" must produce a deny button (action_id="deny")
+	nextReq := &domain.ApprovalRequest{
+		ResourceType:  domain.ResourceTypeService,
+		ResourceNames: "frontend-service",
+		Targets:       "v2",
+		Action:        "canary_30",
+		IssuedAt:      1700000000,
+	}
+	stopReq := &domain.ApprovalRequest{
+		ResourceType:  domain.ResourceTypeService,
+		ResourceNames: "frontend-service",
+		Targets:       "v2",
+		Action:        "canary_10", // not "rollback"
+		IssuedAt:      1700000000,
+	}
+
+	// when
+	msg := BuildProgressMessage("✅ 10% 完了", nextReq, stopReq)
+
+	// then — stop button must use action_id="deny" (not "approve") for non-rollback action
+	blocks, ok := msg["blocks"].([]map[string]any)
+	if !ok {
+		t.Fatal("expected blocks to be []map[string]any")
+	}
+	var denyFound bool
+	for _, block := range blocks {
+		if block["type"] != "actions" {
+			continue
+		}
+		elements, ok := block["elements"].([]map[string]any)
+		if !ok {
+			continue
+		}
+		for _, el := range elements {
+			if el["action_id"] == "deny" {
+				denyFound = true
+			}
+		}
+	}
+	if !denyFound {
+		t.Error("expected stop button with action_id='deny' for non-rollback stopReq")
+	}
+}
+
+func TestCanaryBtnLabel_ZeroPercent_DefaultLabel(t *testing.T) {
+	// given — canary_0 parses to percent=0; label must fall back to "✅ Canary"
+	req := &domain.ApprovalRequest{
+		Action: "canary_0",
+	}
+
+	// when
+	label := canaryBtnLabel(req)
+
+	// then
+	if label != "✅ Canary" {
+		t.Errorf("expected '✅ Canary' for canary_0, got %q", label)
+	}
+}
+
 func TestBuildDenialMessage_ContainsDenierID(t *testing.T) {
 	// given
 	denierID := "U99999"

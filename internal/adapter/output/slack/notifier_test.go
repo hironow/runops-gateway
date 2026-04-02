@@ -241,6 +241,40 @@ func TestOfferContinuation_NormalLength_SendsBlocksMessage(t *testing.T) {
 	}
 }
 
+func TestOfferContinuation_StdoutMode_NoNextReq(t *testing.T) {
+	// given — stdout mode, no next step
+	n := NewResponseURLNotifier()
+	target := port.NotifyTarget{ResponseURL: "", Mode: "stdout"}
+
+	// when
+	err := n.OfferContinuation(context.Background(), target, "✅ 完了", nil, nil)
+
+	// then — stdout mode must not error
+	if err != nil {
+		t.Fatalf("stdout mode should not error, got: %v", err)
+	}
+}
+
+func TestOfferContinuation_StdoutMode_WithNextReq(t *testing.T) {
+	// given — stdout mode with a next step (exercises the nextReq != nil log branch)
+	n := NewResponseURLNotifier()
+	target := port.NotifyTarget{ResponseURL: "", Mode: "stdout"}
+	nextReq := &domain.ApprovalRequest{
+		ResourceType:  domain.ResourceTypeService,
+		ResourceNames: "frontend-service",
+		Action:        "canary_30",
+		IssuedAt:      1700000000,
+	}
+
+	// when
+	err := n.OfferContinuation(context.Background(), target, "✅ 10%完了", nextReq, nil)
+
+	// then — no error, no HTTP call made
+	if err != nil {
+		t.Fatalf("stdout mode should not error, got: %v", err)
+	}
+}
+
 func TestUpdateMessage_ServerError(t *testing.T) {
 	// given
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

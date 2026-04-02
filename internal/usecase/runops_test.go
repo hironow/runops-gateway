@@ -19,21 +19,29 @@ type shiftCall struct {
 	percent int32
 }
 
-type mockGCP struct {
-	shiftCalls             []shiftCall // all recorded ShiftTraffic calls in order
-	shiftTrafficCalled     bool
-	shiftTrafficPercent    int32
-	shiftErrOnIdx          int   // if >= 0, return shiftTrafficErr on this call index
-	shiftTrafficErr        error
-	executeJobCalled       bool
-	executeJobErr          error
-	triggerBackupCalled    bool
-	triggerBackupErr       error
-	updateWorkerPoolCalled bool
-	updateWorkerPoolErr    error
+type workerPoolCall struct {
+	name    string
+	target  string
+	percent int32
 }
 
-func newMockGCP() *mockGCP { return &mockGCP{shiftErrOnIdx: -1} }
+type mockGCP struct {
+	shiftCalls              []shiftCall // all recorded ShiftTraffic calls in order
+	shiftTrafficCalled      bool
+	shiftTrafficPercent     int32
+	shiftErrOnIdx           int   // if >= 0, return shiftTrafficErr on this call index
+	shiftTrafficErr         error
+	executeJobCalled        bool
+	executeJobErr           error
+	triggerBackupCalled     bool
+	triggerBackupErr        error
+	updateWorkerPoolCalled  bool
+	updateWorkerPoolErr     error
+	workerPoolCalls         []workerPoolCall // all recorded UpdateWorkerPool calls in order
+	workerPoolErrOnIdx      int              // if >= 0, return updateWorkerPoolErr on this call index
+}
+
+func newMockGCP() *mockGCP { return &mockGCP{shiftErrOnIdx: -1, workerPoolErrOnIdx: -1} }
 
 func (m *mockGCP) ShiftTraffic(_ context.Context, name, target string, percent int32) error {
 	idx := len(m.shiftCalls)
@@ -56,9 +64,14 @@ func (m *mockGCP) TriggerBackup(_ context.Context, _ string) error {
 	return m.triggerBackupErr
 }
 
-func (m *mockGCP) UpdateWorkerPool(_ context.Context, _, _ string, _ int32) error {
+func (m *mockGCP) UpdateWorkerPool(_ context.Context, name, target string, percent int32) error {
+	idx := len(m.workerPoolCalls)
+	m.workerPoolCalls = append(m.workerPoolCalls, workerPoolCall{name, target, percent})
 	m.updateWorkerPoolCalled = true
-	return m.updateWorkerPoolErr
+	if m.workerPoolErrOnIdx >= 0 && idx == m.workerPoolErrOnIdx {
+		return m.updateWorkerPoolErr
+	}
+	return nil
 }
 
 type mockNotifier struct {
@@ -695,6 +708,161 @@ func TestApproveAction_MultiService_SecondFails_CompensatesFirst(t *testing.T) {
 	rollback := gcp.shiftCalls[2]
 	if rollback.name != "frontend-service" || rollback.percent != 0 {
 		t.Errorf("compensating rollback: got %+v, want frontend-service@0%%", rollback)
+	}
+}
+
+func TestApproveAction_Service_MismatchedTargetCount_SecondTargetEmpty(t *testing.T) {
+	// given — two services but only one target (csvAt returns "" for index 1)
+	gcp := newMockGCP()
+	notifier := &mockNotifier{}
+	auth := &mockAuth{authorized: true, expired: false}
+	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
+	req := newServiceReq()
+	req.ResourceNames = "frontend-service,backend-service"
+	req.Targets = "frontend-v2" // only one target provided
+	req.Action = "canary_10"
+
+	// when
+	err := svc.ApproveAction(context.Background(), req)
+
+	// then — must succeed; second ShiftTraffic call uses target=""
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if len(gcp.shiftCalls) != 2 {
+		t.Fatalf("expected 2 ShiftTraffic calls, got %d", len(gcp.shiftCalls))
+	}
+	if gcp.shiftCalls[1].target != "" {
+		t.Errorf("expected empty target for second service (csvAt out-of-bounds), got %q", gcp.shiftCalls[1].target)
+	}
+}
+
+func TestApproveAction_WorkerPool_Canary0_FallsBackToPercent10(t *testing.T) {
+	// given — canary_0 for worker pool must also default to percent=10
+	gcp := newMockGCP()
+	notifier := &mockNotifier{}
+	auth := &mockAuth{authorized: true, expired: false}
+	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
+	req := newWorkerPoolReq()
+	req.Action = "canary_0"
+
+	// when
+	err := svc.ApproveAction(context.Background(), req)
+
+	// then
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if len(gcp.workerPoolCalls) == 0 {
+		t.Fatal("expected UpdateWorkerPool to be called")
+	}
+	if gcp.workerPoolCalls[0].percent != 10 {
+		t.Errorf("expected percent=10 for canary_0, got %d", gcp.workerPoolCalls[0].percent)
+	}
+}
+
+func TestApproveAction_Job_WithNextService_OfferContinuationError_ReturnsNil(t *testing.T) {
+	// given — OfferContinuation fails after migration; error is logged but not returned
+	// (spec: migration completed successfully; notifier failure must not break the operation)
+	gcp := newMockGCP()
+	notifier := &mockNotifier{offerContinuationErr: errors.New("slack down")}
+	auth := &mockAuth{authorized: true, expired: false}
+	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
+	req := newJobReq()
+	req.NextServiceNames = "frontend-service"
+	req.NextRevisions = "frontend-service-v2"
+	req.NextAction = "canary_10"
+
+	// when
+	err := svc.ApproveAction(context.Background(), req)
+
+	// then — migration completed; notifier error must not propagate
+	if err != nil {
+		t.Fatalf("OfferContinuation failure must not block migration success, got %v", err)
+	}
+	if !gcp.executeJobCalled {
+		t.Error("expected ExecuteJob to be called")
+	}
+}
+
+func TestApproveAction_Service_Canary0_FallsBackToPercent10(t *testing.T) {
+	// given — canary_0 has percent=0; approveService must treat 0 as 10 (first canary step)
+	gcp := newMockGCP()
+	notifier := &mockNotifier{}
+	auth := &mockAuth{authorized: true, expired: false}
+	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
+	req := newServiceReq()
+	req.Action = "canary_0"
+
+	// when
+	err := svc.ApproveAction(context.Background(), req)
+
+	// then
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if !gcp.shiftTrafficCalled {
+		t.Error("expected ShiftTraffic to be called")
+	}
+	if gcp.shiftTrafficPercent != 10 {
+		t.Errorf("expected ShiftTraffic percent=10 for canary_0, got %d", gcp.shiftTrafficPercent)
+	}
+}
+
+func TestApproveAction_MultiWorkerPool_SecondFails_CompensatesFirst(t *testing.T) {
+	// given — first worker pool succeeds, second fails; first must be rolled back to 0%
+	gcp := &mockGCP{
+		shiftErrOnIdx:      -1,
+		workerPoolErrOnIdx: 1,
+		updateWorkerPoolErr: errors.New("gcp error"),
+	}
+	notifier := &mockNotifier{}
+	auth := &mockAuth{authorized: true, expired: false}
+	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
+	req := newWorkerPoolReq()
+	req.ResourceNames = "pool-a,pool-b"
+	req.Targets = "pool-a-v2,pool-b-v2"
+	req.Action = "canary_20"
+
+	// when
+	err := svc.ApproveAction(context.Background(), req)
+
+	// then — error returned
+	if err == nil {
+		t.Fatal("expected error when second UpdateWorkerPool fails, got nil")
+	}
+	// three calls: pool-a@20% (ok), pool-b@20% (fail), pool-a@0% (rollback)
+	if len(gcp.workerPoolCalls) != 3 {
+		t.Fatalf("expected 3 UpdateWorkerPool calls (2 forward + 1 rollback), got %d: %+v", len(gcp.workerPoolCalls), gcp.workerPoolCalls)
+	}
+	rollback := gcp.workerPoolCalls[2]
+	if rollback.name != "pool-a" || rollback.percent != 0 {
+		t.Errorf("compensating rollback: got %+v, want pool-a@0%%", rollback)
+	}
+}
+
+func TestDenyAction_UnauthorizedUser_StillSucceeds(t *testing.T) {
+	// given — DenyAction has no authorization check by design:
+	// any user who clicks "Deny" should be able to cancel a deployment.
+	gcp := newMockGCP()
+	notifier := &mockNotifier{}
+	auth := &mockAuth{authorized: false, expired: false} // unauthorized
+	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
+	req := newServiceReq()
+	req.ApproverID = "unauthorized-user"
+
+	// when
+	err := svc.DenyAction(context.Background(), req)
+
+	// then — must succeed; DenyAction is intentionally auth-free
+	if err != nil {
+		t.Fatalf("expected nil error for DenyAction without auth, got %v", err)
+	}
+	if !notifier.replaceMessageCalled {
+		t.Error("expected ReplaceMessage to be called")
+	}
+	if notifier.sendEphemeralCalled {
+		t.Error("expected SendEphemeral NOT to be called in DenyAction")
 	}
 }
 

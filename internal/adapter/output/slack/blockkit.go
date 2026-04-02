@@ -276,10 +276,10 @@ type progressActionValue struct {
 	NextAction       string `json:"next_action,omitempty"`
 }
 
-// marshalActionValue serializes an ApprovalRequest into the Slack button value JSON.
-// When the resulting JSON exceeds Slack's 2,000-char limit it is automatically
-// compressed via compressButtonValue (gzip + base64url, prefix "gz:").
+// marshalActionValue serializes an ApprovalRequest into the Slack button value JSON,
+// then always compresses the result via compressButtonValue (gzip + base64url, prefix "gz:").
 // The handler in adapter/input/slack/handler.go decompresses the value transparently.
+// See ADR 0011 for the rationale behind unconditional compression.
 func marshalActionValue(req *domain.ApprovalRequest) string {
 	v := progressActionValue{
 		ResourceType:     string(req.ResourceType),
