@@ -7,8 +7,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strconv"
-	"strings"
 
 	"github.com/hironow/runops-gateway/internal/core/domain"
 	"github.com/hironow/runops-gateway/internal/core/port"
@@ -79,8 +77,16 @@ func (s *RunOpsService) approveService(ctx context.Context, req domain.ApprovalR
 		slog.Error("UpdateMessage failed", "err", err)
 	}
 
-	percent := parsePercent(req.Action, 10)
-	if err := s.gcp.ShiftTraffic(ctx, req.ResourceName, req.Target, int32(percent)); err != nil {
+	act, err := domain.ParseAction(req.Action)
+	if err != nil {
+		_ = s.notifier.UpdateMessage(ctx, target, "❌ 無効なアクション: "+req.Action)
+		return err
+	}
+	percent := act.Percent
+	if percent == 0 {
+		percent = 10 // default for canary
+	}
+	if err := s.gcp.ShiftTraffic(ctx, req.ResourceName, req.Target, percent); err != nil {
 		if uerr := s.notifier.UpdateMessage(ctx, target, fmt.Sprintf("エラーが発生しました: %v", err)); uerr != nil {
 			slog.Error("UpdateMessage failed", "err", uerr)
 		}
@@ -131,8 +137,16 @@ func (s *RunOpsService) approveWorkerPool(ctx context.Context, req domain.Approv
 		slog.Error("UpdateMessage failed", "err", err)
 	}
 
-	percent := parsePercent(req.Action, 10)
-	if err := s.gcp.ShiftTraffic(ctx, req.ResourceName, req.Target, int32(percent)); err != nil {
+	act, err := domain.ParseAction(req.Action)
+	if err != nil {
+		_ = s.notifier.UpdateMessage(ctx, target, "❌ 無効なアクション: "+req.Action)
+		return err
+	}
+	percent := act.Percent
+	if percent == 0 {
+		percent = 10 // default for canary
+	}
+	if err := s.gcp.ShiftTraffic(ctx, req.ResourceName, req.Target, percent); err != nil {
 		if uerr := s.notifier.UpdateMessage(ctx, target, fmt.Sprintf("エラーが発生しました: %v", err)); uerr != nil {
 			slog.Error("UpdateMessage failed", "err", uerr)
 		}
@@ -152,20 +166,6 @@ func modeFrom(source string) string {
 		return "stdout"
 	}
 	return "slack"
-}
-
-// parsePercent extracts a percentage value from an action string like "canary_10".
-// Falls back to defaultVal if parsing fails.
-func parsePercent(action string, defaultVal int) int {
-	parts := strings.SplitN(action, "_", 2)
-	if len(parts) != 2 {
-		return defaultVal
-	}
-	n, err := strconv.Atoi(parts[1])
-	if err != nil || n < 0 || n > 100 {
-		return defaultVal
-	}
-	return n
 }
 
 // completionBlock builds a Slack block payload for operation completion messages.
