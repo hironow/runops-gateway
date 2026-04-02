@@ -302,18 +302,18 @@ func TestBuildApprovalMessage_NoRequireConfirm_ApproveButtonHasNoConfirmObject(t
 func TestBuildProgressMessage_WithNextAndStop_ContainsBothButtons(t *testing.T) {
 	// given
 	nextReq := &domain.ApprovalRequest{
-		ResourceType: domain.ResourceTypeService,
-		ResourceName: "frontend-service",
-		Target:       "v2",
-		Action:       "canary_30",
-		IssuedAt:     1700000000,
+		ResourceType:  domain.ResourceTypeService,
+		ResourceNames: "frontend-service",
+		Targets:       "v2",
+		Action:        "canary_30",
+		IssuedAt:      1700000000,
 	}
 	stopReq := &domain.ApprovalRequest{
-		ResourceType: domain.ResourceTypeService,
-		ResourceName: "frontend-service",
-		Target:       "v2",
-		Action:       "rollback",
-		IssuedAt:     1700000000,
+		ResourceType:  domain.ResourceTypeService,
+		ResourceNames: "frontend-service",
+		Targets:       "v2",
+		Action:        "rollback",
+		IssuedAt:      1700000000,
 	}
 
 	// when

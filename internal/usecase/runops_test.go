@@ -13,9 +13,17 @@ import (
 
 // --- mock implementations ---
 
+type shiftCall struct {
+	name    string
+	target  string
+	percent int32
+}
+
 type mockGCP struct {
+	shiftCalls             []shiftCall // all recorded ShiftTraffic calls in order
 	shiftTrafficCalled     bool
 	shiftTrafficPercent    int32
+	shiftErrOnIdx          int   // if >= 0, return shiftTrafficErr on this call index
 	shiftTrafficErr        error
 	executeJobCalled       bool
 	executeJobErr          error
@@ -25,10 +33,17 @@ type mockGCP struct {
 	updateWorkerPoolErr    error
 }
 
-func (m *mockGCP) ShiftTraffic(_ context.Context, _, _ string, percent int32) error {
+func newMockGCP() *mockGCP { return &mockGCP{shiftErrOnIdx: -1} }
+
+func (m *mockGCP) ShiftTraffic(_ context.Context, name, target string, percent int32) error {
+	idx := len(m.shiftCalls)
+	m.shiftCalls = append(m.shiftCalls, shiftCall{name, target, percent})
 	m.shiftTrafficCalled = true
 	m.shiftTrafficPercent = percent
-	return m.shiftTrafficErr
+	if m.shiftErrOnIdx >= 0 && idx == m.shiftErrOnIdx {
+		return m.shiftTrafficErr
+	}
+	return nil
 }
 
 func (m *mockGCP) ExecuteJob(_ context.Context, _ string, _ []string) error {
@@ -99,40 +114,40 @@ func (m *mockStore) Release(_ string)      { m.locked = false }
 
 func newServiceReq() domain.ApprovalRequest {
 	return domain.ApprovalRequest{
-		ResourceType: domain.ResourceTypeService,
-		ResourceName: "frontend-service",
-		Target:       "frontend-service-v2",
-		Action:       "canary_10",
-		ApproverID:   "U123",
-		Source:       "slack",
-		IssuedAt:     time.Now().Unix(),
-		ResponseURL:  "https://hooks.slack.com/xxx",
+		ResourceType:  domain.ResourceTypeService,
+		ResourceNames: "frontend-service",
+		Targets:       "frontend-service-v2",
+		Action:        "canary_10",
+		ApproverID:    "U123",
+		Source:        "slack",
+		IssuedAt:      time.Now().Unix(),
+		ResponseURL:   "https://hooks.slack.com/xxx",
 	}
 }
 
 func newJobReq() domain.ApprovalRequest {
 	return domain.ApprovalRequest{
-		ResourceType: domain.ResourceTypeJob,
-		ResourceName: "migration-job",
-		Target:       "",
-		Action:       "migrate_apply",
-		ApproverID:   "U123",
-		Source:       "slack",
-		IssuedAt:     time.Now().Unix(),
-		ResponseURL:  "https://hooks.slack.com/xxx",
+		ResourceType:  domain.ResourceTypeJob,
+		ResourceNames: "migration-job",
+		Targets:       "",
+		Action:        "migrate_apply",
+		ApproverID:    "U123",
+		Source:        "slack",
+		IssuedAt:      time.Now().Unix(),
+		ResponseURL:   "https://hooks.slack.com/xxx",
 	}
 }
 
 func newWorkerPoolReq() domain.ApprovalRequest {
 	return domain.ApprovalRequest{
-		ResourceType: domain.ResourceTypeWorkerPool,
-		ResourceName: "batch-pool",
-		Target:       "batch-pool-v2",
-		Action:       "canary_20",
-		ApproverID:   "U123",
-		Source:       "slack",
-		IssuedAt:     time.Now().Unix(),
-		ResponseURL:  "https://hooks.slack.com/xxx",
+		ResourceType:  domain.ResourceTypeWorkerPool,
+		ResourceNames: "batch-pool",
+		Targets:       "batch-pool-v2",
+		Action:        "canary_20",
+		ApproverID:    "U123",
+		Source:        "slack",
+		IssuedAt:      time.Now().Unix(),
+		ResponseURL:   "https://hooks.slack.com/xxx",
 	}
 }
 
@@ -140,7 +155,7 @@ func newWorkerPoolReq() domain.ApprovalRequest {
 
 func TestApproveAction_Service_Success(t *testing.T) {
 	// given
-	gcp := &mockGCP{}
+	gcp := newMockGCP()
 	notifier := &mockNotifier{}
 	auth := &mockAuth{authorized: true, expired: false}
 	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
@@ -163,7 +178,7 @@ func TestApproveAction_Service_Success(t *testing.T) {
 
 func TestApproveAction_Job_Success(t *testing.T) {
 	// given
-	gcp := &mockGCP{}
+	gcp := newMockGCP()
 	notifier := &mockNotifier{}
 	auth := &mockAuth{authorized: true, expired: false}
 	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
@@ -189,7 +204,7 @@ func TestApproveAction_Job_Success(t *testing.T) {
 
 func TestApproveAction_WorkerPool_Success(t *testing.T) {
 	// given
-	gcp := &mockGCP{}
+	gcp := newMockGCP()
 	notifier := &mockNotifier{}
 	auth := &mockAuth{authorized: true, expired: false}
 	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
@@ -215,7 +230,7 @@ func TestApproveAction_WorkerPool_Success(t *testing.T) {
 
 func TestApproveAction_UnauthorizedUser(t *testing.T) {
 	// given
-	gcp := &mockGCP{}
+	gcp := newMockGCP()
 	notifier := &mockNotifier{}
 	auth := &mockAuth{authorized: false, expired: false}
 	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
@@ -238,7 +253,7 @@ func TestApproveAction_UnauthorizedUser(t *testing.T) {
 
 func TestApproveAction_ExpiredButton(t *testing.T) {
 	// given
-	gcp := &mockGCP{}
+	gcp := newMockGCP()
 	notifier := &mockNotifier{}
 	auth := &mockAuth{authorized: true, expired: true}
 	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
@@ -261,7 +276,7 @@ func TestApproveAction_ExpiredButton(t *testing.T) {
 
 func TestApproveAction_UnknownResourceType(t *testing.T) {
 	// given
-	gcp := &mockGCP{}
+	gcp := newMockGCP()
 	notifier := &mockNotifier{}
 	auth := &mockAuth{authorized: true, expired: false}
 	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
@@ -279,7 +294,7 @@ func TestApproveAction_UnknownResourceType(t *testing.T) {
 
 func TestApproveAction_GCPError_Service(t *testing.T) {
 	// given
-	gcp := &mockGCP{shiftTrafficErr: errors.New("gcp error")}
+	gcp := &mockGCP{shiftErrOnIdx: 0, shiftTrafficErr: errors.New("gcp error")}
 	notifier := &mockNotifier{}
 	auth := &mockAuth{authorized: true, expired: false}
 	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
@@ -296,7 +311,7 @@ func TestApproveAction_GCPError_Service(t *testing.T) {
 
 func TestApproveAction_NotifierError_DoesNotBlock(t *testing.T) {
 	// given
-	gcp := &mockGCP{}
+	gcp := newMockGCP()
 	notifier := &mockNotifier{updateMessageErr: errors.New("slack error")}
 	auth := &mockAuth{authorized: true, expired: false}
 	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
@@ -316,7 +331,7 @@ func TestApproveAction_NotifierError_DoesNotBlock(t *testing.T) {
 
 func TestDenyAction_Success(t *testing.T) {
 	// given
-	gcp := &mockGCP{}
+	gcp := newMockGCP()
 	notifier := &mockNotifier{}
 	auth := &mockAuth{authorized: true, expired: false}
 	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
@@ -336,7 +351,7 @@ func TestDenyAction_Success(t *testing.T) {
 
 func TestApproveAction_CLIMode(t *testing.T) {
 	// given
-	gcp := &mockGCP{}
+	gcp := newMockGCP()
 	notifier := &mockNotifier{}
 	auth := &mockAuth{authorized: true, expired: false}
 	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
@@ -360,7 +375,7 @@ func TestApproveAction_CLIMode(t *testing.T) {
 
 func TestApproveAction_Service_InvalidAction(t *testing.T) {
 	// given — action string that produces a ParseAction error (percent > 100)
-	gcp := &mockGCP{}
+	gcp := newMockGCP()
 	notifier := &mockNotifier{}
 	auth := &mockAuth{authorized: true, expired: false}
 	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
@@ -381,7 +396,7 @@ func TestApproveAction_Service_InvalidAction(t *testing.T) {
 
 func TestApproveAction_WorkerPool_InvalidAction(t *testing.T) {
 	// given — action string that produces a ParseAction error
-	gcp := &mockGCP{}
+	gcp := newMockGCP()
 	notifier := &mockNotifier{}
 	auth := &mockAuth{authorized: true, expired: false}
 	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
@@ -402,7 +417,8 @@ func TestApproveAction_WorkerPool_InvalidAction(t *testing.T) {
 
 func TestApproveAction_Job_TriggerBackupError(t *testing.T) {
 	// given — TriggerBackup fails; ExecuteJob must not be called
-	gcp := &mockGCP{triggerBackupErr: errors.New("backup failed")}
+	gcp := newMockGCP()
+	gcp.triggerBackupErr = errors.New("backup failed")
 	notifier := &mockNotifier{}
 	auth := &mockAuth{authorized: true, expired: false}
 	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
@@ -422,7 +438,8 @@ func TestApproveAction_Job_TriggerBackupError(t *testing.T) {
 
 func TestApproveAction_Job_ExecuteJobError(t *testing.T) {
 	// given — backup succeeds but migration job fails
-	gcp := &mockGCP{executeJobErr: errors.New("job failed")}
+	gcp := newMockGCP()
+	gcp.executeJobErr = errors.New("job failed")
 	notifier := &mockNotifier{}
 	auth := &mockAuth{authorized: true, expired: false}
 	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
@@ -442,7 +459,7 @@ func TestApproveAction_Job_ExecuteJobError(t *testing.T) {
 
 func TestApproveAction_Service_RollbackShiftsToZero(t *testing.T) {
 	// given — rollback action must shift traffic to 0% (NOT default to 10)
-	gcp := &mockGCP{}
+	gcp := newMockGCP()
 	notifier := &mockNotifier{}
 	auth := &mockAuth{authorized: true, expired: false}
 	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
@@ -466,7 +483,7 @@ func TestApproveAction_Service_RollbackShiftsToZero(t *testing.T) {
 
 func TestApproveAction_Service_CanaryProgressionOffersNextStep(t *testing.T) {
 	// given — canary_10 success should offer canary_30 as next step
-	gcp := &mockGCP{}
+	gcp := newMockGCP()
 	notifier := &mockNotifier{}
 	auth := &mockAuth{authorized: true, expired: false}
 	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
@@ -493,7 +510,7 @@ func TestApproveAction_Service_CanaryProgressionOffersNextStep(t *testing.T) {
 
 func TestApproveAction_Service_Canary100OffersNoNextStep(t *testing.T) {
 	// given — canary_100 is the final step; OfferContinuation called with nil nextReq
-	gcp := &mockGCP{}
+	gcp := newMockGCP()
 	notifier := &mockNotifier{}
 	auth := &mockAuth{authorized: true, expired: false}
 	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
@@ -517,13 +534,13 @@ func TestApproveAction_Service_Canary100OffersNoNextStep(t *testing.T) {
 
 func TestApproveAction_Job_WithNextService_OffersCanaryButton(t *testing.T) {
 	// given — job request with next_* fields set; after migration, canary button should be offered
-	gcp := &mockGCP{}
+	gcp := newMockGCP()
 	notifier := &mockNotifier{}
 	auth := &mockAuth{authorized: true, expired: false}
 	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
 	req := newJobReq()
-	req.NextServiceName = "frontend-service"
-	req.NextRevision = "frontend-service-v2"
+	req.NextServiceNames = "frontend-service"
+	req.NextRevisions = "frontend-service-v2"
 	req.NextAction = "canary_10"
 
 	// when
@@ -539,8 +556,8 @@ func TestApproveAction_Job_WithNextService_OffersCanaryButton(t *testing.T) {
 	if notifier.offerContinuationNextReq == nil {
 		t.Fatal("expected nextReq to be non-nil")
 	}
-	if notifier.offerContinuationNextReq.ResourceName != "frontend-service" {
-		t.Errorf("expected nextReq.ResourceName=frontend-service, got %s", notifier.offerContinuationNextReq.ResourceName)
+	if notifier.offerContinuationNextReq.ResourceNames != "frontend-service" {
+		t.Errorf("expected nextReq.ResourceNames=frontend-service, got %s", notifier.offerContinuationNextReq.ResourceNames)
 	}
 	if !notifier.offerContinuationNextReq.MigrationDone {
 		t.Error("expected nextReq.MigrationDone=true")
@@ -549,7 +566,7 @@ func TestApproveAction_Job_WithNextService_OffersCanaryButton(t *testing.T) {
 
 func TestApproveAction_UnauthorizedTakesPriorityOverExpired(t *testing.T) {
 	// given — both unauthorized and expired; unauthorized check runs first
-	gcp := &mockGCP{}
+	gcp := newMockGCP()
 	notifier := &mockNotifier{}
 	auth := &mockAuth{authorized: false, expired: true}
 	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
@@ -572,7 +589,7 @@ func TestApproveAction_UnauthorizedTakesPriorityOverExpired(t *testing.T) {
 
 func TestDenyAction_NotifierError_ReturnsError(t *testing.T) {
 	// given — ReplaceMessage fails; DenyAction's only job is notification, so failure must propagate
-	gcp := &mockGCP{}
+	gcp := newMockGCP()
 	notifier := &mockNotifier{}
 	notifier.replaceErr = errors.New("slack down")
 	auth := &mockAuth{authorized: true, expired: false}
@@ -590,7 +607,7 @@ func TestDenyAction_NotifierError_ReturnsError(t *testing.T) {
 
 func TestApproveAction_DuplicateExecution(t *testing.T) {
 	// given — use a real MemoryStore so the lock persists across calls
-	gcp := &mockGCP{}
+	gcp := newMockGCP()
 	notifier := &mockNotifier{}
 	auth := &mockAuth{authorized: true, expired: false}
 	store := state.NewMemoryStore()
@@ -621,5 +638,91 @@ func TestApproveAction_DuplicateExecution(t *testing.T) {
 	}
 	if gcp.shiftTrafficCalled {
 		t.Error("expected ShiftTraffic NOT to be called on duplicate execution")
+	}
+}
+
+func TestApproveAction_MultiService_AllSucceed(t *testing.T) {
+	// given — two services in one canary request; both must be shifted
+	gcp := newMockGCP()
+	notifier := &mockNotifier{}
+	auth := &mockAuth{authorized: true, expired: false}
+	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
+	req := newServiceReq()
+	req.ResourceNames = "frontend-service,backend-service"
+	req.Targets = "frontend-v2,backend-v2"
+	req.Action = "canary_10"
+
+	// when
+	err := svc.ApproveAction(context.Background(), req)
+
+	// then
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if len(gcp.shiftCalls) != 2 {
+		t.Fatalf("expected 2 ShiftTraffic calls, got %d", len(gcp.shiftCalls))
+	}
+	if gcp.shiftCalls[0].name != "frontend-service" || gcp.shiftCalls[0].percent != 10 {
+		t.Errorf("first shift: got %+v, want frontend-service@10%%", gcp.shiftCalls[0])
+	}
+	if gcp.shiftCalls[1].name != "backend-service" || gcp.shiftCalls[1].percent != 10 {
+		t.Errorf("second shift: got %+v, want backend-service@10%%", gcp.shiftCalls[1])
+	}
+}
+
+func TestApproveAction_MultiService_SecondFails_CompensatesFirst(t *testing.T) {
+	// given — first service succeeds, second fails; first must be rolled back to 0%
+	gcp := &mockGCP{shiftErrOnIdx: 1, shiftTrafficErr: errors.New("gcp error")}
+	notifier := &mockNotifier{}
+	auth := &mockAuth{authorized: true, expired: false}
+	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
+	req := newServiceReq()
+	req.ResourceNames = "frontend-service,backend-service"
+	req.Targets = "frontend-v2,backend-v2"
+	req.Action = "canary_10"
+
+	// when
+	err := svc.ApproveAction(context.Background(), req)
+
+	// then — error returned
+	if err == nil {
+		t.Fatal("expected error when second ShiftTraffic fails, got nil")
+	}
+	// three calls expected: frontend@10% (ok), backend@10% (fail), frontend@0% (rollback)
+	if len(gcp.shiftCalls) != 3 {
+		t.Fatalf("expected 3 ShiftTraffic calls (2 forward + 1 rollback), got %d: %+v", len(gcp.shiftCalls), gcp.shiftCalls)
+	}
+	rollback := gcp.shiftCalls[2]
+	if rollback.name != "frontend-service" || rollback.percent != 0 {
+		t.Errorf("compensating rollback: got %+v, want frontend-service@0%%", rollback)
+	}
+}
+
+func TestApproveAction_MultiService_NextReqPreservesBundle(t *testing.T) {
+	// given — multi-service canary_10; the continuation request must carry the same bundle
+	gcp := newMockGCP()
+	notifier := &mockNotifier{}
+	auth := &mockAuth{authorized: true, expired: false}
+	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
+	req := newServiceReq()
+	req.ResourceNames = "frontend-service,backend-service"
+	req.Targets = "frontend-v2,backend-v2"
+	req.Action = "canary_10"
+
+	// when
+	err := svc.ApproveAction(context.Background(), req)
+
+	// then
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if notifier.offerContinuationNextReq == nil {
+		t.Fatal("expected nextReq to be non-nil")
+	}
+	if notifier.offerContinuationNextReq.ResourceNames != "frontend-service,backend-service" {
+		t.Errorf("nextReq.ResourceNames = %q, want bundle", notifier.offerContinuationNextReq.ResourceNames)
+	}
+	if notifier.offerContinuationNextReq.Action != "canary_30" {
+		t.Errorf("nextReq.Action = %q, want canary_30", notifier.offerContinuationNextReq.Action)
 	}
 }

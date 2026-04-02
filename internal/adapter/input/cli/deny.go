@@ -22,12 +22,12 @@ func newDenyCmd(useCase port.RunOpsUseCase) *cobra.Command {
 				approver = gitUserEmail()
 			}
 			req := domain.ApprovalRequest{
-				ResourceType: domain.ResourceType(args[0]),
-				ResourceName: args[1],
-				ApproverID:   approver,
-				Source:       "cli",
-				IssuedAt:     0,
-				ResponseURL:  "",
+				ResourceType:  domain.ResourceType(args[0]),
+				ResourceNames: args[1],
+				ApproverID:    approver,
+				Source:        "cli",
+				IssuedAt:      0,
+				ResponseURL:   "",
 			}
 			if err := useCase.DenyAction(context.Background(), req); err != nil {
 				return fmt.Errorf("deny failed: %w", err)

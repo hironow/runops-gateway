@@ -212,29 +212,29 @@ func canaryBtnLabel(req *domain.ApprovalRequest) string {
 
 // progressActionValue mirrors the handler's actionValue for button serialization.
 type progressActionValue struct {
-	ResourceType    string `json:"resource_type"`
-	ResourceName    string `json:"resource_name"`
-	Target          string `json:"target"`
-	Action          string `json:"action"`
-	IssuedAt        int64  `json:"issued_at"`
-	MigrationDone   bool   `json:"migration_done"`
-	NextServiceName string `json:"next_service_name,omitempty"`
-	NextRevision    string `json:"next_revision,omitempty"`
-	NextAction      string `json:"next_action,omitempty"`
+	ResourceType     string `json:"resource_type"`
+	ResourceNames    string `json:"resource_names"`
+	Targets          string `json:"targets"`
+	Action           string `json:"action"`
+	IssuedAt         int64  `json:"issued_at"`
+	MigrationDone    bool   `json:"migration_done"`
+	NextServiceNames string `json:"next_service_names,omitempty"`
+	NextRevisions    string `json:"next_revisions,omitempty"`
+	NextAction       string `json:"next_action,omitempty"`
 }
 
 // marshalActionValue serializes an ApprovalRequest into the Slack button value JSON.
 func marshalActionValue(req *domain.ApprovalRequest) string {
 	v := progressActionValue{
-		ResourceType:    string(req.ResourceType),
-		ResourceName:    req.ResourceName,
-		Target:          req.Target,
-		Action:          req.Action,
-		IssuedAt:        req.IssuedAt,
-		MigrationDone:   req.MigrationDone,
-		NextServiceName: req.NextServiceName,
-		NextRevision:    req.NextRevision,
-		NextAction:      req.NextAction,
+		ResourceType:     string(req.ResourceType),
+		ResourceNames:    req.ResourceNames,
+		Targets:          req.Targets,
+		Action:           req.Action,
+		IssuedAt:         req.IssuedAt,
+		MigrationDone:    req.MigrationDone,
+		NextServiceNames: req.NextServiceNames,
+		NextRevisions:    req.NextRevisions,
+		NextAction:       req.NextAction,
 	}
 	b, _ := json.Marshal(v)
 	return string(b)

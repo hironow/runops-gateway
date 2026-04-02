@@ -32,8 +32,8 @@ func newApproveCmd(useCase port.RunOpsUseCase) *cobra.Command {
 
 			req := domain.ApprovalRequest{
 				ResourceType: domain.ResourceType(resourceType),
-				ResourceName: resourceName,
-				Target:       target,
+				ResourceNames: resourceName,
+				Targets:       target,
 				Action:       action,
 				ApproverID:   approver,
 				Source:       "cli",

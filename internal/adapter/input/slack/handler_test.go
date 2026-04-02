@@ -85,11 +85,11 @@ func TestHandler_ValidApprove(t *testing.T) {
 	handler := NewHandler(mock, secret)
 
 	av := actionValue{
-		ResourceType: "service",
-		ResourceName: "frontend",
-		Target:       "v2",
-		Action:       "canary_10",
-		IssuedAt:     time.Now().Unix(),
+		ResourceType:  "service",
+		ResourceNames: "frontend",
+		Targets:       "v2",
+		Action:        "canary_10",
+		IssuedAt:      time.Now().Unix(),
 	}
 	avBytes, _ := json.Marshal(av)
 
@@ -119,8 +119,8 @@ func TestHandler_ValidApprove(t *testing.T) {
 		if req.ApproverID != "U123" {
 			t.Errorf("expected approver U123, got %s", req.ApproverID)
 		}
-		if req.ResourceName != "frontend" {
-			t.Errorf("expected resource frontend, got %s", req.ResourceName)
+		if req.ResourceNames != "frontend" {
+			t.Errorf("expected resource frontend, got %s", req.ResourceNames)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timeout waiting for ApproveAction")
@@ -134,11 +134,11 @@ func TestHandler_ValidDeny(t *testing.T) {
 	handler := NewHandler(mock, secret)
 
 	av := actionValue{
-		ResourceType: "service",
-		ResourceName: "backend",
-		Target:       "v1",
-		Action:       "canary_50",
-		IssuedAt:     time.Now().Unix(),
+		ResourceType:  "service",
+		ResourceNames: "backend",
+		Targets:       "v1",
+		Action:        "canary_50",
+		IssuedAt:      time.Now().Unix(),
 	}
 	avBytes, _ := json.Marshal(av)
 
@@ -205,7 +205,7 @@ func TestHandler_UnknownActionID(t *testing.T) {
 	mock := newMockUseCase()
 	handler := NewHandler(mock, secret)
 
-	av := actionValue{ResourceType: "service", ResourceName: "svc", IssuedAt: time.Now().Unix()}
+	av := actionValue{ResourceType: "service", ResourceNames: "svc", IssuedAt: time.Now().Unix()}
 	avBytes, _ := json.Marshal(av)
 
 	payload := interactivePayload{}
@@ -270,7 +270,7 @@ func TestHandler_MultipleActions_OnlyFirstProcessed(t *testing.T) {
 	mock := newMockUseCase()
 	handler := NewHandler(mock, secret)
 
-	av := actionValue{ResourceType: "service", ResourceName: "svc", IssuedAt: time.Now().Unix()}
+	av := actionValue{ResourceType: "service", ResourceNames: "svc", IssuedAt: time.Now().Unix()}
 	avBytes, _ := json.Marshal(av)
 
 	payload := interactivePayload{}

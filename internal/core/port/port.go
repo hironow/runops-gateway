@@ -75,5 +75,5 @@ type StateStore interface {
 // OperationKey returns a canonical deduplication key for an ApprovalRequest.
 func OperationKey(req domain.ApprovalRequest) string {
 	return fmt.Sprintf("%s/%s/%s/%d",
-		req.ResourceType, req.ResourceName, req.Action, req.IssuedAt)
+		req.ResourceType, req.ResourceNames, req.Action, req.IssuedAt)
 }

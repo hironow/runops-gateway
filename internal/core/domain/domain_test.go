@@ -35,22 +35,22 @@ func TestApprovalRequestZeroValue(t *testing.T) {
 func TestApprovalRequestFields(t *testing.T) {
 	// given
 	req := domain.ApprovalRequest{
-		ResourceType: domain.ResourceTypeService,
-		ResourceName: "frontend-service",
-		Target:       "frontend-service-v2",
-		Action:       "canary_10",
-		ApproverID:   "U12345678",
-		Source:       "slack",
-		IssuedAt:     1700000000,
-		ResponseURL:  "https://hooks.slack.com/actions/xxx",
+		ResourceType:  domain.ResourceTypeService,
+		ResourceNames: "frontend-service",
+		Targets:       "frontend-service-v2",
+		Action:        "canary_10",
+		ApproverID:    "U12345678",
+		Source:        "slack",
+		IssuedAt:      1700000000,
+		ResponseURL:   "https://hooks.slack.com/actions/xxx",
 	}
 
 	// when / then
 	if req.ResourceType != domain.ResourceTypeService {
 		t.Errorf("ResourceType = %q, want %q", req.ResourceType, domain.ResourceTypeService)
 	}
-	if req.ResourceName != "frontend-service" {
-		t.Errorf("ResourceName = %q, want %q", req.ResourceName, "frontend-service")
+	if req.ResourceNames != "frontend-service" {
+		t.Errorf("ResourceNames = %q, want %q", req.ResourceNames, "frontend-service")
 	}
 	if req.Source != "slack" {
 		t.Errorf("Source = %q, want %q", req.Source, "slack")
@@ -63,13 +63,13 @@ func TestApprovalRequestFields(t *testing.T) {
 func TestApprovalRequestCLIMode(t *testing.T) {
 	// given — CLI mode has IssuedAt == 0 and empty ResponseURL
 	req := domain.ApprovalRequest{
-		ResourceType: domain.ResourceTypeJob,
-		ResourceName: "migrate-job",
-		Action:       "migrate_apply",
-		ApproverID:   "admin@example.com",
-		Source:       "cli",
-		IssuedAt:     0,
-		ResponseURL:  "",
+		ResourceType:  domain.ResourceTypeJob,
+		ResourceNames: "migrate-job",
+		Action:        "migrate_apply",
+		ApproverID:    "admin@example.com",
+		Source:        "cli",
+		IssuedAt:      0,
+		ResponseURL:   "",
 	}
 
 	// when / then

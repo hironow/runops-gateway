@@ -69,13 +69,17 @@ func ParseAction(s string) (Action, error) {
 // ApprovalRequest carries all information needed to approve or deny an operation.
 // It is the primary input to RunOpsUseCase and must remain free of
 // infrastructure-specific types.
+//
+// ResourceNames and Targets are comma-separated lists (CSV) to support
+// all-or-nothing multi-resource deployments. Single-resource requests
+// are represented as a 1-element CSV (e.g. "frontend-service").
 type ApprovalRequest struct {
 	// ResourceType is the kind of GCP resource to operate on.
 	ResourceType ResourceType
-	// ResourceName is the name of the resource, e.g. "frontend-service".
-	ResourceName string
-	// Target is the revision name or equivalent identifier (optional for jobs).
-	Target string
+	// ResourceNames is a comma-separated list of resource names, e.g. "frontend-service,backend-service".
+	ResourceNames string
+	// Targets is a comma-separated list of revision names corresponding to ResourceNames (optional for jobs).
+	Targets string
 	// Action describes the operation, e.g. "canary_10" or "migrate_apply".
 	Action string
 	// ApproverID is the Slack user ID or email address of the approver.
@@ -89,13 +93,12 @@ type ApprovalRequest struct {
 	// MigrationDone signals that DB migration has completed for this deployment.
 	// When true, the canary button is shown without a confirm dialog.
 	MigrationDone bool
-	// NextServiceName is the Cloud Run service to re-offer as canary after job completion.
-	// Non-empty only on job (migration) requests.
-	NextServiceName string
-	// NextRevision is the revision to target for the next canary step.
-	// Non-empty only when NextServiceName is set.
-	NextRevision string
-	// NextAction is the action string for the next canary button, e.g. "canary_10".
-	// Non-empty only when NextServiceName is set.
+	// NextServiceNames is a comma-separated list of Cloud Run services to re-offer
+	// as canary buttons after job (migration) completion. Non-empty only on job requests.
+	NextServiceNames string
+	// NextRevisions is a comma-separated list of revisions corresponding to NextServiceNames.
+	NextRevisions string
+	// NextAction is the action string for the next canary buttons, e.g. "canary_10".
+	// Non-empty only when NextServiceNames is set.
 	NextAction string
 }

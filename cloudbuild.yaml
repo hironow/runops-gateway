@@ -19,20 +19,30 @@ steps:
     waitFor:
       - build-and-push
 
-  # Step 2: Deploy to Cloud Run (no traffic)
-  - id: deploy-service
+  # Step 2: Deploy all services (no traffic). _SERVICE_NAMES may be a CSV list.
+  # Revisions are written as a matching CSV to /workspace/revisions.txt.
+  - id: deploy-services
     name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
     entrypoint: bash
     args:
       - -c
       - |
-        gcloud run deploy ${_SERVICE_NAME} \
-          --image ${_IMAGE}:${COMMIT_SHA} \
-          --region ${_REGION} \
-          --project ${PROJECT_ID} \
-          --no-traffic \
-          --format="value(status.latestCreatedRevisionName)" > /workspace/revision.txt
-        echo "Deployed revision: $(cat /workspace/revision.txt)"
+        set -euo pipefail
+        IFS=',' read -ra SERVICES <<< "${_SERVICE_NAMES}"
+        REVISIONS=""
+        for SVC in "${SERVICES[@]}"; do
+          SVC=$(echo "$SVC" | xargs)
+          REV=$(gcloud run deploy "$SVC" \
+            --image ${_IMAGE}:${COMMIT_SHA} \
+            --region ${_REGION} \
+            --project ${PROJECT_ID} \
+            --no-traffic \
+            --format="value(status.latestCreatedRevisionName)")
+          echo "Deployed $SVC -> $REV"
+          REVISIONS="${REVISIONS:+${REVISIONS},}${REV}"
+        done
+        echo "$REVISIONS" > /workspace/revisions.txt
+        echo "All revisions: $(cat /workspace/revisions.txt)"
     waitFor:
       - push-image
 
@@ -51,7 +61,8 @@ steps:
     waitFor:
       - push-image
 
-  # Step 4: Send Slack ChatOps notification with approval buttons
+  # Step 4: Send Slack ChatOps notification with approval buttons.
+  # resource_names / targets use plural (CSV) fields as expected by handler.go.
   - id: notify-slack
     name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
     entrypoint: bash
@@ -61,83 +72,118 @@ steps:
       - -c
       - |
         set -euo pipefail
-        REVISION=$(cat /workspace/revision.txt)
+        REVISIONS=$(cat /workspace/revisions.txt)
         TIMESTAMP=$(date +%s)
+        BUILD_INFO="${BRANCH_NAME} @ ${COMMIT_SHA:0:7}"
 
-        # Build action values for each button
-        SRV_ACTION=$(printf '{"resource_type":"service","resource_name":"%s","target":"%s","action":"canary_10","issued_at":%s,"migration_done":false}' \
-          "${_SERVICE_NAME}" "${REVISION}" "${TIMESTAMP}")
-        JOB_ACTION=$(printf '{"resource_type":"job","resource_name":"%s","target":"","action":"migrate_apply","issued_at":%s,"next_service_name":"%s","next_revision":"%s","next_action":"canary_10"}' \
-          "${_MIGRATION_JOB_NAME}" "${TIMESTAMP}" "${_SERVICE_NAME}" "${REVISION}")
+        # Action value for the "run DB migration then canary" button.
+        # On completion the gateway will offer the canary button automatically.
+        JOB_ACTION=$(jq -n \
+          --arg rt   "job" \
+          --arg rn   "${_MIGRATION_JOB_NAME}" \
+          --arg t    "" \
+          --arg a    "migrate_apply" \
+          --argjson ia "${TIMESTAMP}" \
+          --arg nsn  "${_SERVICE_NAMES}" \
+          --arg nr   "${REVISIONS}" \
+          --arg na   "canary_10" \
+          '{resource_type:$rt, resource_names:$rn, targets:$t, action:$a,
+            issued_at:$ia, migration_done:false,
+            next_service_names:$nsn, next_revisions:$nr, next_action:$na}')
 
-        # Build Block Kit payload
-        PAYLOAD=$(cat <<BLOCKKIT
-        {
-          "blocks": [
-            {
-              "type": "header",
-              "text": {"type": "plain_text", "text": "Deploy Ready: ${_SERVICE_NAME}", "emoji": true}
-            },
-            {
-              "type": "section",
-              "text": {
-                "type": "mrkdwn",
-                "text": "*Revision:* \`${REVISION}\`\n*Branch:* \`${BRANCH_NAME}\`\n*Commit:* \`${COMMIT_SHA:0:7}\`\n*Expires:* 2 hours from now"
+        # Action value for the "skip migration, go straight to canary" button.
+        SRV_ACTION=$(jq -n \
+          --arg rt  "service" \
+          --arg rn  "${_SERVICE_NAMES}" \
+          --arg t   "${REVISIONS}" \
+          --arg a   "canary_10" \
+          --argjson ia "${TIMESTAMP}" \
+          '{resource_type:$rt, resource_names:$rn, targets:$t, action:$a,
+            issued_at:$ia, migration_done:true}')
+
+        # Deny action value (same resource bundle, no operation)
+        DENY_ACTION=$(jq -n \
+          --arg rt  "service" \
+          --arg rn  "${_SERVICE_NAMES}" \
+          --arg t   "${REVISIONS}" \
+          --arg a   "canary_10" \
+          --argjson ia "${TIMESTAMP}" \
+          '{resource_type:$rt, resource_names:$rn, targets:$t, action:$a, issued_at:$ia}')
+
+        PAYLOAD=$(jq -n \
+          --arg svc        "${_SERVICE_NAMES}" \
+          --arg build_info "${BUILD_INFO}" \
+          --arg revisions  "${REVISIONS}" \
+          --arg job_val    "$JOB_ACTION" \
+          --arg srv_val    "$SRV_ACTION" \
+          --arg deny_val   "$DENY_ACTION" \
+          '{
+            blocks: [
+              {
+                type: "header",
+                text: {type: "plain_text", text: ("Deploy Ready: " + $svc), emoji: true}
               },
-              "accessory": {
-                "type": "image",
-                "image_url": "https://placehold.co/75x75/FF0000/FFFFFF?text=PROD",
-                "alt_text": "PROD environment"
-              }
-            },
-            {
-              "type": "actions",
-              "elements": [
-                {
-                  "type": "button",
-                  "text": {"type": "plain_text", "emoji": true, "text": "1. DB Migration"},
-                  "style": "danger",
-                  "action_id": "approve",
-                  "value": $(printf '%s' "$JOB_ACTION" | jq -R .)
+              {
+                type: "section",
+                text: {
+                  type: "mrkdwn",
+                  text: ("*Revision(s):* `" + $revisions + "`\n*Build:* " + $build_info)
                 },
-                {
-                  "type": "button",
-                  "text": {"type": "plain_text", "emoji": true, "text": "2. 10% Canary"},
-                  "style": "primary",
-                  "action_id": "approve",
-                  "value": $(printf '%s' "$SRV_ACTION" | jq -R .),
-                  "confirm": {
-                    "title": {"type": "plain_text", "text": "続行しますか？"},
-                    "text": {"type": "mrkdwn", "text": "DBマイグレーションを実施しましたか？未実施の場合は先に実行してください。"},
-                    "confirm": {"type": "plain_text", "text": "はい、続行します"},
-                    "deny": {"type": "plain_text", "text": "キャンセル"}
-                  }
-                },
-                {
-                  "type": "button",
-                  "text": {"type": "plain_text", "emoji": true, "text": "Deny"},
-                  "style": "danger",
-                  "action_id": "deny",
-                  "value": $(printf '%s' "$SRV_ACTION" | jq -R .)
+                accessory: {
+                  type: "image",
+                  image_url: "https://placehold.co/75x75/FF0000/FFFFFF?text=PROD",
+                  alt_text: "PROD environment"
                 }
-              ]
-            }
-          ]
-        }
-        BLOCKKIT
-        )
+              },
+              {
+                type: "actions",
+                elements: [
+                  {
+                    type: "button",
+                    text: {type: "plain_text", emoji: true, text: "1. DB Migration \u2192 Canary"},
+                    style: "danger",
+                    action_id: "approve",
+                    value: $job_val
+                  },
+                  {
+                    type: "button",
+                    text: {type: "plain_text", emoji: true, text: "2. Canary (skip migration)"},
+                    style: "primary",
+                    action_id: "approve",
+                    value: $srv_val,
+                    confirm: {
+                      title: {type: "plain_text", text: "\u7d9a\u884c\u3057\u307e\u3059\u304b\uff1f"},
+                      text: {type: "mrkdwn", text: "DB\u30de\u30a4\u30b0\u30ec\u30fc\u30b7\u30e7\u30f3\u3092\u5b9f\u65bd\u3057\u307e\u3057\u305f\u304b\uff1f\u672a\u5b9f\u65bd\u306e\u5834\u5408\u306f\u5148\u306b\u5b9f\u884c\u3057\u3066\u304f\u3060\u3055\u3044\u3002"},
+                      confirm: {type: "plain_text", text: "\u306f\u3044\u3001\u7d9a\u884c\u3057\u307e\u3059"},
+                      deny: {type: "plain_text", text: "\u30ad\u30e3\u30f3\u30bb\u30eb"}
+                    }
+                  },
+                  {
+                    type: "button",
+                    text: {type: "plain_text", emoji: true, text: "\ud83d\udecf Deny"},
+                    style: "danger",
+                    action_id: "deny",
+                    value: $deny_val
+                  }
+                ]
+              }
+            ]
+          }')
 
         curl -s -X POST \
           -H "Content-Type: application/json" \
           --data "${PAYLOAD}" \
           "${SLACK_WEBHOOK_URL}"
     waitFor:
-      - deploy-service
+      - deploy-services
       - update-migration-job
 
 substitutions:
   _IMAGE: asia-northeast1-docker.pkg.dev/${PROJECT_ID}/runops/runops-gateway
-  _SERVICE_NAME: frontend-service
+  # Comma-separated list of Cloud Run service names to deploy atomically.
+  # Example single service:  _SERVICE_NAMES: frontend-service
+  # Example multi-service:   _SERVICE_NAMES: frontend-service,backend-service
+  _SERVICE_NAMES: frontend-service
   _MIGRATION_JOB_NAME: db-migrate-job
   _REGION: asia-northeast1
 
