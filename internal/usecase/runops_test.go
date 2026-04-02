@@ -15,6 +15,7 @@ import (
 
 type mockGCP struct {
 	shiftTrafficCalled     bool
+	shiftTrafficPercent    int32
 	shiftTrafficErr        error
 	executeJobCalled       bool
 	executeJobErr          error
@@ -24,8 +25,9 @@ type mockGCP struct {
 	updateWorkerPoolErr    error
 }
 
-func (m *mockGCP) ShiftTraffic(_ context.Context, _, _ string, _ int32) error {
+func (m *mockGCP) ShiftTraffic(_ context.Context, _, _ string, percent int32) error {
 	m.shiftTrafficCalled = true
+	m.shiftTrafficPercent = percent
 	return m.shiftTrafficErr
 }
 
@@ -45,13 +47,16 @@ func (m *mockGCP) UpdateWorkerPool(_ context.Context, _, _ string, _ int32) erro
 }
 
 type mockNotifier struct {
-	updateMessageCalled  bool
-	updateMessageErr     error
-	replaceMessageCalled bool
-	replaceMessageBlocks any
-	replaceErr           error
-	sendEphemeralCalled  bool
-	sendEphemeralText    string
+	updateMessageCalled     bool
+	updateMessageErr        error
+	replaceMessageCalled    bool
+	replaceMessageBlocks    any
+	replaceErr              error
+	sendEphemeralCalled     bool
+	sendEphemeralText       string
+	offerContinuationCalled bool
+	offerContinuationNextReq *domain.ApprovalRequest
+	offerContinuationErr    error
 }
 
 func (m *mockNotifier) UpdateMessage(_ context.Context, _ port.NotifyTarget, _ string) error {
@@ -69,6 +74,12 @@ func (m *mockNotifier) SendEphemeral(_ context.Context, _ port.NotifyTarget, _ s
 	m.sendEphemeralCalled = true
 	m.sendEphemeralText = text
 	return nil
+}
+
+func (m *mockNotifier) OfferContinuation(_ context.Context, _ port.NotifyTarget, _ string, nextReq *domain.ApprovalRequest, _ *domain.ApprovalRequest) error {
+	m.offerContinuationCalled = true
+	m.offerContinuationNextReq = nextReq
+	return m.offerContinuationErr
 }
 
 type mockAuth struct {
@@ -145,8 +156,8 @@ func TestApproveAction_Service_Success(t *testing.T) {
 	if !gcp.shiftTrafficCalled {
 		t.Error("expected ShiftTraffic to be called")
 	}
-	if !notifier.replaceMessageCalled {
-		t.Error("expected ReplaceMessage to be called")
+	if !notifier.offerContinuationCalled {
+		t.Error("expected OfferContinuation to be called")
 	}
 }
 
@@ -197,8 +208,8 @@ func TestApproveAction_WorkerPool_Success(t *testing.T) {
 	if gcp.shiftTrafficCalled {
 		t.Error("expected ShiftTraffic NOT to be called for worker pool")
 	}
-	if !notifier.replaceMessageCalled {
-		t.Error("expected ReplaceMessage to be called")
+	if !notifier.offerContinuationCalled {
+		t.Error("expected OfferContinuation to be called")
 	}
 }
 
@@ -332,7 +343,7 @@ func TestApproveAction_CLIMode(t *testing.T) {
 	req := newServiceReq()
 	req.Source = "cli"
 
-	// when — we just verify no panic and mode logic is exercised
+	// when — verify no panic and mode logic is exercised
 	err := svc.ApproveAction(context.Background(), req)
 
 	// then
@@ -341,6 +352,9 @@ func TestApproveAction_CLIMode(t *testing.T) {
 	}
 	if !gcp.shiftTrafficCalled {
 		t.Error("expected ShiftTraffic to be called")
+	}
+	if !notifier.offerContinuationCalled {
+		t.Error("expected OfferContinuation to be called")
 	}
 }
 
@@ -426,14 +440,14 @@ func TestApproveAction_Job_ExecuteJobError(t *testing.T) {
 	}
 }
 
-func TestApproveAction_Service_PercentZeroDefaultsTo10(t *testing.T) {
-	// given — action has no percent suffix; UseCase should default to 10
+func TestApproveAction_Service_RollbackShiftsToZero(t *testing.T) {
+	// given — rollback action must shift traffic to 0% (NOT default to 10)
 	gcp := &mockGCP{}
 	notifier := &mockNotifier{}
 	auth := &mockAuth{authorized: true, expired: false}
 	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
 	req := newServiceReq()
-	req.Action = "rollback" // Percent will be 0 → defaults to 10
+	req.Action = "rollback"
 
 	// when
 	err := svc.ApproveAction(context.Background(), req)
@@ -444,6 +458,92 @@ func TestApproveAction_Service_PercentZeroDefaultsTo10(t *testing.T) {
 	}
 	if !gcp.shiftTrafficCalled {
 		t.Error("expected ShiftTraffic to be called")
+	}
+	if gcp.shiftTrafficPercent != 0 {
+		t.Errorf("expected ShiftTraffic percent=0 for rollback, got %d", gcp.shiftTrafficPercent)
+	}
+}
+
+func TestApproveAction_Service_CanaryProgressionOffersNextStep(t *testing.T) {
+	// given — canary_10 success should offer canary_30 as next step
+	gcp := &mockGCP{}
+	notifier := &mockNotifier{}
+	auth := &mockAuth{authorized: true, expired: false}
+	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
+	req := newServiceReq()
+	req.Action = "canary_10"
+
+	// when
+	err := svc.ApproveAction(context.Background(), req)
+
+	// then
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if !notifier.offerContinuationCalled {
+		t.Error("expected OfferContinuation to be called after canary step")
+	}
+	if notifier.offerContinuationNextReq == nil {
+		t.Fatal("expected nextReq to be non-nil after canary_10")
+	}
+	if notifier.offerContinuationNextReq.Action != "canary_30" {
+		t.Errorf("expected next action canary_30, got %s", notifier.offerContinuationNextReq.Action)
+	}
+}
+
+func TestApproveAction_Service_Canary100OffersNoNextStep(t *testing.T) {
+	// given — canary_100 is the final step; OfferContinuation called with nil nextReq
+	gcp := &mockGCP{}
+	notifier := &mockNotifier{}
+	auth := &mockAuth{authorized: true, expired: false}
+	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
+	req := newServiceReq()
+	req.Action = "canary_100"
+
+	// when
+	err := svc.ApproveAction(context.Background(), req)
+
+	// then
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if !notifier.offerContinuationCalled {
+		t.Error("expected OfferContinuation to be called")
+	}
+	if notifier.offerContinuationNextReq != nil {
+		t.Errorf("expected nextReq nil for final canary step, got %+v", notifier.offerContinuationNextReq)
+	}
+}
+
+func TestApproveAction_Job_WithNextService_OffersCanaryButton(t *testing.T) {
+	// given — job request with next_* fields set; after migration, canary button should be offered
+	gcp := &mockGCP{}
+	notifier := &mockNotifier{}
+	auth := &mockAuth{authorized: true, expired: false}
+	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
+	req := newJobReq()
+	req.NextServiceName = "frontend-service"
+	req.NextRevision = "frontend-service-v2"
+	req.NextAction = "canary_10"
+
+	// when
+	err := svc.ApproveAction(context.Background(), req)
+
+	// then
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if !notifier.offerContinuationCalled {
+		t.Error("expected OfferContinuation to be called after migration with NextServiceName set")
+	}
+	if notifier.offerContinuationNextReq == nil {
+		t.Fatal("expected nextReq to be non-nil")
+	}
+	if notifier.offerContinuationNextReq.ResourceName != "frontend-service" {
+		t.Errorf("expected nextReq.ResourceName=frontend-service, got %s", notifier.offerContinuationNextReq.ResourceName)
+	}
+	if !notifier.offerContinuationNextReq.MigrationDone {
+		t.Error("expected nextReq.MigrationDone=true")
 	}
 }
 

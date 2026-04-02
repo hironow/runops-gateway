@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/hironow/runops-gateway/internal/core/domain"
 	"github.com/hironow/runops-gateway/internal/core/port"
@@ -91,8 +92,10 @@ func (s *RunOpsService) approveService(ctx context.Context, req domain.ApprovalR
 		return err
 	}
 	percent := act.Percent
-	if percent == 0 {
-		percent = 10 // default for canary
+	if act.Name == "rollback" {
+		percent = 0 // rollback: shift to 0% so Cloud Run redistributes traffic to previous revision
+	} else if percent == 0 {
+		percent = 10 // default canary when no percent is specified
 	}
 	if err := s.gcp.ShiftTraffic(ctx, req.ResourceName, req.Target, percent); err != nil {
 		if uerr := s.notifier.UpdateMessage(ctx, target, fmt.Sprintf("エラーが発生しました: %v", err)); uerr != nil {
@@ -101,9 +104,36 @@ func (s *RunOpsService) approveService(ctx context.Context, req domain.ApprovalR
 		return err
 	}
 
-	blocks := completionBlock(fmt.Sprintf("✅ トラフィック切り替え完了。サービス: *%s* → %d%%", req.ResourceName, percent))
-	if err := s.notifier.ReplaceMessage(ctx, target, blocks); err != nil {
-		slog.Error("ReplaceMessage failed", "err", err)
+	summary := fmt.Sprintf("✅ トラフィック切り替え完了。サービス: *%s* → %d%%", req.ResourceName, percent)
+	var nextReq *domain.ApprovalRequest
+	var stopReq *domain.ApprovalRequest
+	if act.Name != "rollback" {
+		nextPercent := domain.NextCanaryPercent(percent)
+		if nextPercent > 0 {
+			nr := &domain.ApprovalRequest{
+				ResourceType: req.ResourceType,
+				ResourceName: req.ResourceName,
+				Target:       req.Target,
+				Action:       fmt.Sprintf("canary_%d", nextPercent),
+				Source:       req.Source,
+				IssuedAt:     time.Now().Unix(),
+				ResponseURL:  req.ResponseURL,
+			}
+			nextReq = nr
+			sr := &domain.ApprovalRequest{
+				ResourceType: req.ResourceType,
+				ResourceName: req.ResourceName,
+				Target:       req.Target,
+				Action:       "rollback",
+				Source:       req.Source,
+				IssuedAt:     time.Now().Unix(),
+				ResponseURL:  req.ResponseURL,
+			}
+			stopReq = sr
+		}
+	}
+	if err := s.notifier.OfferContinuation(ctx, target, summary, nextReq, stopReq); err != nil {
+		slog.Error("OfferContinuation failed", "err", err)
 	}
 	return nil
 }
@@ -132,7 +162,37 @@ func (s *RunOpsService) approveJob(ctx context.Context, req domain.ApprovalReque
 		return err
 	}
 
-	blocks := completionBlock(fmt.Sprintf("✅ マイグレーション完了。ジョブ: *%s*", req.ResourceName))
+	summary := fmt.Sprintf("✅ マイグレーション完了。ジョブ: *%s*", req.ResourceName)
+
+	// If next_* fields are set, offer the canary button with migration_done=true.
+	if req.NextServiceName != "" {
+		nextReq := &domain.ApprovalRequest{
+			ResourceType:  domain.ResourceTypeService,
+			ResourceName:  req.NextServiceName,
+			Target:        req.NextRevision,
+			Action:        req.NextAction,
+			Source:        req.Source,
+			IssuedAt:      time.Now().Unix(),
+			ResponseURL:   req.ResponseURL,
+			MigrationDone: true,
+		}
+		// Deny button for the canary step (migration_done=true, no confirm needed)
+		denyReq := &domain.ApprovalRequest{
+			ResourceType: domain.ResourceTypeService,
+			ResourceName: req.NextServiceName,
+			Target:       req.NextRevision,
+			Action:       req.NextAction,
+			Source:       req.Source,
+			IssuedAt:     time.Now().Unix(),
+			ResponseURL:  req.ResponseURL,
+		}
+		if err := s.notifier.OfferContinuation(ctx, target, summary, nextReq, denyReq); err != nil {
+			slog.Error("OfferContinuation failed", "err", err)
+		}
+		return nil
+	}
+
+	blocks := completionBlock(summary)
 	if err := s.notifier.ReplaceMessage(ctx, target, blocks); err != nil {
 		slog.Error("ReplaceMessage failed", "err", err)
 	}
@@ -151,8 +211,10 @@ func (s *RunOpsService) approveWorkerPool(ctx context.Context, req domain.Approv
 		return err
 	}
 	percent := act.Percent
-	if percent == 0 {
-		percent = 10 // default for canary
+	if act.Name == "rollback" {
+		percent = 0
+	} else if percent == 0 {
+		percent = 10 // default canary
 	}
 	if err := s.gcp.UpdateWorkerPool(ctx, req.ResourceName, req.Target, percent); err != nil {
 		if uerr := s.notifier.UpdateMessage(ctx, target, fmt.Sprintf("エラーが発生しました: %v", err)); uerr != nil {
@@ -161,9 +223,36 @@ func (s *RunOpsService) approveWorkerPool(ctx context.Context, req domain.Approv
 		return err
 	}
 
-	blocks := completionBlock(fmt.Sprintf("✅ インスタンス割り当て切り替え完了。プール: *%s* → %d%%", req.ResourceName, percent))
-	if err := s.notifier.ReplaceMessage(ctx, target, blocks); err != nil {
-		slog.Error("ReplaceMessage failed", "err", err)
+	summary := fmt.Sprintf("✅ インスタンス割り当て切り替え完了。プール: *%s* → %d%%", req.ResourceName, percent)
+	var nextReq *domain.ApprovalRequest
+	var stopReq *domain.ApprovalRequest
+	if act.Name != "rollback" {
+		nextPercent := domain.NextCanaryPercent(percent)
+		if nextPercent > 0 {
+			nr := &domain.ApprovalRequest{
+				ResourceType: req.ResourceType,
+				ResourceName: req.ResourceName,
+				Target:       req.Target,
+				Action:       fmt.Sprintf("canary_%d", nextPercent),
+				Source:       req.Source,
+				IssuedAt:     time.Now().Unix(),
+				ResponseURL:  req.ResponseURL,
+			}
+			nextReq = nr
+			sr := &domain.ApprovalRequest{
+				ResourceType: req.ResourceType,
+				ResourceName: req.ResourceName,
+				Target:       req.Target,
+				Action:       "rollback",
+				Source:       req.Source,
+				IssuedAt:     time.Now().Unix(),
+				ResponseURL:  req.ResponseURL,
+			}
+			stopReq = sr
+		}
+	}
+	if err := s.notifier.OfferContinuation(ctx, target, summary, nextReq, stopReq); err != nil {
+		slog.Error("OfferContinuation failed", "err", err)
 	}
 	return nil
 }
