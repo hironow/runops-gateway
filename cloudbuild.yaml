@@ -65,10 +65,10 @@ steps:
         TIMESTAMP=$(date +%s)
 
         # Build action values for each button
-        SRV_ACTION=$(printf '{"resource_type":"service","resource_name":"%s","target":"%s","action":"canary_10","issued_at":%s}' \
+        SRV_ACTION=$(printf '{"resource_type":"service","resource_name":"%s","target":"%s","action":"canary_10","issued_at":%s,"migration_done":false}' \
           "${_SERVICE_NAME}" "${REVISION}" "${TIMESTAMP}")
-        JOB_ACTION=$(printf '{"resource_type":"job","resource_name":"%s","target":"","action":"migrate_apply","issued_at":%s}' \
-          "${_MIGRATION_JOB_NAME}" "${TIMESTAMP}")
+        JOB_ACTION=$(printf '{"resource_type":"job","resource_name":"%s","target":"","action":"migrate_apply","issued_at":%s,"next_service_name":"%s","next_revision":"%s","next_action":"canary_10"}' \
+          "${_MIGRATION_JOB_NAME}" "${TIMESTAMP}" "${_SERVICE_NAME}" "${REVISION}")
 
         # Build Block Kit payload
         PAYLOAD=$(cat <<BLOCKKIT
@@ -105,7 +105,13 @@ steps:
                   "text": {"type": "plain_text", "emoji": true, "text": "2. 10% Canary"},
                   "style": "primary",
                   "action_id": "approve",
-                  "value": $(printf '%s' "$SRV_ACTION" | jq -R .)
+                  "value": $(printf '%s' "$SRV_ACTION" | jq -R .),
+                  "confirm": {
+                    "title": {"type": "plain_text", "text": "続行しますか？"},
+                    "text": {"type": "mrkdwn", "text": "DBマイグレーションを実施しましたか？未実施の場合は先に実行してください。"},
+                    "confirm": {"type": "plain_text", "text": "はい、続行します"},
+                    "deny": {"type": "plain_text", "text": "キャンセル"}
+                  }
                 },
                 {
                   "type": "button",

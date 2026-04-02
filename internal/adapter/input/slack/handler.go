@@ -14,11 +14,15 @@ import (
 
 // actionValue is the JSON embedded in Slack button's value field.
 type actionValue struct {
-	ResourceType string `json:"resource_type"`
-	ResourceName string `json:"resource_name"`
-	Target       string `json:"target"`
-	Action       string `json:"action"`
-	IssuedAt     int64  `json:"issued_at"`
+	ResourceType    string `json:"resource_type"`
+	ResourceName    string `json:"resource_name"`
+	Target          string `json:"target"`
+	Action          string `json:"action"`
+	IssuedAt        int64  `json:"issued_at"`
+	MigrationDone   bool   `json:"migration_done"`
+	NextServiceName string `json:"next_service_name"`
+	NextRevision    string `json:"next_revision"`
+	NextAction      string `json:"next_action"`
 }
 
 // interactivePayload is a minimal representation of Slack's interactive payload.
@@ -87,14 +91,18 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req := domain.ApprovalRequest{
-		ResourceType: domain.ResourceType(av.ResourceType),
-		ResourceName: av.ResourceName,
-		Target:       av.Target,
-		Action:       av.Action,
-		ApproverID:   slackPayload.User.ID,
-		Source:       "slack",
-		IssuedAt:     av.IssuedAt,
-		ResponseURL:  slackPayload.ResponseURL,
+		ResourceType:    domain.ResourceType(av.ResourceType),
+		ResourceName:    av.ResourceName,
+		Target:          av.Target,
+		Action:          av.Action,
+		ApproverID:      slackPayload.User.ID,
+		Source:          "slack",
+		IssuedAt:        av.IssuedAt,
+		ResponseURL:     slackPayload.ResponseURL,
+		MigrationDone:   av.MigrationDone,
+		NextServiceName: av.NextServiceName,
+		NextRevision:    av.NextRevision,
+		NextAction:      av.NextAction,
 	}
 	// 4. Dispatch asynchronously (avoid Slack 3-second timeout)
 	switch action.ActionID {
