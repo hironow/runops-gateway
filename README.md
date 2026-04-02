@@ -155,38 +155,52 @@ runops-gateway 自体のセットアップは完了している前提です。
 
 ### 2-0. 権限設定（セキュリティ）
 
-runops-gateway の Cloud Run ランタイム SA (`slack-chatops-sa`) が管理対象アプリの GCP リソースを操作するために、以下の権限を付与する必要があります。
+runops-gateway と管理対象アプリは **別々の GCP プロジェクト** に存在することを前提としています。
 
-#### runops-gateway SA に付与する権限
+```
+GATEWAY_PROJECT  : runops-gateway が稼働するプロジェクト (例: my-infra-project)
+APP_PROJECT      : 管理対象アプリが稼働するプロジェクト (例: my-app-project)
+```
+
+runops-gateway の Cloud Run ランタイム SA (`slack-chatops-sa@GATEWAY_PROJECT`) がクロスプロジェクトで管理対象アプリのリソースを操作するために、以下の権限を **APP_PROJECT 側で** 付与します。
+
+#### runops-gateway SA に付与する権限（APP_PROJECT 側での作業）
 
 ```bash
-CHATOPS_SA="slack-chatops-sa@YOUR_PROJECT.iam.gserviceaccount.com"
+CHATOPS_SA="slack-chatops-sa@GATEWAY_PROJECT.iam.gserviceaccount.com"
 
 # Cloud Run Service のトラフィック切り替え権限
 gcloud run services add-iam-policy-binding YOUR_SERVICE_NAME \
+  --project=APP_PROJECT \
   --region=asia-northeast1 \
   --member="serviceAccount:${CHATOPS_SA}" \
   --role="roles/run.developer"
 
 # Cloud Run Jobs のマイグレーション実行権限
 gcloud run jobs add-iam-policy-binding YOUR_JOB_NAME \
+  --project=APP_PROJECT \
   --region=asia-northeast1 \
   --member="serviceAccount:${CHATOPS_SA}" \
   --role="roles/run.developer"
+
+# Cloud SQL バックアップ権限 (バックアップあり構成の場合)
+gcloud projects add-iam-policy-binding APP_PROJECT \
+  --member="serviceAccount:${CHATOPS_SA}" \
+  --role="roles/cloudsql.admin"
 ```
 
-> **注意**: `roles/cloudsql.admin`（Cloud SQL バックアップ用）は runops-gateway の tofu でプロジェクトレベルに付与済みのため、管理対象アプリ側での設定は不要です。
+> **注意**: `roles/cloudsql.admin` は runops-gateway の tofu では GATEWAY_PROJECT レベルにのみ付与されています。管理対象アプリが別プロジェクトの場合は APP_PROJECT 側でも付与が必要です。
 
-#### 管理対象アプリの CI/CD SA に付与する権限
+#### 管理対象アプリの CI/CD SA に付与する権限（GATEWAY_PROJECT 側での作業）
 
-`notify-slack.sh` が Secret Manager から Slack Webhook URL を読み取るために必要です。
+`notify-slack.sh` が GATEWAY_PROJECT の Secret Manager から Slack Webhook URL を読み取るために必要です。
 
 ```bash
 # Cloud Build のデフォルト SA の場合
-PROJECT_NUMBER=$(gcloud projects describe YOUR_PROJECT --format="value(projectNumber)")
+APP_PROJECT_NUMBER=$(gcloud projects describe APP_PROJECT --format="value(projectNumber)")
 gcloud secrets add-iam-policy-binding slack-webhook-url \
-  --project=YOUR_PROJECT \
-  --member="serviceAccount:${PROJECT_NUMBER}@cloudbuild.gserviceaccount.com" \
+  --project=GATEWAY_PROJECT \
+  --member="serviceAccount:${APP_PROJECT_NUMBER}@cloudbuild.gserviceaccount.com" \
   --role="roles/secretmanager.secretAccessor"
 ```
 
@@ -196,7 +210,7 @@ gcloud secrets add-iam-policy-binding slack-webhook-url \
 
 | リソース | 理由 |
 |---|---|
-| 管理対象アプリのソースコード・Artifact Registry | イメージのビルド・管理は管理対象アプリ側の CI/CD が担当 |
+| 管理対象アプリのソースコード・Artifact Registry | イメージのビルド・管理は APP_PROJECT 側の CI/CD が担当 |
 | 管理対象アプリの Secret Manager シークレット | runops-gateway は GCP API のみを操作し、アプリ設定には触れない |
 | Cloud SQL のデータ | バックアップのトリガーのみ（`cloudsql.admin`）。データの読み書きは行わない |
 
