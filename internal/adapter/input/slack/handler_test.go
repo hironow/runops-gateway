@@ -2,9 +2,11 @@ package slack
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
@@ -304,6 +306,118 @@ func TestHandler_MultipleActions_OnlyFirstProcessed(t *testing.T) {
 	case <-mock.denyCh:
 		t.Error("expected DenyAction NOT to be called (only first action processed)")
 	default:
+	}
+}
+
+func gzipBase64(t *testing.T, s string) string {
+	t.Helper()
+	var buf bytes.Buffer
+	w := gzip.NewWriter(&buf)
+	if _, err := w.Write([]byte(s)); err != nil {
+		t.Fatalf("gzip write: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("gzip close: %v", err)
+	}
+	return "gz:" + base64.RawURLEncoding.EncodeToString(buf.Bytes())
+}
+
+func TestParseActionValue_PlainJSON_ParsedCorrectly(t *testing.T) {
+	// given
+	av := actionValue{
+		ResourceType:  "service",
+		ResourceNames: "frontend,backend",
+		Targets:       "rev-001,rev-002",
+		Action:        "canary_10",
+		IssuedAt:      1700000000,
+	}
+	b, _ := json.Marshal(av)
+
+	// when
+	got, err := parseActionValue(string(b))
+
+	// then
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.ResourceNames != "frontend,backend" {
+		t.Errorf("ResourceNames: got %q, want %q", got.ResourceNames, "frontend,backend")
+	}
+	if got.Action != "canary_10" {
+		t.Errorf("Action: got %q, want %q", got.Action, "canary_10")
+	}
+}
+
+func TestParseActionValue_GzPrefixed_DecompressedCorrectly(t *testing.T) {
+	// given — manually compress a known action value
+	original := actionValue{
+		ResourceType:  "service",
+		ResourceNames: "frontend,backend",
+		Targets:       "rev-001,rev-002",
+		Action:        "canary_30",
+		IssuedAt:      1700000000,
+	}
+	b, _ := json.Marshal(original)
+	compressed := gzipBase64(t, string(b))
+
+	// when
+	got, err := parseActionValue(compressed)
+
+	// then
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.ResourceNames != "frontend,backend" {
+		t.Errorf("ResourceNames: got %q, want %q", got.ResourceNames, "frontend,backend")
+	}
+	if got.Action != "canary_30" {
+		t.Errorf("Action: got %q, want %q", got.Action, "canary_30")
+	}
+}
+
+func TestHandler_CompressedButtonValue_Dispatched(t *testing.T) {
+	// given — button value is gz: compressed (simulates large multi-service bundle)
+	secret := "test-secret"
+	mock := newMockUseCase()
+	handler := NewHandler(mock, secret)
+
+	av := actionValue{
+		ResourceType:  "service",
+		ResourceNames: "frontend,backend",
+		Targets:       "rev-001,rev-002",
+		Action:        "canary_10",
+		IssuedAt:      time.Now().Unix(),
+	}
+	b, _ := json.Marshal(av)
+
+	payload := interactivePayload{}
+	payload.User.ID = "U123"
+	payload.ResponseURL = "https://hooks.slack.com/response"
+	payload.Actions = []struct {
+		ActionID string `json:"action_id"`
+		Value    string `json:"value"`
+	}{
+		{ActionID: "approve", Value: gzipBase64(t, string(b))},
+	}
+	payloadBytes, _ := json.Marshal(payload)
+
+	req := buildValidRequest(t, secret, string(payloadBytes))
+	rr := httptest.NewRecorder()
+
+	// when
+	handler.ServeHTTP(rr, req)
+
+	// then
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rr.Code)
+	}
+	select {
+	case got := <-mock.approveCh:
+		if got.ResourceNames != "frontend,backend" {
+			t.Errorf("ResourceNames: got %q, want %q", got.ResourceNames, "frontend,backend")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for ApproveAction")
 	}
 }
 

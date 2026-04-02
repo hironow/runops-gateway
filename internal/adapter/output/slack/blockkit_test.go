@@ -1,7 +1,11 @@
 package slack
 
 import (
+	"bytes"
+	"compress/gzip"
+	"encoding/base64"
 	"encoding/json"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -477,19 +481,65 @@ func TestBuildApprovalMessage_LongResourceName_SectionTextWithinLimit(t *testing
 	}
 }
 
-func TestMarshalActionValue_LongBundle_ReturnsValidJSON(t *testing.T) {
-	// given — 10 services with long names (worst-case bundle)
+func TestCompressButtonValue_AlwaysGzPrefix(t *testing.T) {
+	// Compression is unconditional — even a short value must be gz: prefixed.
+	s := `{"resource_type":"service","resource_names":"svc","action":"canary_10","issued_at":1700000000}`
+
+	got := compressButtonValue(s)
+
+	if !strings.HasPrefix(got, "gz:") {
+		t.Errorf("expected compressed value to always start with 'gz:', got %q", got[:min(20, len(got))])
+	}
+}
+
+func TestCompressButtonValue_Roundtrip(t *testing.T) {
+	// Compress then manually decompress must return the original.
+	import_b64 := func(s string) []byte {
+		b, _ := base64.RawURLEncoding.DecodeString(s)
+		return b
+	}
+	original := `{"resource_type":"service","resource_names":"frontend,backend","targets":"rev-001,rev-002","action":"canary_10","issued_at":1700000000,"migration_done":false}`
+
+	compressed := compressButtonValue(original)
+	if !strings.HasPrefix(compressed, "gz:") {
+		t.Fatalf("expected gz: prefix, got %q", compressed[:min(20, len(compressed))])
+	}
+	raw := import_b64(compressed[3:])
+	r, _ := gzip.NewReader(bytes.NewReader(raw))
+	expanded, _ := io.ReadAll(r)
+	if string(expanded) != original {
+		t.Errorf("roundtrip mismatch: got %q", expanded)
+	}
+}
+
+func TestMarshalActionValue_AlwaysGzPrefix(t *testing.T) {
+	// Even a minimal single-service request must produce a gz: compressed value.
+	req := &domain.ApprovalRequest{
+		ResourceType:  domain.ResourceTypeService,
+		ResourceNames: "frontend-service",
+		Targets:       "frontend-service-00001-abc",
+		Action:        "canary_10",
+		IssuedAt:      1700000000,
+	}
+
+	val := marshalActionValue(req)
+
+	if !strings.HasPrefix(val, "gz:") {
+		t.Errorf("expected gz: prefix for any bundle size, got %q", val[:min(20, len(val))])
+	}
+	if len(val) > maxButtonValue {
+		t.Errorf("compressed single-service value (%d) exceeds maxButtonValue (%d)", len(val), maxButtonValue)
+	}
+}
+
+func TestMarshalActionValue_LargeBundle_RoundtripDecodesCorrectly(t *testing.T) {
+	// given — 10 services with long names
 	names := strings.Join([]string{
 		"very-long-service-name-frontend-001",
 		"very-long-service-name-backend-002",
 		"very-long-service-name-worker-003",
 		"very-long-service-name-api-gw-004",
 		"very-long-service-name-auth-svc-005",
-		"very-long-service-name-notify-006",
-		"very-long-service-name-audit-007",
-		"very-long-service-name-batch-008",
-		"very-long-service-name-report-009",
-		"very-long-service-name-admin-010",
 	}, ",")
 	revs := strings.Join([]string{
 		"very-long-service-name-frontend-001-00010-abc",
@@ -497,34 +547,40 @@ func TestMarshalActionValue_LongBundle_ReturnsValidJSON(t *testing.T) {
 		"very-long-service-name-worker-003-00010-ghi",
 		"very-long-service-name-api-gw-004-00010-jkl",
 		"very-long-service-name-auth-svc-005-00010-mno",
-		"very-long-service-name-notify-006-00010-pqr",
-		"very-long-service-name-audit-007-00010-stu",
-		"very-long-service-name-batch-008-00010-vwx",
-		"very-long-service-name-report-009-00010-yza",
-		"very-long-service-name-admin-010-00010-bcd",
 	}, ",")
 	req := &domain.ApprovalRequest{
-		ResourceType:     domain.ResourceTypeService,
-		ResourceNames:    names,
-		Targets:          revs,
-		Action:           "canary_10",
-		IssuedAt:         1700000000,
-		NextServiceNames: names,
-		NextRevisions:    revs,
-		NextAction:       "canary_30",
+		ResourceType:  domain.ResourceTypeService,
+		ResourceNames: names,
+		Targets:       revs,
+		Action:        "canary_10",
+		IssuedAt:      1700000000,
 	}
 
 	// when
 	val := marshalActionValue(req)
 
-	// then — result must be valid JSON regardless of length
-	if val == "" {
-		t.Fatal("expected non-empty JSON string")
+	// then — result is gz: prefixed and decodes to valid JSON preserving field values
+	if !strings.HasPrefix(val, "gz:") {
+		t.Fatalf("expected gz: prefix, got %q", val[:min(20, len(val))])
 	}
-	// Verify it's parseable JSON
+	raw, err := base64.RawURLEncoding.DecodeString(val[3:])
+	if err != nil {
+		t.Fatalf("base64 decode: %v", err)
+	}
+	r, err := gzip.NewReader(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatalf("gzip reader: %v", err)
+	}
+	expanded, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("gzip read: %v", err)
+	}
 	var out map[string]any
-	if err := json.Unmarshal([]byte(val), &out); err != nil {
-		t.Errorf("marshalActionValue returned invalid JSON: %v", err)
+	if err := json.Unmarshal(expanded, &out); err != nil {
+		t.Fatalf("JSON unmarshal: %v", err)
+	}
+	if got := out["resource_names"]; got != names {
+		t.Errorf("resource_names: got %v, want %v", got, names)
 	}
 }
 

@@ -1,6 +1,9 @@
 package slack
 
 import (
+	"bytes"
+	"compress/gzip"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -16,6 +19,31 @@ const (
 	maxButtonValue = 2000 // button element value
 	maxButtonLabel = 75   // button element text.text
 )
+
+// compressButtonValue always compresses s with gzip + base64url (prefix "gz:").
+// Compression is unconditional so that parseActionValue in the handler is exercised
+// on every button click — bugs in the round-trip are caught immediately in tests and
+// production rather than only when the bundle size happens to exceed maxButtonValue.
+// On compression error the plain JSON is returned as a fallback; buttonValueError in
+// notifier.go will detect if the result still exceeds the 2,000-char Slack limit.
+func compressButtonValue(s string) string {
+	var buf bytes.Buffer
+	w := gzip.NewWriter(&buf)
+	if _, err := w.Write([]byte(s)); err != nil {
+		slog.Warn("gzip write failed for button value", "err", err, "len", len(s))
+		return s
+	}
+	if err := w.Close(); err != nil {
+		slog.Warn("gzip flush failed for button value", "err", err, "len", len(s))
+		return s
+	}
+	encoded := "gz:" + base64.RawURLEncoding.EncodeToString(buf.Bytes())
+	if len(encoded) > maxButtonValue {
+		slog.Warn("button value exceeds Slack limit even after compression; reduce service bundle size",
+			"original_len", len(s), "compressed_len", len(encoded), "limit", maxButtonValue)
+	}
+	return encoded
+}
 
 // safeTrunc truncates s to at most max runes, appending "…" if truncated.
 // Use this before embedding user-controlled strings into Block Kit fields to
@@ -249,9 +277,9 @@ type progressActionValue struct {
 }
 
 // marshalActionValue serializes an ApprovalRequest into the Slack button value JSON.
-// Slack limits button value to 2,000 characters. If the serialized JSON approaches
-// that limit (e.g. large multi-service CSV bundles), a warning is logged and the
-// caller should reduce the bundle size.
+// When the resulting JSON exceeds Slack's 2,000-char limit it is automatically
+// compressed via compressButtonValue (gzip + base64url, prefix "gz:").
+// The handler in adapter/input/slack/handler.go decompresses the value transparently.
 func marshalActionValue(req *domain.ApprovalRequest) string {
 	v := progressActionValue{
 		ResourceType:     string(req.ResourceType),
@@ -265,11 +293,5 @@ func marshalActionValue(req *domain.ApprovalRequest) string {
 		NextAction:       req.NextAction,
 	}
 	b, _ := json.Marshal(v)
-	result := string(b)
-	if len(result) > maxButtonValue {
-		slog.Warn("button value exceeds Slack limit; reduce service bundle size",
-			"len", len(result), "limit", maxButtonValue,
-			"resource_names", req.ResourceNames)
-	}
-	return result
+	return compressButtonValue(string(b))
 }

@@ -2,11 +2,15 @@ package slack
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/hironow/runops-gateway/internal/core/domain"
 	"github.com/hironow/runops-gateway/internal/core/port"
@@ -91,8 +95,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	action := slackPayload.Actions[0]
-	var av actionValue
-	if err := json.Unmarshal([]byte(action.Value), &av); err != nil {
+	av, err := parseActionValue(action.Value)
+	if err != nil {
 		slog.Warn("failed to parse action value", "error", err)
 		w.WriteHeader(http.StatusOK)
 		return
@@ -130,6 +134,34 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	// 5. Immediately return 200 OK
 	w.WriteHeader(http.StatusOK)
+}
+
+// parseActionValue parses a Slack button value into an actionValue.
+// Values with the "gz:" prefix are decompressed (gzip + base64url) before JSON parsing.
+// This is the counterpart of compressButtonValue in adapter/output/slack/blockkit.go.
+func parseActionValue(s string) (actionValue, error) {
+	var av actionValue
+	data := []byte(s)
+	if strings.HasPrefix(s, "gz:") {
+		decoded, err := base64.RawURLEncoding.DecodeString(s[3:])
+		if err != nil {
+			return av, fmt.Errorf("base64 decode button value: %w", err)
+		}
+		r, err := gzip.NewReader(bytes.NewReader(decoded))
+		if err != nil {
+			return av, fmt.Errorf("gzip reader for button value: %w", err)
+		}
+		defer r.Close()
+		expanded, err := io.ReadAll(r)
+		if err != nil {
+			return av, fmt.Errorf("decompress button value: %w", err)
+		}
+		data = expanded
+	}
+	if err := json.Unmarshal(data, &av); err != nil {
+		return av, err
+	}
+	return av, nil
 }
 
 // firstNonEmpty returns a if non-empty, otherwise b.

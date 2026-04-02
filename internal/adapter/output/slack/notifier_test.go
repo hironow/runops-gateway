@@ -2,7 +2,9 @@ package slack
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,6 +13,21 @@ import (
 	"github.com/hironow/runops-gateway/internal/core/domain"
 	"github.com/hironow/runops-gateway/internal/core/port"
 )
+
+// incompressibleNames generates n service names from SHA-256 hashes.
+// SHA-256 hex output has near-maximum entropy so gzip cannot compress it meaningfully,
+// ensuring the button value exceeds maxButtonValue even after compression.
+func incompressibleNames(n int) (names, revisions string) {
+	nameParts := make([]string, n)
+	revParts := make([]string, n)
+	for i := 0; i < n; i++ {
+		h := sha256.Sum256([]byte(fmt.Sprintf("svc%d", i)))
+		nameParts[i] = fmt.Sprintf("%x", h[:24]) // 48 hex chars
+		h2 := sha256.Sum256([]byte(fmt.Sprintf("rev%d", i)))
+		revParts[i] = fmt.Sprintf("%x", h2[:28]) // 56 hex chars
+	}
+	return strings.Join(nameParts, ","), strings.Join(revParts, ",")
+}
 
 // compile-time interface assertion
 var _ port.Notifier = (*ResponseURLNotifier)(nil)
@@ -151,17 +168,15 @@ func TestUpdateMessage_EmptyResponseURL(t *testing.T) {
 }
 
 func TestOfferContinuation_TooLongButtonValue_SendsErrorMessage(t *testing.T) {
-	// given — resource_names large enough to push marshalActionValue over 2,000 chars
-	longNames := strings.Repeat("x", 600) + "," + strings.Repeat("y", 600)
+	// given — 30 services with SHA-256-derived names (high entropy → gzip cannot compress)
+	// so the button value stays over maxButtonValue (2,000 chars) even after compression.
+	longNames, longRevs := incompressibleNames(30)
 	nextReq := &domain.ApprovalRequest{
-		ResourceType:     domain.ResourceTypeService,
-		ResourceNames:    longNames,
-		Targets:          longNames,
-		Action:           "canary_10",
-		IssuedAt:         1700000000,
-		NextServiceNames: longNames,
-		NextRevisions:    longNames,
-		NextAction:       "canary_30",
+		ResourceType:  domain.ResourceTypeService,
+		ResourceNames: longNames,
+		Targets:       longRevs,
+		Action:        "canary_10",
+		IssuedAt:      1700000000,
 	}
 
 	var received map[string]any
