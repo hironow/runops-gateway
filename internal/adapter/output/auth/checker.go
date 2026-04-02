@@ -2,6 +2,7 @@ package auth
 
 import (
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -36,15 +37,7 @@ func NewEnvAuthChecker() *EnvAuthChecker {
 // IsAuthorized reports whether approverID is in the allowed users list.
 // Returns false if the allowed list is empty (deny by default).
 func (c *EnvAuthChecker) IsAuthorized(approverID string) bool {
-	if len(c.allowedUsers) == 0 {
-		return false
-	}
-	for _, u := range c.allowedUsers {
-		if u == approverID {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(c.allowedUsers, approverID)
 }
 
 // IsExpired reports whether the issuedAt timestamp has exceeded the expiry window.
