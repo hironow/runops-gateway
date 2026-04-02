@@ -1,0 +1,144 @@
+steps:
+  # Step 1: Build and push container image
+  - id: build-and-push
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -t
+      - ${_IMAGE}:${COMMIT_SHA}
+      - -t
+      - ${_IMAGE}:latest
+      - .
+
+  - id: push-image
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - --all-tags
+      - ${_IMAGE}
+    waitFor:
+      - build-and-push
+
+  # Step 2: Deploy to Cloud Run (no traffic)
+  - id: deploy-service
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        gcloud run deploy ${_SERVICE_NAME} \
+          --image ${_IMAGE}:${COMMIT_SHA} \
+          --region ${_REGION} \
+          --project ${PROJECT_ID} \
+          --no-traffic \
+          --format="value(status.latestCreatedRevisionName)" > /workspace/revision.txt
+        echo "Deployed revision: $(cat /workspace/revision.txt)"
+    waitFor:
+      - push-image
+
+  # Step 3: Update migration Job template
+  - id: update-migration-job
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        gcloud run jobs update ${_MIGRATION_JOB_NAME} \
+          --image ${_IMAGE}:${COMMIT_SHA} \
+          --region ${_REGION} \
+          --project ${PROJECT_ID} \
+          || echo "Migration job not found, skipping"
+    waitFor:
+      - push-image
+
+  # Step 4: Send Slack ChatOps notification with approval buttons
+  - id: notify-slack
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    secretEnv:
+      - SLACK_WEBHOOK_URL
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        REVISION=$(cat /workspace/revision.txt)
+        TIMESTAMP=$(date +%s)
+
+        # Build action values for each button
+        SRV_ACTION=$(printf '{"resource_type":"service","resource_name":"%s","target":"%s","action":"canary_10","issued_at":%s}' \
+          "${_SERVICE_NAME}" "${REVISION}" "${TIMESTAMP}")
+        JOB_ACTION=$(printf '{"resource_type":"job","resource_name":"%s","target":"","action":"migrate_apply","issued_at":%s}' \
+          "${_MIGRATION_JOB_NAME}" "${TIMESTAMP}")
+
+        # Build Block Kit payload
+        PAYLOAD=$(cat <<BLOCKKIT
+        {
+          "blocks": [
+            {
+              "type": "header",
+              "text": {"type": "plain_text", "text": "Deploy Ready: ${_SERVICE_NAME}", "emoji": true}
+            },
+            {
+              "type": "section",
+              "text": {
+                "type": "mrkdwn",
+                "text": "*Revision:* \`${REVISION}\`\n*Branch:* \`${BRANCH_NAME}\`\n*Commit:* \`${COMMIT_SHA:0:7}\`\n*Expires:* 2 hours from now"
+              },
+              "accessory": {
+                "type": "image",
+                "image_url": "https://placehold.co/75x75/FF0000/FFFFFF?text=PROD",
+                "alt_text": "PROD environment"
+              }
+            },
+            {
+              "type": "actions",
+              "elements": [
+                {
+                  "type": "button",
+                  "text": {"type": "plain_text", "emoji": true, "text": "1. DB Migration"},
+                  "style": "danger",
+                  "action_id": "approve",
+                  "value": $(printf '%s' "$JOB_ACTION" | python3 -c "import json,sys; print(json.dumps(sys.stdin.read()))")
+                },
+                {
+                  "type": "button",
+                  "text": {"type": "plain_text", "emoji": true, "text": "2. 10% Canary"},
+                  "style": "primary",
+                  "action_id": "approve",
+                  "value": $(printf '%s' "$SRV_ACTION" | python3 -c "import json,sys; print(json.dumps(sys.stdin.read()))")
+                },
+                {
+                  "type": "button",
+                  "text": {"type": "plain_text", "emoji": true, "text": "Deny"},
+                  "style": "danger",
+                  "action_id": "deny",
+                  "value": $(printf '%s' "$SRV_ACTION" | python3 -c "import json,sys; print(json.dumps(sys.stdin.read()))")
+                }
+              ]
+            }
+          ]
+        }
+        BLOCKKIT
+        )
+
+        curl -s -X POST \
+          -H "Content-Type: application/json" \
+          --data "${PAYLOAD}" \
+          "${SLACK_WEBHOOK_URL}"
+    waitFor:
+      - deploy-service
+      - update-migration-job
+
+substitutions:
+  _IMAGE: asia-northeast1-docker.pkg.dev/${PROJECT_ID}/runops/runops-gateway
+  _SERVICE_NAME: frontend-service
+  _MIGRATION_JOB_NAME: db-migrate-job
+  _REGION: asia-northeast1
+
+availableSecrets:
+  secretManager:
+    - versionName: projects/${PROJECT_ID}/secrets/slack-webhook-url/versions/latest
+      env: SLACK_WEBHOOK_URL
+
+options:
+  logging: CLOUD_LOGGING_ONLY
