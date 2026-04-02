@@ -1,0 +1,18 @@
+desc: "Agent is rejected when sending an unsigned interactive request"
+labels:
+  - security
+  - slack
+runners:
+  req: "{{vars.endpoint}}"
+vars:
+  endpoint: http://localhost:8080
+steps:
+  - desc: "Agent sends interactive request without Slack signature headers"
+    req:
+      /slack/interactive:
+        post:
+          headers:
+            Content-Type: application/x-www-form-urlencoded
+          body:
+            string: "payload=%7B%22type%22%3A%22block_actions%22%7D"
+    test: current.res.status == 401

@@ -1,0 +1,40 @@
+# runops-gateway task runner
+
+# Build all binaries
+build:
+    go build ./cmd/...
+
+# Run the HTTP server
+run:
+    go run ./cmd/server
+
+# Run all tests
+test:
+    go test ./...
+
+# Run tests with verbose output
+test-v:
+    go test -v ./...
+
+# Run linting
+lint:
+    go vet ./...
+
+# Format code
+fmt:
+    gofmt -w .
+
+# Build Docker image
+docker-build:
+    docker build -t runops-gateway:local .
+
+# Tidy dependencies
+tidy:
+    go mod tidy
+
+# Run scenario tests (requires server to be running with SLACK_SIGNING_SECRET=test-secret)
+test-runn:
+    runn run tests/runn/*.yaml
+
+# Run all checks (used before commit)
+check: fmt lint test

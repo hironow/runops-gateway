@@ -1,0 +1,18 @@
+desc: "Agent verifies server health"
+labels:
+  - healthz
+runners:
+  req: "{{vars.endpoint}}"
+vars:
+  endpoint: http://localhost:8080
+steps:
+  - desc: "Agent confirms server is alive and healthy"
+    req:
+      /healthz:
+        get:
+          body: null
+    test: |
+      current.res.status == 200
+      && current.res.headers['Content-Type'][0] contains 'application/json'
+      && string(current.res.body) contains '"status"'
+      && string(current.res.body) contains '"ok"'
