@@ -2,21 +2,23 @@
 
 Slack ChatOps gateway for GCP operations.
 
-CI/CD パイプライン（Cloud Build）が新しいリビジョンをデプロイした後、
+管理対象アプリの CI/CD パイプラインが新しいリビジョンをデプロイした後、
 Slack のボタンを押すだけでカナリアリリースや DB マイグレーションを安全に実行できる。
+
+runops-gateway 自体は GitHub Actions (`cd.yaml`) で自動デプロイされる。
 
 ## 概要
 
 ```
-[ 管理対象アプリの Cloud Build ]
+[ 管理対象アプリの CI/CD (Cloud Build 等) ]
     |  1. イメージビルド & デプロイ (traffic 0%)
     |  2. Slack に Block Kit ボタンを通知
     v
 [ Slack ワークスペース ]
     |  承認者がボタンをクリック
     v
-[ runops-gateway (Cloud Run) ]  ← このリポジトリ
-    |  署名検証 → 認可 → 非同期実行
+[ runops-gateway (Cloud Run) ]  <- このリポジトリ
+    |  署名検証 -> 認可 -> 非同期実行
     v
 [ GCP (Cloud Run / Cloud SQL) ]
     トラフィック切り替え / DB マイグレーション

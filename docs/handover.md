@@ -36,6 +36,12 @@
 | `8761c04` | feat: always compress button values (gzip+base64url) (ADR 0011) |
 | `4f15e0a` | refactor: extract cloudbuild Slack notification to scripts/notify-slack.sh |
 | `aeda34a` | test: end-to-end test for notify-slack.sh via mock Slack server |
+| `efcff4f` | ci: add GitHub Actions CI/CD workflows (ci.yaml / cd.yaml) |
+| `55feb39` | ci: integrate OpenTofu into CD workflow and add GCS remote state |
+| `8c743c5` | feat(tofu): complete initial setup — WIF, Artifact Registry, deployer SA |
+| `8d77426` | feat(tofu): cost-optimize and fix bootstrap issues |
+| `7477242` | fix(cd): correct variable names and add missing TF_VAR_ for tofu apply |
+| `b71eb4f` | fix(cd): remove invalid --traffic flag from deploy-cloudrun step |
 
 ### ディレクトリ構成
 
@@ -154,42 +160,24 @@ runops-gateway/
 
 ## デプロイ手順
 
-### 初回セットアップ
+### runops-gateway 自体のデプロイ
 
-```bash
-# 1. Secret Manager にシークレットを登録
-gcloud secrets versions add slack-signing-secret \
-  --data-file=<(echo -n "YOUR_SLACK_SIGNING_SECRET")
+`main` ブランチへの push で GitHub Actions (`cd.yaml`) が自動実行される。
 
-gcloud secrets versions add slack-webhook-url \
-  --data-file=<(echo -n "https://hooks.slack.com/services/YOUR/WEBHOOK/URL")
-
-# 2. OpenTofu でインフラを構築
-cd tofu
-tofu init
-tofu apply \
-  -var="project_id=YOUR_PROJECT" \
-  -var="image=PLACEHOLDER" \
-  -var="allowed_slack_users=U0123ABCD"
-
-# 3. Slack App の設定
-#    - Interactivity & Shortcuts → Request URL を Cloud Run の URL に設定
-#    - 例: https://runops-gateway-xxxx-an.a.run.app/slack/interactive
+```
+git push origin main
+  -> ci.yaml: go test / go build
+  -> cd.yaml:
+       check-changes: tofu/** 変更検知
+       infra job    : tofu apply (tofu/ 変更時のみ)
+       deploy job   : docker build & push -> deploy-cloudrun@v2
 ```
 
-### 通常デプロイ（単一サービス）
+詳細な初回セットアップ手順は [README.md](../README.md#1-runops-gateway-自体のセットアップと更新) を参照。
 
-```bash
-gcloud builds submit --config=cloudbuild.yaml \
-  --substitutions="_SERVICE_NAMES=frontend-service,_REGION=asia-northeast1"
-```
+### 管理対象アプリのデプロイ（Cloud Build）
 
-### 複数サービス同時デプロイ
-
-```bash
-gcloud builds submit --config=cloudbuild.yaml \
-  --substitutions="_SERVICE_NAMES=frontend-service,backend-service,_REGION=asia-northeast1"
-```
+管理対象アプリのリポジトリに `cloudbuild.yaml` と `scripts/notify-slack.sh` を配置して使用する。詳細は [README.md](../README.md#2-管理対象アプリのデプロイ設定) を参照。
 
 ### CLI での緊急操作（Slack ダウン時）
 
