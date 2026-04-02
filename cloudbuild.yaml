@@ -84,6 +84,14 @@ steps:
           SVC_DISPLAY="${SVC_DISPLAY:0:134}…"
         fi
 
+        # compress_gz compresses a JSON string to the "gz:<base64url>" format expected
+        # by parseActionValue in adapter/input/slack/handler.go.
+        # gzip -c writes to stdout; base64 -w 0 disables line-wrapping (Linux/Debian).
+        # tr converts standard base64 (+/) to URL-safe base64 (-_) and strips padding (=).
+        compress_gz() {
+          printf '%s' "$1" | gzip -c | base64 -w 0 | tr '+/' '-_' | tr -d '='
+        }
+
         # Action value for the "run DB migration then canary" button.
         # On completion the gateway will offer the canary button automatically.
         JOB_ACTION=$(jq -n \
@@ -118,13 +126,20 @@ steps:
           --argjson ia "${TIMESTAMP}" \
           '{resource_type:$rt, resource_names:$rn, targets:$t, action:$a, issued_at:$ia}')
 
+        # Compress all button values to gz: format.
+        # Matches marshalActionValue in adapter/output/slack/blockkit.go which always
+        # compresses so the decompression path is exercised on every button click.
+        JOB_VALUE="gz:$(compress_gz "$JOB_ACTION")"
+        SRV_VALUE="gz:$(compress_gz "$SRV_ACTION")"
+        DENY_VALUE="gz:$(compress_gz "$DENY_ACTION")"
+
         PAYLOAD=$(jq -n \
           --arg svc        "${SVC_DISPLAY}" \
           --arg build_info "${BUILD_INFO}" \
           --arg revisions  "${REVISIONS}" \
-          --arg job_val    "$JOB_ACTION" \
-          --arg srv_val    "$SRV_ACTION" \
-          --arg deny_val   "$DENY_ACTION" \
+          --arg job_val    "$JOB_VALUE" \
+          --arg srv_val    "$SRV_VALUE" \
+          --arg deny_val   "$DENY_VALUE" \
           '{
             blocks: [
               {
