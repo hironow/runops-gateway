@@ -15,6 +15,7 @@ import (
 	slackadapter "github.com/hironow/runops-gateway/internal/adapter/input/slack"
 	gcpadapter "github.com/hironow/runops-gateway/internal/adapter/output/gcp"
 	slacknotifier "github.com/hironow/runops-gateway/internal/adapter/output/slack"
+	"github.com/hironow/runops-gateway/internal/adapter/output/state"
 	"github.com/hironow/runops-gateway/internal/usecase"
 )
 
@@ -39,7 +40,7 @@ func main() {
 	notifier := slacknotifier.NewResponseURLNotifier()
 	authChecker := auth.NewEnvAuthChecker()
 
-	svc := usecase.NewRunOpsService(gcpCtrl, notifier, authChecker)
+	svc := usecase.NewRunOpsService(gcpCtrl, notifier, authChecker, state.NewMemoryStore())
 	slackHandler := slackadapter.NewHandler(svc, cfg.slackSigningSecret)
 
 	// Register routes

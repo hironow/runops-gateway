@@ -17,11 +17,12 @@ type RunOpsService struct {
 	gcp      port.GCPController
 	notifier port.Notifier
 	auth     port.AuthChecker
+	store    port.StateStore
 }
 
 // NewRunOpsService constructs a RunOpsService with the required secondary ports.
-func NewRunOpsService(gcp port.GCPController, notifier port.Notifier, auth port.AuthChecker) *RunOpsService {
-	return &RunOpsService{gcp: gcp, notifier: notifier, auth: auth}
+func NewRunOpsService(gcp port.GCPController, notifier port.Notifier, auth port.AuthChecker, store port.StateStore) *RunOpsService {
+	return &RunOpsService{gcp: gcp, notifier: notifier, auth: auth, store: store}
 }
 
 // ApproveAction executes the approved operation described by req.
@@ -30,6 +31,13 @@ func (s *RunOpsService) ApproveAction(ctx context.Context, req domain.ApprovalRe
 		ResponseURL: req.ResponseURL,
 		Mode:        modeFrom(req.Source),
 	}
+
+	key := port.OperationKey(req)
+	if !s.store.TryLock(key) {
+		_ = s.notifier.SendEphemeral(ctx, target, req.ApproverID, "⚠️ この操作は既に実行中です。")
+		return nil
+	}
+	defer s.store.Release(key)
 
 	if !s.auth.IsAuthorized(req.ApproverID) {
 		if err := s.notifier.SendEphemeral(ctx, target, req.ApproverID, "権限がありません。承認操作は許可されたユーザーのみ実行できます。"); err != nil {

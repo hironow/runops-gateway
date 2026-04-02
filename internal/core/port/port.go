@@ -5,6 +5,7 @@ package port
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/hironow/runops-gateway/internal/core/domain"
 )
@@ -54,4 +55,19 @@ type AuthChecker interface {
 	IsAuthorized(approverID string) bool
 	// IsExpired reports whether the request identified by issuedAt has timed out.
 	IsExpired(issuedAt int64) bool
+}
+
+// StateStore tracks in-flight operations to prevent double execution.
+type StateStore interface {
+	// TryLock attempts to claim the operation key.
+	// Returns true if successfully claimed (first caller), false if already claimed.
+	TryLock(key string) bool
+	// Release removes the lock for the given key (call after operation completes).
+	Release(key string)
+}
+
+// OperationKey returns a canonical deduplication key for an ApprovalRequest.
+func OperationKey(req domain.ApprovalRequest) string {
+	return fmt.Sprintf("%s/%s/%s/%d",
+		req.ResourceType, req.ResourceName, req.Action, req.IssuedAt)
 }

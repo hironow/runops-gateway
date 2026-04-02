@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hironow/runops-gateway/internal/adapter/output/state"
 	"github.com/hironow/runops-gateway/internal/core/domain"
 	"github.com/hironow/runops-gateway/internal/core/port"
 )
@@ -70,6 +71,11 @@ type mockAuth struct {
 func (m *mockAuth) IsAuthorized(_ string) bool { return m.authorized }
 func (m *mockAuth) IsExpired(_ int64) bool      { return m.expired }
 
+type mockStore struct{ locked bool }
+
+func (m *mockStore) TryLock(_ string) bool { m.locked = true; return true }
+func (m *mockStore) Release(_ string)      { m.locked = false }
+
 // --- helpers ---
 
 func newServiceReq() domain.ApprovalRequest {
@@ -118,7 +124,7 @@ func TestApproveAction_Service_Success(t *testing.T) {
 	gcp := &mockGCP{}
 	notifier := &mockNotifier{}
 	auth := &mockAuth{authorized: true, expired: false}
-	svc := NewRunOpsService(gcp, notifier, auth)
+	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
 	req := newServiceReq()
 
 	// when
@@ -141,7 +147,7 @@ func TestApproveAction_Job_Success(t *testing.T) {
 	gcp := &mockGCP{}
 	notifier := &mockNotifier{}
 	auth := &mockAuth{authorized: true, expired: false}
-	svc := NewRunOpsService(gcp, notifier, auth)
+	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
 	req := newJobReq()
 
 	// when
@@ -167,7 +173,7 @@ func TestApproveAction_WorkerPool_Success(t *testing.T) {
 	gcp := &mockGCP{}
 	notifier := &mockNotifier{}
 	auth := &mockAuth{authorized: true, expired: false}
-	svc := NewRunOpsService(gcp, notifier, auth)
+	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
 	req := newWorkerPoolReq()
 
 	// when
@@ -190,7 +196,7 @@ func TestApproveAction_UnauthorizedUser(t *testing.T) {
 	gcp := &mockGCP{}
 	notifier := &mockNotifier{}
 	auth := &mockAuth{authorized: false, expired: false}
-	svc := NewRunOpsService(gcp, notifier, auth)
+	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
 	req := newServiceReq()
 
 	// when
@@ -213,7 +219,7 @@ func TestApproveAction_ExpiredButton(t *testing.T) {
 	gcp := &mockGCP{}
 	notifier := &mockNotifier{}
 	auth := &mockAuth{authorized: true, expired: true}
-	svc := NewRunOpsService(gcp, notifier, auth)
+	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
 	req := newServiceReq()
 
 	// when
@@ -236,7 +242,7 @@ func TestApproveAction_UnknownResourceType(t *testing.T) {
 	gcp := &mockGCP{}
 	notifier := &mockNotifier{}
 	auth := &mockAuth{authorized: true, expired: false}
-	svc := NewRunOpsService(gcp, notifier, auth)
+	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
 	req := newServiceReq()
 	req.ResourceType = "unknown"
 
@@ -254,7 +260,7 @@ func TestApproveAction_GCPError_Service(t *testing.T) {
 	gcp := &mockGCP{shiftTrafficErr: errors.New("gcp error")}
 	notifier := &mockNotifier{}
 	auth := &mockAuth{authorized: true, expired: false}
-	svc := NewRunOpsService(gcp, notifier, auth)
+	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
 	req := newServiceReq()
 
 	// when
@@ -271,7 +277,7 @@ func TestApproveAction_NotifierError_DoesNotBlock(t *testing.T) {
 	gcp := &mockGCP{}
 	notifier := &mockNotifier{updateMessageErr: errors.New("slack error")}
 	auth := &mockAuth{authorized: true, expired: false}
-	svc := NewRunOpsService(gcp, notifier, auth)
+	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
 	req := newServiceReq()
 
 	// when
@@ -291,7 +297,7 @@ func TestDenyAction_Success(t *testing.T) {
 	gcp := &mockGCP{}
 	notifier := &mockNotifier{}
 	auth := &mockAuth{authorized: true, expired: false}
-	svc := NewRunOpsService(gcp, notifier, auth)
+	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
 	req := newServiceReq()
 
 	// when
@@ -311,7 +317,7 @@ func TestApproveAction_CLIMode(t *testing.T) {
 	gcp := &mockGCP{}
 	notifier := &mockNotifier{}
 	auth := &mockAuth{authorized: true, expired: false}
-	svc := NewRunOpsService(gcp, notifier, auth)
+	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
 	req := newServiceReq()
 	req.Source = "cli"
 
@@ -324,5 +330,41 @@ func TestApproveAction_CLIMode(t *testing.T) {
 	}
 	if !gcp.shiftTrafficCalled {
 		t.Error("expected ShiftTraffic to be called")
+	}
+}
+
+func TestApproveAction_DuplicateExecution(t *testing.T) {
+	// given — use a real MemoryStore so the lock persists across calls
+	gcp := &mockGCP{}
+	notifier := &mockNotifier{}
+	auth := &mockAuth{authorized: true, expired: false}
+	store := state.NewMemoryStore()
+	svc := NewRunOpsService(gcp, notifier, auth, store)
+	req := newServiceReq()
+
+	// when — first call succeeds
+	err := svc.ApproveAction(context.Background(), req)
+
+	// then — first call should have run successfully
+	if err != nil {
+		t.Fatalf("expected nil error on first call, got %v", err)
+	}
+
+	// Lock is released after first call (via defer), so lock again manually to simulate in-flight
+	key := port.OperationKey(req)
+	store.TryLock(key) // simulate an in-flight operation
+
+	// Reset GCP mock to detect if second call invokes ShiftTraffic
+	gcp.shiftTrafficCalled = false
+
+	// when — second call finds the key locked
+	err2 := svc.ApproveAction(context.Background(), req)
+
+	// then — second call should return nil and NOT call ShiftTraffic
+	if err2 != nil {
+		t.Fatalf("expected nil error on duplicate call, got %v", err2)
+	}
+	if gcp.shiftTrafficCalled {
+		t.Error("expected ShiftTraffic NOT to be called on duplicate execution")
 	}
 }
