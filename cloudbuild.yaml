@@ -98,21 +98,21 @@ steps:
                   "text": {"type": "plain_text", "emoji": true, "text": "1. DB Migration"},
                   "style": "danger",
                   "action_id": "approve",
-                  "value": $(printf '%s' "$JOB_ACTION" | python3 -c "import json,sys; print(json.dumps(sys.stdin.read()))")
+                  "value": $(printf '%s' "$JOB_ACTION" | jq -R .)
                 },
                 {
                   "type": "button",
                   "text": {"type": "plain_text", "emoji": true, "text": "2. 10% Canary"},
                   "style": "primary",
                   "action_id": "approve",
-                  "value": $(printf '%s' "$SRV_ACTION" | python3 -c "import json,sys; print(json.dumps(sys.stdin.read()))")
+                  "value": $(printf '%s' "$SRV_ACTION" | jq -R .)
                 },
                 {
                   "type": "button",
                   "text": {"type": "plain_text", "emoji": true, "text": "Deny"},
                   "style": "danger",
                   "action_id": "deny",
-                  "value": $(printf '%s' "$SRV_ACTION" | python3 -c "import json,sys; print(json.dumps(sys.stdin.read()))")
+                  "value": $(printf '%s' "$SRV_ACTION" | jq -R .)
                 }
               ]
             }
