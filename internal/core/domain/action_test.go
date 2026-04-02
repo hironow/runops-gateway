@@ -173,3 +173,59 @@ func TestParseAction_Percent101(t *testing.T) {
 		t.Fatal("expected error for percent=101, got nil")
 	}
 }
+
+func TestNextCanaryPercent_10Returns30(t *testing.T) {
+	// given / when
+	got := domain.NextCanaryPercent(10)
+
+	// then
+	if got != 30 {
+		t.Errorf("NextCanaryPercent(10) = %d, want 30", got)
+	}
+}
+
+func TestNextCanaryPercent_30Returns50(t *testing.T) {
+	if got := domain.NextCanaryPercent(30); got != 50 {
+		t.Errorf("NextCanaryPercent(30) = %d, want 50", got)
+	}
+}
+
+func TestNextCanaryPercent_50Returns80(t *testing.T) {
+	if got := domain.NextCanaryPercent(50); got != 80 {
+		t.Errorf("NextCanaryPercent(50) = %d, want 80", got)
+	}
+}
+
+func TestNextCanaryPercent_80Returns100(t *testing.T) {
+	if got := domain.NextCanaryPercent(80); got != 100 {
+		t.Errorf("NextCanaryPercent(80) = %d, want 100", got)
+	}
+}
+
+func TestNextCanaryPercent_100Returns0(t *testing.T) {
+	// 100% is the final step; no next step
+	if got := domain.NextCanaryPercent(100); got != 0 {
+		t.Errorf("NextCanaryPercent(100) = %d, want 0", got)
+	}
+}
+
+func TestNextCanaryPercent_InvalidReturns0(t *testing.T) {
+	// values not in CanarySteps return 0
+	for _, v := range []int32{0, 15, 25, 99} {
+		if got := domain.NextCanaryPercent(v); got != 0 {
+			t.Errorf("NextCanaryPercent(%d) = %d, want 0", v, got)
+		}
+	}
+}
+
+func TestCanarySteps_HasExpectedValues(t *testing.T) {
+	expected := []int32{10, 30, 50, 80, 100}
+	if len(domain.CanarySteps) != len(expected) {
+		t.Fatalf("CanarySteps length = %d, want %d", len(domain.CanarySteps), len(expected))
+	}
+	for i, v := range expected {
+		if domain.CanarySteps[i] != v {
+			t.Errorf("CanarySteps[%d] = %d, want %d", i, domain.CanarySteps[i], v)
+		}
+	}
+}

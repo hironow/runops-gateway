@@ -49,6 +49,10 @@ type Notifier interface {
 	ReplaceMessage(ctx context.Context, target NotifyTarget, blocks any) error
 	// SendEphemeral sends a message visible only to userID.
 	SendEphemeral(ctx context.Context, target NotifyTarget, userID, text string) error
+	// OfferContinuation replaces the message with a completion summary and,
+	// if nextReq is non-nil, buttons to advance or stop the rollout.
+	// stopReq may be nil (no second button shown).
+	OfferContinuation(ctx context.Context, target NotifyTarget, summary string, nextReq *domain.ApprovalRequest, stopReq *domain.ApprovalRequest) error
 }
 
 // AuthChecker is a secondary port for authorization and expiry validation.

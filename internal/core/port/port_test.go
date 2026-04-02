@@ -60,6 +60,10 @@ func (s *stubNotifier) SendEphemeral(_ context.Context, _ port.NotifyTarget, _, 
 	return nil
 }
 
+func (s *stubNotifier) OfferContinuation(_ context.Context, _ port.NotifyTarget, _ string, _ *domain.ApprovalRequest, _ *domain.ApprovalRequest) error {
+	return nil
+}
+
 var _ port.Notifier = (*stubNotifier)(nil)
 
 // stubAuthChecker implements AuthChecker.

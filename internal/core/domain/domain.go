@@ -28,6 +28,20 @@ type Action struct {
 	Percent int32
 }
 
+// CanarySteps defines the ordered traffic percentages for progressive canary rollout.
+var CanarySteps = []int32{10, 30, 50, 80, 100}
+
+// NextCanaryPercent returns the next step after current in CanarySteps.
+// Returns 0 if current is the final step (100) or is not in CanarySteps.
+func NextCanaryPercent(current int32) int32 {
+	for i, v := range CanarySteps {
+		if v == current && i+1 < len(CanarySteps) {
+			return CanarySteps[i+1]
+		}
+	}
+	return 0
+}
+
 // ParseAction parses an action string such as "canary_10" or "migrate_apply".
 // For actions with a percent suffix (e.g. "canary_10"), Percent is extracted.
 // Returns an error if the string is empty or the percent is invalid (not 0-100).
@@ -72,4 +86,16 @@ type ApprovalRequest struct {
 	IssuedAt int64
 	// ResponseURL is the Slack response_url for async message updates; empty in CLI mode.
 	ResponseURL string
+	// MigrationDone signals that DB migration has completed for this deployment.
+	// When true, the canary button is shown without a confirm dialog.
+	MigrationDone bool
+	// NextServiceName is the Cloud Run service to re-offer as canary after job completion.
+	// Non-empty only on job (migration) requests.
+	NextServiceName string
+	// NextRevision is the revision to target for the next canary step.
+	// Non-empty only when NextServiceName is set.
+	NextRevision string
+	// NextAction is the action string for the next canary button, e.g. "canary_10".
+	// Non-empty only when NextServiceName is set.
+	NextAction string
 }
