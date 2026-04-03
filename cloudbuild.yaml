@@ -30,19 +30,19 @@ steps:
         set -euo pipefail
         IFS=',' read -ra SERVICES <<< "${_SERVICE_NAMES}"
         REVISIONS=""
-        for SVC in "${SERVICES[@]}"; do
-          SVC=$(echo "$SVC" | xargs)
-          REV=$(gcloud run deploy "$SVC" \
+        for SVC in "$${SERVICES[@]}"; do
+          SVC=$$(echo "$$SVC" | xargs)
+          REV=$$(gcloud run deploy "$$SVC" \
             --image ${_IMAGE}:${COMMIT_SHA} \
             --region ${_REGION} \
             --project ${PROJECT_ID} \
             --no-traffic \
             --format="value(status.latestCreatedRevisionName)")
-          echo "Deployed $SVC -> $REV"
-          REVISIONS="${REVISIONS:+${REVISIONS},}${REV}"
+          echo "Deployed $$SVC -> $$REV"
+          REVISIONS="$${REVISIONS:+$${REVISIONS},}$$REV"
         done
-        echo "$REVISIONS" > /workspace/revisions.txt
-        echo "All revisions: $(cat /workspace/revisions.txt)"
+        echo "$$REVISIONS" > /workspace/revisions.txt
+        echo "All revisions: $$(cat /workspace/revisions.txt)"
     waitFor:
       - push-image
 
@@ -76,7 +76,7 @@ steps:
           "${_MIGRATION_JOB_NAME}" \
           "${BRANCH_NAME}" \
           "${COMMIT_SHA}" \
-          "$(cat /workspace/revisions.txt)"
+          "$$(cat /workspace/revisions.txt)"
     waitFor:
       - deploy-services
       - update-migration-job
