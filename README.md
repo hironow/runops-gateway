@@ -269,29 +269,38 @@ gcloud secrets add-iam-policy-binding slack-webhook-url \
 
 ### 2-1. 初回設定（アプリごとに1回）
 
-管理対象アプリのリポジトリに以下のファイルを配置します。
+#### ファイルの配置
+
+`just init-app` で管理対象アプリのリポジトリに CI/CD ファイルをコピーします。
+サービス名・ジョブ名・リージョンは引数で指定し、`cloudbuild.yaml` の substitutions が自動的に置換されます。
 
 ```bash
-# runops-gateway リポジトリから CI/CD 用ファイルをコピー
-cp /path/to/runops-gateway/cloudbuild.yaml  ./cloudbuild.yaml
-cp /path/to/runops-gateway/scripts/notify-slack.sh ./scripts/notify-slack.sh
-chmod +x ./scripts/notify-slack.sh
+# 基本
+just init-app /path/to/your-app your-service your-migrate-job
+
+# 複数サービス
+just init-app /path/to/your-app "frontend,backend" db-migrate
+
+# リージョン・Artifact Registry リポジトリ名も指定
+just init-app /path/to/your-app your-service your-migrate-job us-central1 my-repo
 ```
 
-`cloudbuild.yaml` の substitutions を自分のアプリ用に編集します:
+生成されるファイル:
 
-```yaml
-substitutions:
-  _IMAGE: asia-northeast1-docker.pkg.dev/YOUR_PROJECT/YOUR_REPO/YOUR_APP
-  _SERVICE_NAMES: your-service-name          # 複数の場合はカンマ区切り
-  _MIGRATION_JOB_NAME: your-db-migrate-job
-  _REGION: asia-northeast1
-```
+| ファイル | 内容 |
+|---|---|
+| `cloudbuild.yaml` | ビルド・デプロイ・Slack 通知パイプライン（substitutions 置換済み） |
+| `scripts/notify-slack.sh` | Block Kit メッセージ送信スクリプト（実行権限付き） |
 
-Cloud Build トリガーを設定します:
+#### Cloud Build のトリガー方法
+
+Cloud Build パイプラインを起動する方法は2つあります。
+
+**方法 A: Cloud Build 2nd gen トリガー（GitHub App 接続）**
+
+Cloud Console で GitHub リポジトリを Cloud Build に接続し、トリガーを作成します。
 
 ```bash
-# main ブランチへの push をトリガーに設定
 gcloud builds triggers create github \
   --repo-name=YOUR_REPO \
   --repo-owner=YOUR_ORG \
@@ -300,13 +309,63 @@ gcloud builds triggers create github \
   --region=asia-northeast1
 ```
 
+**方法 B: GitHub Actions から `gcloud builds submit`（推奨）**
+
+GitHub Actions を薄いランチャーとして使い、`gcloud builds submit` で Cloud Build を起動します。
+Cloud Build GitHub App 接続が不要で、設定がコード（`.github/workflows/`）で完結します。
+
+WIF（Workload Identity Federation）と deployer SA が必要です。
+runops-gateway の `tofu/github.tf` を参考に、管理対象アプリの GCP プロジェクトに作成してください。
+
+```yaml
+# .github/workflows/cd.yaml
+name: CD
+on:
+  push:
+    branches: [main]
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v3
+      - run: |
+          gcloud builds submit \
+            --config=cloudbuild.yaml \
+            --region=${{ vars.CLOUD_BUILD_REGION }} \
+            --project=${{ vars.GCP_PROJECT_ID }} \
+            --substitutions=_REGION=${{ vars.CLOUD_BUILD_REGION }}
+```
+
+必要な GitHub リポジトリ変数（`tofu output` で取得）:
+
+| 変数 | 値 |
+|---|---|
+| `GCP_WORKLOAD_IDENTITY_PROVIDER` | `tofu output -raw workload_identity_provider` |
+| `GCP_SERVICE_ACCOUNT` | `tofu output -raw github_deployer_sa_email` |
+| `GCP_PROJECT_ID` | APP_PROJECT の ID |
+| `CLOUD_BUILD_REGION` | `asia-northeast1` 等 |
+
+#### Secret Accessor 権限の付与
+
 runops-gateway の Secret Manager に Webhook URL が登録済みであることを確認し、
 Cloud Build のサービスアカウントに Secret Accessor 権限を付与します:
 
 ```bash
-PROJECT_NUMBER=$(gcloud projects describe YOUR_PROJECT --format="value(projectNumber)")
-gcloud projects add-iam-policy-binding YOUR_PROJECT \
-  --member="serviceAccount:${PROJECT_NUMBER}@cloudbuild.gserviceaccount.com" \
+APP_PROJECT_NUMBER=$(gcloud projects describe APP_PROJECT --format="value(projectNumber)")
+gcloud secrets add-iam-policy-binding slack-webhook-url \
+  --project=GATEWAY_PROJECT \
+  --member="serviceAccount:${APP_PROJECT_NUMBER}@cloudbuild.gserviceaccount.com" \
   --role="roles/secretmanager.secretAccessor"
 ```
 
