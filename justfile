@@ -61,6 +61,6 @@ test-scripts:
 check: fmt lint lint-md test
 
 # Copy initial setup files to a managed app repository.
-# Usage: just init-app ../my-app my-service,my-other-service my-migrate-job [asia-northeast1] [my-artifact-repo] [gateway-project]
-init-app target service_names migration_job region="asia-northeast1" artifact_repo="" gateway_project="":
-    {{justfile_directory()}}/scripts/init-app.sh "{{target}}" "{{service_names}}" "{{migration_job}}" "{{region}}" "{{artifact_repo}}" "{{gateway_project}}"
+# Usage: just init-app ../my-app my-project my-service,my-other-service my-migrate-job [asia-northeast1] [my-artifact-repo] [gateway-project]
+init-app target app_project service_names migration_job region="asia-northeast1" artifact_repo="" gateway_project="":
+    {{justfile_directory()}}/scripts/init-app.sh "{{target}}" "{{app_project}}" "{{service_names}}" "{{migration_job}}" "{{region}}" "{{artifact_repo}}" "{{gateway_project}}"

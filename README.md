@@ -344,7 +344,7 @@ jobs:
             --config=cloudbuild.yaml \
             --region=${{ vars.CLOUD_BUILD_REGION }} \
             --project=${{ vars.GCP_PROJECT_ID }} \
-            --substitutions=_REGION=${{ vars.CLOUD_BUILD_REGION }}
+            --substitutions=COMMIT_SHA=${{ github.sha }},BRANCH_NAME=${{ github.ref_name }},_REGION=${{ vars.CLOUD_BUILD_REGION }}
 ```
 
 必要な GitHub リポジトリ変数（`tofu output` で取得）:

@@ -36,7 +36,7 @@ func TestInitApp_SubstitutesServiceAndJob(t *testing.T) {
 	target := t.TempDir()
 
 	// when
-	content := runInitApp(t, target, "my-api", "my-migrate", "asia-northeast1", "", "")
+	content := runInitApp(t, target, "test-project", "my-api", "my-migrate", "asia-northeast1", "", "")
 
 	// then
 	if !strings.Contains(content, "_SERVICE_NAMES: my-api") {
@@ -47,6 +47,24 @@ func TestInitApp_SubstitutesServiceAndJob(t *testing.T) {
 	}
 }
 
+func TestInitApp_SubstitutesAppProject(t *testing.T) {
+	skipIfToolMissing(t, "bash")
+
+	// given
+	target := t.TempDir()
+
+	// when
+	content := runInitApp(t, target, "my-gcp-project", "svc", "job")
+
+	// then — ${PROJECT_ID} must be replaced with the app project
+	if strings.Contains(content, "${PROJECT_ID}") {
+		t.Error("expected all ${PROJECT_ID} to be replaced with app project")
+	}
+	if !strings.Contains(content, "my-gcp-project") {
+		t.Error("expected app project to appear in generated cloudbuild.yaml")
+	}
+}
+
 func TestInitApp_SubstitutesGatewayProject(t *testing.T) {
 	skipIfToolMissing(t, "bash")
 
@@ -54,32 +72,27 @@ func TestInitApp_SubstitutesGatewayProject(t *testing.T) {
 	target := t.TempDir()
 
 	// when
-	content := runInitApp(t, target, "svc", "job", "asia-northeast1", "", "my-gateway")
+	content := runInitApp(t, target, "app-proj", "svc", "job", "asia-northeast1", "", "my-gateway")
 
 	// then
 	if !strings.Contains(content, "_GATEWAY_PROJECT: my-gateway") {
 		t.Error("expected _GATEWAY_PROJECT to be substituted with my-gateway")
 	}
-	// _GATEWAY_PROJECT line must NOT contain ${PROJECT_ID}
-	for _, line := range strings.Split(content, "\n") {
-		if strings.Contains(line, "_GATEWAY_PROJECT:") && strings.Contains(line, "${PROJECT_ID}") {
-			t.Errorf("_GATEWAY_PROJECT line should not contain ${PROJECT_ID}, got: %s", strings.TrimSpace(line))
-		}
-	}
 }
 
-func TestInitApp_DefaultGatewayProject_PreservesProjectIDVar(t *testing.T) {
+func TestInitApp_DefaultGatewayProject_UsesAppProject(t *testing.T) {
 	skipIfToolMissing(t, "bash")
 
 	// given
 	target := t.TempDir()
 
 	// when
-	content := runInitApp(t, target, "svc", "job", "asia-northeast1", "", "")
+	content := runInitApp(t, target, "my-app-proj", "svc", "job", "asia-northeast1", "", "")
 
-	// then
-	if !strings.Contains(content, "_GATEWAY_PROJECT: ${PROJECT_ID}") {
-		t.Error("expected _GATEWAY_PROJECT to remain ${PROJECT_ID} when gateway_project is empty")
+	// then — ${PROJECT_ID} is replaced with app project, so gateway defaults to app project
+	if !strings.Contains(content, "_GATEWAY_PROJECT: my-app-proj") {
+		t.Errorf("expected _GATEWAY_PROJECT to default to app project, got:\n%s",
+			extractLine(content, "_GATEWAY_PROJECT:"))
 	}
 }
 
@@ -90,7 +103,7 @@ func TestInitApp_ArtifactRepoDefaultsToFirstService(t *testing.T) {
 	target := t.TempDir()
 
 	// when — multi-service with no explicit artifact repo
-	content := runInitApp(t, target, "frontend,backend", "job", "asia-northeast1", "", "")
+	content := runInitApp(t, target, "proj", "frontend,backend", "job", "asia-northeast1", "", "")
 
 	// then — artifact repo should be first service name
 	if !strings.Contains(content, "frontend/frontend") {
@@ -106,7 +119,7 @@ func TestInitApp_ExplicitArtifactRepo(t *testing.T) {
 	target := t.TempDir()
 
 	// when
-	content := runInitApp(t, target, "svc", "job", "asia-northeast1", "custom-repo", "")
+	content := runInitApp(t, target, "proj", "svc", "job", "asia-northeast1", "custom-repo", "")
 
 	// then
 	if !strings.Contains(content, "custom-repo/custom-repo") {
@@ -122,7 +135,7 @@ func TestInitApp_CopiesNotifySlackScript(t *testing.T) {
 	target := t.TempDir()
 
 	// when
-	runInitApp(t, target, "svc", "job")
+	runInitApp(t, target, "proj", "svc", "job")
 
 	// then
 	info, err := os.Stat(filepath.Join(target, "scripts/notify-slack.sh"))
@@ -138,7 +151,7 @@ func TestInitApp_FailsOnMissingTarget(t *testing.T) {
 	skipIfToolMissing(t, "bash")
 
 	// when
-	cmd := exec.Command("bash", initAppScript(t), "/nonexistent/path", "svc", "job")
+	cmd := exec.Command("bash", initAppScript(t), "/nonexistent/path", "proj", "svc", "job")
 	out, err := cmd.CombinedOutput()
 
 	// then
@@ -147,6 +160,21 @@ func TestInitApp_FailsOnMissingTarget(t *testing.T) {
 	}
 	if !strings.Contains(string(out), "does not exist") {
 		t.Errorf("expected error message about non-existent directory, got: %s", out)
+	}
+}
+
+func TestInitApp_NoProjectIDRemains(t *testing.T) {
+	skipIfToolMissing(t, "bash")
+
+	// given
+	target := t.TempDir()
+
+	// when
+	content := runInitApp(t, target, "real-project", "svc", "job", "asia-northeast1", "", "gw-project")
+
+	// then — no ${PROJECT_ID} should remain anywhere
+	if strings.Contains(content, "${PROJECT_ID}") {
+		t.Error("${PROJECT_ID} should not remain in generated cloudbuild.yaml")
 	}
 }
 
