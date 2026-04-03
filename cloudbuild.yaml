@@ -22,7 +22,7 @@ steps:
   # Step 2: Deploy all services (no traffic). _SERVICE_NAMES may be a CSV list.
   # Revisions are written as a matching CSV to /workspace/revisions.txt.
   - id: deploy-services
-    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
     entrypoint: bash
     args:
       - -c
@@ -48,7 +48,7 @@ steps:
 
   # Step 3: Update migration Job template
   - id: update-migration-job
-    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
     entrypoint: bash
     args:
       - -c
@@ -64,13 +64,14 @@ steps:
   # Step 4: Send Slack ChatOps notification with approval buttons.
   # Payload logic lives in scripts/notify-slack.sh (tested via Go tests).
   - id: notify-slack
-    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
     entrypoint: bash
     secretEnv:
       - SLACK_WEBHOOK_URL
     args:
       - -c
       - |
+        apt-get update -qq && apt-get install -yqq jq > /dev/null 2>&1
         /workspace/scripts/notify-slack.sh \
           "${_SERVICE_NAMES}" \
           "${_MIGRATION_JOB_NAME}" \
