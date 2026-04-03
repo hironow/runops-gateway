@@ -61,44 +61,6 @@ test-scripts:
 check: fmt lint lint-md test
 
 # Copy initial setup files to a managed app repository.
-# Usage: just init-app ../my-app my-service,my-other-service my-migrate-job [asia-northeast1] [my-artifact-repo]
-init-app target service_names migration_job region="asia-northeast1" artifact_repo="":
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    target="{{target}}"
-    service_names="{{service_names}}"
-    migration_job="{{migration_job}}"
-    region="{{region}}"
-    artifact_repo="{{artifact_repo}}"
-    src="{{justfile_directory()}}"
-
-    if [[ ! -d "$target" ]]; then
-      echo "Error: target directory does not exist: $target" >&2
-      exit 1
-    fi
-
-    # Resolve artifact repo name: explicit arg > first service name
-    if [[ -z "$artifact_repo" ]]; then
-      artifact_repo="${service_names%%,*}"
-    fi
-
-    # --- scripts/notify-slack.sh (copy as-is) ---
-    mkdir -p "$target/scripts"
-    cp "$src/scripts/notify-slack.sh" "$target/scripts/notify-slack.sh"
-    chmod +x "$target/scripts/notify-slack.sh"
-    echo "  copied scripts/notify-slack.sh"
-
-    # --- cloudbuild.yaml (copy with substitutions) ---
-    sed \
-      -e "s|runops/runops-gateway|${artifact_repo}/${artifact_repo}|g" \
-      -e "s|_SERVICE_NAMES: frontend-service|_SERVICE_NAMES: ${service_names}|g" \
-      -e "s|_MIGRATION_JOB_NAME: db-migrate-job|_MIGRATION_JOB_NAME: ${migration_job}|g" \
-      -e "s|_REGION: asia-northeast1|_REGION: ${region}|g" \
-      "$src/cloudbuild.yaml" > "$target/cloudbuild.yaml"
-    echo "  copied cloudbuild.yaml"
-
-    echo ""
-    echo "Done. Review the generated files:"
-    echo "  $target/cloudbuild.yaml"
-    echo "  $target/scripts/notify-slack.sh"
+# Usage: just init-app ../my-app my-service,my-other-service my-migrate-job [asia-northeast1] [my-artifact-repo] [gateway-project]
+init-app target service_names migration_job region="asia-northeast1" artifact_repo="" gateway_project="":
+    {{justfile_directory()}}/scripts/init-app.sh "{{target}}" "{{service_names}}" "{{migration_job}}" "{{region}}" "{{artifact_repo}}" "{{gateway_project}}"
