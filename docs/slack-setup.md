@@ -50,8 +50,9 @@ https://<CLOUD_RUN_URL>/slack/actions
 Cloud Run URL は以下で取得できる:
 
 ```bash
+GATEWAY_PROJECT=your-gcp-project-id
 gcloud run services describe runops-gateway \
-  --project=GATEWAY_PROJECT \
+  --project=${GATEWAY_PROJECT} \
   --region=asia-northeast1 \
   --format="value(status.url)"
 ```
@@ -72,19 +73,22 @@ App Home > Settings > Basic Information > App Credentials > Signing Secret
 
 ### 5. シークレットの登録（GCP Secret Manager）
 
-tofu apply 後に placeholder を実際の値で上書きする:
+tofu apply 後に placeholder を実際の値で上書きする。
+
+> **注意**: シークレットの値をコマンドライン引数に直接書かないこと。
+> シェルヒストリーやプロセス一覧（`ps`）から漏洩するリスクがある。
 
 ```bash
-# Signing Secret
-echo -n "YOUR_SIGNING_SECRET" | \
+# Signing Secret（プロンプトから入力、エコーバックなし）
+read -rs SIGNING_SECRET && printf '%s' "$SIGNING_SECRET" | \
   gcloud secrets versions add slack-signing-secret \
-    --project=GATEWAY_PROJECT \
+    --project=${GATEWAY_PROJECT} \
     --data-file=-
 
-# Incoming Webhook URL
-echo -n "https://hooks.slack.com/services/YOUR/WEBHOOK/URL" | \
+# Incoming Webhook URL（プロンプトから入力、エコーバックなし）
+read -rs WEBHOOK_URL && printf '%s' "$WEBHOOK_URL" | \
   gcloud secrets versions add slack-webhook-url \
-    --project=GATEWAY_PROJECT \
+    --project=${GATEWAY_PROJECT} \
     --data-file=-
 ```
 
@@ -92,7 +96,7 @@ echo -n "https://hooks.slack.com/services/YOUR/WEBHOOK/URL" | \
 
 ```bash
 gcloud run services update runops-gateway \
-  --project=GATEWAY_PROJECT \
+  --project=${GATEWAY_PROJECT} \
   --region=asia-northeast1 \
   --update-secrets=SLACK_SIGNING_SECRET=slack-signing-secret:latest
 ```
