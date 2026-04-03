@@ -205,31 +205,37 @@ runops-gateway の Cloud Run ランタイム SA (`slack-chatops-sa@GATEWAY_PROJE
 #### runops-gateway SA に付与する権限（APP_PROJECT 側での作業）
 
 ```bash
-CHATOPS_SA="slack-chatops-sa@GATEWAY_PROJECT.iam.gserviceaccount.com"
+GATEWAY_PROJECT=your-runops-gateway-project-id
+CHATOPS_SA="slack-chatops-sa@${GATEWAY_PROJECT}.iam.gserviceaccount.com"
+
+YOUR_SERVICE_NAME=your-service-name
+YOUR_WORKER_POOL_NAME=your-worker-pool-name
+YOUR_JOB_NAME=your-job-name
+APP_PROJECT=your-app-project-id
 
 # Cloud Run Service のトラフィック切り替え権限
-gcloud run services add-iam-policy-binding YOUR_SERVICE_NAME \
-  --project=APP_PROJECT \
+gcloud run services add-iam-policy-binding ${YOUR_SERVICE_NAME} \
+  --project=${APP_PROJECT} \
   --region=asia-northeast1 \
   --member="serviceAccount:${CHATOPS_SA}" \
   --role="roles/run.developer"
 
 # Cloud Run Worker Pool のトラフィック切り替え権限 (Worker Pool を使う場合)
-gcloud run worker-pools add-iam-policy-binding YOUR_WORKER_POOL_NAME \
-  --project=APP_PROJECT \
+gcloud run worker-pools add-iam-policy-binding ${YOUR_WORKER_POOL_NAME} \
+  --project=${APP_PROJECT} \
   --region=asia-northeast1 \
   --member="serviceAccount:${CHATOPS_SA}" \
   --role="roles/run.developer"
 
 # Cloud Run Jobs のマイグレーション実行権限
-gcloud run jobs add-iam-policy-binding YOUR_JOB_NAME \
-  --project=APP_PROJECT \
+gcloud run jobs add-iam-policy-binding ${YOUR_JOB_NAME} \
+  --project=${APP_PROJECT} \
   --region=asia-northeast1 \
   --member="serviceAccount:${CHATOPS_SA}" \
   --role="roles/run.developer"
 
 # Cloud SQL バックアップ権限 (バックアップあり構成の場合)
-gcloud projects add-iam-policy-binding APP_PROJECT \
+gcloud projects add-iam-policy-binding ${APP_PROJECT} \
   --member="serviceAccount:${CHATOPS_SA}" \
   --role="roles/cloudsql.admin"
 ```
@@ -242,9 +248,9 @@ gcloud projects add-iam-policy-binding APP_PROJECT \
 
 ```bash
 # Cloud Build のデフォルト SA の場合
-APP_PROJECT_NUMBER=$(gcloud projects describe APP_PROJECT --format="value(projectNumber)")
+APP_PROJECT_NUMBER=$(gcloud projects describe ${APP_PROJECT} --format="value(projectNumber)")
 gcloud secrets add-iam-policy-binding slack-webhook-url \
-  --project=GATEWAY_PROJECT \
+  --project=${GATEWAY_PROJECT} \
   --member="serviceAccount:${APP_PROJECT_NUMBER}@cloudbuild.gserviceaccount.com" \
   --role="roles/secretmanager.secretAccessor"
 ```
