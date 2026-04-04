@@ -213,6 +213,14 @@ func TestApproveAction_Job_Success(t *testing.T) {
 	if !notifier.replaceMessageCalled {
 		t.Error("expected ReplaceMessage to be called")
 	}
+	// blocks must be a slice (not a nested map with replace_original)
+	blocks, ok := notifier.replaceMessageBlocks.([]map[string]any)
+	if !ok {
+		t.Fatalf("expected blocks to be []map[string]any, got %T", notifier.replaceMessageBlocks)
+	}
+	if len(blocks) == 0 {
+		t.Fatal("expected non-empty blocks array")
+	}
 }
 
 func TestApproveAction_WorkerPool_Success(t *testing.T) {
@@ -871,6 +879,10 @@ func TestDenyAction_UnauthorizedUser_StillSucceeds(t *testing.T) {
 	}
 	if !notifier.replaceMessageCalled {
 		t.Error("expected ReplaceMessage to be called")
+	}
+	// blocks must be a slice (not a nested map with replace_original)
+	if _, ok := notifier.replaceMessageBlocks.([]map[string]any); !ok {
+		t.Fatalf("expected blocks to be []map[string]any, got %T", notifier.replaceMessageBlocks)
 	}
 	if notifier.sendEphemeralCalled {
 		t.Error("expected SendEphemeral NOT to be called in DenyAction")
