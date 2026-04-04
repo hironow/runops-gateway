@@ -33,25 +33,27 @@ func (c *Controller) ShiftTraffic(ctx context.Context, project, location, servic
 	servicePath := fmt.Sprintf("projects/%s/locations/%s/services/%s",
 		project, location, serviceName)
 
-	req := &runpb.UpdateServiceRequest{
-		Service: &runpb.Service{
-			Name: servicePath,
-			Traffic: []*runpb.TrafficTarget{
-				{
-					Type:     runpb.TrafficTargetAllocationType_TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION,
-					Revision: revision,
-					Percent:  percent,
-				},
-				{
-					Type:    runpb.TrafficTargetAllocationType_TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION,
-					Tag:     "previous",
-					Percent: 100 - percent,
-				},
-			},
+	// GET the current service to preserve template and other fields.
+	// Cloud Run API v2 requires template in UpdateServiceRequest.
+	svc, err := client.GetService(ctx, &runpb.GetServiceRequest{Name: servicePath})
+	if err != nil {
+		return fmt.Errorf("gcp: get service: %w", err)
+	}
+
+	svc.Traffic = []*runpb.TrafficTarget{
+		{
+			Type:     runpb.TrafficTargetAllocationType_TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION,
+			Revision: revision,
+			Percent:  percent,
+		},
+		{
+			Type:    runpb.TrafficTargetAllocationType_TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION,
+			Tag:     "previous",
+			Percent: 100 - percent,
 		},
 	}
 
-	op, err := client.UpdateService(ctx, req)
+	op, err := client.UpdateService(ctx, &runpb.UpdateServiceRequest{Service: svc})
 	if err != nil {
 		return fmt.Errorf("gcp: update service: %w", err)
 	}
