@@ -38,12 +38,11 @@ func newApproveCmd(useCase port.RunOpsUseCase) *cobra.Command {
 				Targets:       target,
 				Action:        action,
 				ApproverID:    approver,
-				Source:        "cli",
-				IssuedAt:      0,  // CLI mode: no expiry
-				ResponseURL:   "", // CLI mode: no Slack response URL
+				IssuedAt:      0, // CLI mode: no expiry
 			}
+			notify := port.NotifyTarget{Mode: port.ModeStdout}
 
-			if err := useCase.ApproveAction(context.Background(), req); err != nil {
+			if err := useCase.ApproveAction(context.Background(), req, notify); err != nil {
 				return fmt.Errorf("approval failed: %w", err)
 			}
 			fmt.Fprintln(cmd.OutOrStdout(), "Successfully approved and executed.")

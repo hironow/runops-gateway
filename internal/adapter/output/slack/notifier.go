@@ -29,7 +29,7 @@ func (n *ResponseURLNotifier) UpdateMessage(ctx context.Context, target port.Not
 		slog.InfoContext(ctx, "[stdout notifier] update", "text", text)
 		return nil
 	}
-	return n.post(ctx, target.ResponseURL, TextPayload(text))
+	return n.post(ctx, target.CallbackURL, TextPayload(text))
 }
 
 // ReplaceMessage replaces the original Slack message with a mrkdwn section block.
@@ -38,7 +38,7 @@ func (n *ResponseURLNotifier) ReplaceMessage(ctx context.Context, target port.No
 		slog.InfoContext(ctx, "[stdout notifier] replace", "text", text)
 		return nil
 	}
-	return n.post(ctx, target.ResponseURL, ReplacePayload(SectionBlock(text)))
+	return n.post(ctx, target.CallbackURL, ReplacePayload(SectionBlock(text)))
 }
 
 // SendEphemeral sends a message visible only to the specified user.
@@ -47,7 +47,7 @@ func (n *ResponseURLNotifier) SendEphemeral(ctx context.Context, target port.Not
 		slog.WarnContext(ctx, "[stdout notifier] ephemeral", "user", userID, "text", text)
 		return nil
 	}
-	return n.post(ctx, target.ResponseURL, EphemeralPayload(fmt.Sprintf("<@%s> %s", userID, text)))
+	return n.post(ctx, target.CallbackURL, EphemeralPayload(fmt.Sprintf("<@%s> %s", userID, text)))
 }
 
 // OfferContinuation replaces the message with a completion summary and optional next/stop buttons.
@@ -63,11 +63,11 @@ func (n *ResponseURLNotifier) OfferContinuation(ctx context.Context, target port
 	}
 
 	if errMsg, over := buttonValueError(nextReq, stopReq); over {
-		return n.post(ctx, target.ResponseURL, TextPayload(errMsg))
+		return n.post(ctx, target.CallbackURL, TextPayload(errMsg))
 	}
 
 	payload := BuildProgressMessage(summary, nextReq, stopReq)
-	return n.post(ctx, target.ResponseURL, payload)
+	return n.post(ctx, target.CallbackURL, payload)
 }
 
 // buttonValueError checks whether any of the provided requests would produce a button

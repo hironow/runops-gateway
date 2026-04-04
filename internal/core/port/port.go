@@ -13,10 +13,8 @@ import (
 // RunOpsUseCase is the primary port driven by external actors (Slack, CLI).
 // Implementations live in the usecase layer and must not import adapter code.
 type RunOpsUseCase interface {
-	// ApproveAction executes the approved operation described by req.
-	ApproveAction(ctx context.Context, req domain.ApprovalRequest) error
-	// DenyAction notifies the relevant parties that the operation was denied.
-	DenyAction(ctx context.Context, req domain.ApprovalRequest) error
+	ApproveAction(ctx context.Context, req domain.ApprovalRequest, target NotifyTarget) error
+	DenyAction(ctx context.Context, req domain.ApprovalRequest, target NotifyTarget) error
 }
 
 // GCPController is a secondary port for interacting with GCP resources.
@@ -41,7 +39,7 @@ const (
 
 // NotifyTarget describes where and how a notification should be delivered.
 type NotifyTarget struct {
-	ResponseURL string
+	CallbackURL string
 	Mode        NotifyMode
 }
 

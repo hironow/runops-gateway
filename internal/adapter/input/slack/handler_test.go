@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/hironow/runops-gateway/internal/core/domain"
+	"github.com/hironow/runops-gateway/internal/core/port"
 )
 
 type mockUseCase struct {
@@ -24,12 +25,12 @@ type mockUseCase struct {
 	denyCh    chan domain.ApprovalRequest
 }
 
-func (m *mockUseCase) ApproveAction(_ context.Context, req domain.ApprovalRequest) error {
+func (m *mockUseCase) ApproveAction(_ context.Context, req domain.ApprovalRequest, _ port.NotifyTarget) error {
 	m.approveCh <- req
 	return nil
 }
 
-func (m *mockUseCase) DenyAction(_ context.Context, req domain.ApprovalRequest) error {
+func (m *mockUseCase) DenyAction(_ context.Context, req domain.ApprovalRequest, _ port.NotifyTarget) error {
 	m.denyCh <- req
 	return nil
 }

@@ -116,25 +116,27 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Targets:          firstNonEmpty(av.Targets, av.Target),
 		Action:           av.Action,
 		ApproverID:       slackPayload.User.ID,
-		Source:           "slack",
 		IssuedAt:         av.IssuedAt,
-		ResponseURL:      slackPayload.ResponseURL,
 		MigrationDone:    av.MigrationDone,
 		NextServiceNames: firstNonEmpty(av.NextServiceNames, av.NextServiceName),
 		NextRevisions:    firstNonEmpty(av.NextRevisions, av.NextRevision),
 		NextAction:       av.NextAction,
 	}
+	target := port.NotifyTarget{
+		CallbackURL: slackPayload.ResponseURL,
+		Mode:        port.ModeSlack,
+	}
 	// 4. Dispatch asynchronously (avoid Slack 3-second timeout)
 	switch {
 	case strings.HasPrefix(action.ActionID, "approve"):
 		go func() {
-			if err := h.useCase.ApproveAction(context.Background(), req); err != nil {
+			if err := h.useCase.ApproveAction(context.Background(), req, target); err != nil {
 				slog.Error("ApproveAction failed", "error", err)
 			}
 		}()
 	case action.ActionID == "deny":
 		go func() {
-			if err := h.useCase.DenyAction(context.Background(), req); err != nil {
+			if err := h.useCase.DenyAction(context.Background(), req, target); err != nil {
 				slog.Error("DenyAction failed", "error", err)
 			}
 		}()

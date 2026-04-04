@@ -27,18 +27,8 @@ func NewRunOpsService(gcp port.GCPController, notifier port.Notifier, auth port.
 	return &RunOpsService{gcp: gcp, notifier: notifier, auth: auth, store: store}
 }
 
-func targetFrom(req domain.ApprovalRequest) port.NotifyTarget {
-	mode := port.ModeSlack
-	if req.Source == "cli" {
-		mode = port.ModeStdout
-	}
-	return port.NotifyTarget{ResponseURL: req.ResponseURL, Mode: mode}
-}
-
 // ApproveAction executes the approved operation described by req.
-func (s *RunOpsService) ApproveAction(ctx context.Context, req domain.ApprovalRequest) error {
-	target := targetFrom(req)
-
+func (s *RunOpsService) ApproveAction(ctx context.Context, req domain.ApprovalRequest, target port.NotifyTarget) error {
 	key := port.OperationKey(req)
 	if !s.store.TryLock(key) {
 		_ = s.notifier.SendEphemeral(ctx, target, req.ApproverID, "⚠️ この操作は既に実行中です。")
@@ -62,19 +52,22 @@ func (s *RunOpsService) ApproveAction(ctx context.Context, req domain.ApprovalRe
 
 	switch req.ResourceType {
 	case domain.ResourceTypeService:
-		return s.approveService(ctx, req, target)
+		return s.approveShift(ctx, req, target, s.gcp.ShiftTraffic,
+			"⏳ トラフィック切り替え中...",
+			"✅ トラフィック切り替え完了。サービス: *%s* → %d%%")
 	case domain.ResourceTypeJob:
 		return s.approveJob(ctx, req, target)
 	case domain.ResourceTypeWorkerPool:
-		return s.approveWorkerPool(ctx, req, target)
+		return s.approveShift(ctx, req, target, s.gcp.UpdateWorkerPool,
+			"⏳ インスタンス割り当て切り替え中...",
+			"✅ インスタンス割り当て切り替え完了。プール: *%s* → %d%%")
 	default:
 		return fmt.Errorf("unsupported resource type: %s", req.ResourceType)
 	}
 }
 
 // DenyAction notifies the relevant parties that the operation was denied.
-func (s *RunOpsService) DenyAction(ctx context.Context, req domain.ApprovalRequest) error {
-	target := targetFrom(req)
+func (s *RunOpsService) DenyAction(ctx context.Context, req domain.ApprovalRequest, target port.NotifyTarget) error {
 	if err := s.notifier.ReplaceMessage(ctx, target, fmt.Sprintf(":x: 操作が拒否されました。リソース: *%s*", req.ResourceNames)); err != nil {
 		return fmt.Errorf("usecase: deny notification failed: %w", err)
 	}
@@ -84,9 +77,7 @@ func (s *RunOpsService) DenyAction(ctx context.Context, req domain.ApprovalReque
 // shiftFn is a function that shifts traffic/instances for a single resource.
 type shiftFn func(ctx context.Context, project, location, name, target string, percent int32) error
 
-// approveShift is the shared logic for approveService and approveWorkerPool.
-// It parses the action, iterates over CSV resources, applies the shift function,
-// handles compensating rollback on failure, and offers continuation buttons.
+// approveShift is the shared logic for service and worker pool canary deployments.
 func (s *RunOpsService) approveShift(ctx context.Context, req domain.ApprovalRequest, target port.NotifyTarget, shift shiftFn, progressMsg, summaryFmt string) error {
 	if err := s.notifier.UpdateMessage(ctx, target, progressMsg); err != nil {
 		slog.Error("UpdateMessage failed", "err", err)
@@ -133,18 +124,6 @@ func (s *RunOpsService) approveShift(ctx context.Context, req domain.ApprovalReq
 		slog.Error("OfferContinuation failed", "err", err)
 	}
 	return nil
-}
-
-func (s *RunOpsService) approveService(ctx context.Context, req domain.ApprovalRequest, target port.NotifyTarget) error {
-	return s.approveShift(ctx, req, target, s.gcp.ShiftTraffic,
-		"⏳ トラフィック切り替え中...",
-		"✅ トラフィック切り替え完了。サービス: *%s* → %d%%")
-}
-
-func (s *RunOpsService) approveWorkerPool(ctx context.Context, req domain.ApprovalRequest, target port.NotifyTarget) error {
-	return s.approveShift(ctx, req, target, s.gcp.UpdateWorkerPool,
-		"⏳ インスタンス割り当て切り替え中...",
-		"✅ インスタンス割り当て切り替え完了。プール: *%s* → %d%%")
 }
 
 // approveJob handles DB backup and Cloud Run job execution.
@@ -195,7 +174,6 @@ func (s *RunOpsService) approveJob(ctx context.Context, req domain.ApprovalReque
 
 // --- helpers ---
 
-// splitCSV splits a comma-separated string into trimmed, non-empty elements.
 func splitCSV(s string) []string {
 	parts := strings.Split(s, ",")
 	result := make([]string, 0, len(parts))
@@ -233,7 +211,6 @@ func (s *RunOpsService) compensateRollback(ctx context.Context, done []shifted, 
 	return "ロールバック済み"
 }
 
-// cloneRequest creates a copy of req with a new action and fresh IssuedAt.
 func cloneRequest(req domain.ApprovalRequest, action string) *domain.ApprovalRequest {
 	r := req
 	r.Action = action

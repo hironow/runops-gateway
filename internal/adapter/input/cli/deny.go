@@ -27,11 +27,10 @@ func newDenyCmd(useCase port.RunOpsUseCase) *cobra.Command {
 				ResourceType:  domain.ResourceType(args[0]),
 				ResourceNames: args[1],
 				ApproverID:    approver,
-				Source:        "cli",
 				IssuedAt:      0,
-				ResponseURL:   "",
 			}
-			if err := useCase.DenyAction(context.Background(), req); err != nil {
+			notify := port.NotifyTarget{Mode: port.ModeStdout}
+			if err := useCase.DenyAction(context.Background(), req, notify); err != nil {
 				return fmt.Errorf("deny failed: %w", err)
 			}
 			fmt.Fprintln(cmd.OutOrStdout(), "Operation denied.")

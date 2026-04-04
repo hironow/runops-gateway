@@ -88,12 +88,8 @@ type ApprovalRequest struct {
 	Action string
 	// ApproverID is the Slack user ID or email address of the approver.
 	ApproverID string
-	// Source identifies the request origin: "slack" or "cli".
-	Source string
 	// IssuedAt is a Unix timestamp used for expiry checks; 0 means no expiry (CLI mode).
 	IssuedAt int64
-	// ResponseURL is the Slack response_url for async message updates; empty in CLI mode.
-	ResponseURL string
 	// MigrationDone signals that DB migration has completed for this deployment.
 	// When true, the canary button is shown without a confirm dialog.
 	MigrationDone bool

@@ -14,11 +14,11 @@ import (
 // stubUseCase implements RunOpsUseCase.
 type stubUseCase struct{}
 
-func (s *stubUseCase) ApproveAction(_ context.Context, _ domain.ApprovalRequest) error {
+func (s *stubUseCase) ApproveAction(_ context.Context, _ domain.ApprovalRequest, _ port.NotifyTarget) error {
 	return nil
 }
 
-func (s *stubUseCase) DenyAction(_ context.Context, _ domain.ApprovalRequest) error {
+func (s *stubUseCase) DenyAction(_ context.Context, _ domain.ApprovalRequest, _ port.NotifyTarget) error {
 	return nil
 }
 
@@ -77,7 +77,7 @@ var _ port.AuthChecker = (*stubAuthChecker)(nil)
 func TestNotifyTargetSlackMode(t *testing.T) {
 	// given
 	target := port.NotifyTarget{
-		ResponseURL: "https://hooks.slack.com/actions/xxx",
+		CallbackURL: "https://hooks.slack.com/actions/xxx",
 		Mode:        port.ModeSlack,
 	}
 
@@ -85,7 +85,7 @@ func TestNotifyTargetSlackMode(t *testing.T) {
 	if target.Mode != port.ModeSlack {
 		t.Errorf("Mode = %q, want %q", target.Mode, "slack")
 	}
-	if target.ResponseURL == "" {
+	if target.CallbackURL == "" {
 		t.Error("Slack mode ResponseURL must not be empty")
 	}
 }
@@ -93,7 +93,7 @@ func TestNotifyTargetSlackMode(t *testing.T) {
 func TestNotifyTargetStdoutMode(t *testing.T) {
 	// given
 	target := port.NotifyTarget{
-		ResponseURL: "",
+		CallbackURL: "",
 		Mode:        port.ModeStdout,
 	}
 
@@ -101,7 +101,7 @@ func TestNotifyTargetStdoutMode(t *testing.T) {
 	if target.Mode != port.ModeStdout {
 		t.Errorf("Mode = %q, want %q", target.Mode, "stdout")
 	}
-	if target.ResponseURL != "" {
-		t.Errorf("stdout mode ResponseURL should be empty, got %q", target.ResponseURL)
+	if target.CallbackURL != "" {
+		t.Errorf("stdout mode ResponseURL should be empty, got %q", target.CallbackURL)
 	}
 }
