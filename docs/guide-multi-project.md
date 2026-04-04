@@ -119,6 +119,17 @@ gcloud run worker-pools add-iam-policy-binding your-worker-pool-x \
 gcloud projects add-iam-policy-binding ${APP_PROJECT} \
   --member="serviceAccount:${CHATOPS_SA}" \
   --role="roles/cloudsql.admin"
+
+# chatops SA がランタイム SA として act する権限（Cloud Run 操作に必須）
+# Cloud Run はサービス更新時（トラフィック切り替え、ジョブ実行等）に、
+# 呼び出し元がランタイム SA に対する iam.serviceAccounts.actAs 権限を持つことを要求する。
+# この権限がないと ShiftTraffic / ExecuteJob が PermissionDenied で失敗する。
+APP_PROJECT_NUMBER=$(gcloud projects describe ${APP_PROJECT} --format="value(projectNumber)")
+gcloud iam service-accounts add-iam-policy-binding \
+  ${APP_PROJECT_NUMBER}-compute@developer.gserviceaccount.com \
+  --project=${APP_PROJECT} \
+  --member="serviceAccount:${CHATOPS_SA}" \
+  --role="roles/iam.serviceAccountUser"
 ```
 
 **APP_PROJECT の Cloud Build SA に GATEWAY_PROJECT のシークレット読み取り権限を付与（GATEWAY_PROJECT 側で実行）:**
@@ -172,7 +183,7 @@ Slack App は **1 つ** で全プロジェクトに対応する:
 
 | リスク | 対策 |
 |---|---|
-| chatops SA の権限が広がりすぎる | `run.developer` はリソース単位（Service / Jobs / Worker Pool ごと）で付与する。プロジェクトレベルで付与しない |
+| chatops SA の権限が広がりすぎる | `run.developer` はリソース単位（Service / Jobs / Worker Pool ごと）で付与する。プロジェクトレベルで付与しない。`iam.serviceAccountUser` はランタイム SA 単位で付与する |
 | 1 つの SA 漏洩で全アプリに影響 | GATEWAY_PROJECT への最小権限アクセスを徹底する。gateway の Cloud Run は `allUsers` invoker だが、Slack 署名検証 + ユーザー許可リストで保護されている |
 | `cloudsql.admin` はプロジェクトレベル | Cloud SQL のリソースレベル IAM がバックアップに対応していないため、プロジェクトレベルでの付与が必要。APP_PROJECT にアプリ DB のみが存在することを確認する |
 
@@ -218,6 +229,7 @@ Legend / 凡例:
 ### IAM の違い
 
 - **`run.developer`**: リソース単位（Service / Jobs ごと）で付与する。アプリが増えるたびに新しい Service / Jobs への binding を追加する。
+- **`iam.serviceAccountUser`**: ランタイム SA 単位で付与する。同一 APP_PROJECT のアプリが同じランタイム SA（デフォルト Compute SA）を使っていれば binding は **1 回だけ** で済む。
 - **`secretmanager.secretAccessor`**: Cloud Build SA はプロジェクトごとに 1 つ。同一 APP_PROJECT のアプリが増えても binding は **1 回だけ** で済む。
 - **`cloudsql.admin`**: プロジェクトレベルの付与なので、同一 APP_PROJECT のアプリが増えても追加不要。
 

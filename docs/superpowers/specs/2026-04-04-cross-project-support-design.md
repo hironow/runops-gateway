@@ -40,6 +40,12 @@ type GCPController interface {
 - `TriggerBackup` は Cloud SQL API のためプロジェクトレベル操作。`location` 不要
 - Controller の `Config` 構造体は不要になる（`ProjectID` / `Location` をリクエストごとに受け取る）
 
+### IAM 前提条件: `iam.serviceAccountUser`
+
+Cloud Run はサービス更新（トラフィック切り替え）、ジョブ実行、Worker Pool インスタンス割り当て変更の際に、呼び出し元が対象リソースのランタイム SA に対する `iam.serviceAccounts.actAs` 権限を持つことを要求する。この権限は `roles/iam.serviceAccountUser` ロールで提供される。
+
+クロスプロジェクト構成では、chatops SA（`slack-chatops-sa`）に対して **各 APP_PROJECT のランタイム SA**（通常はデフォルト Compute SA `PROJECT_NUMBER-compute@developer.gserviceaccount.com`）への `iam.serviceAccountUser` binding が必須。この binding がないと `ShiftTraffic` / `ExecuteJob` / `UpdateWorkerPool` が `PermissionDenied` で失敗する。
+
 ### 3. Data Flow
 
 ```

@@ -42,6 +42,7 @@ Legend / 凡例:
 - APP_PROJECT: 管理対象アプリが稼働する GCP プロジェクト
 - slack-chatops-sa: runops-gateway のランタイムサービスアカウント
 - roles/run.developer: Cloud Run Service / Jobs の操作権限（APP_PROJECT 側で付与）
+- roles/iam.serviceAccountUser: ランタイム SA への actAs 権限（Cloud Run 操作に必須、APP_PROJECT 側で付与）
 - roles/cloudsql.admin: Cloud SQL バックアップ権限（APP_PROJECT 側で付与）
 - roles/secretmanager.secretAccessor: Webhook URL 読み取り権限（GATEWAY_PROJECT 側で付与）
 - Cloud Build SA: APP_PROJECT の CI/CD 実行主体（notify-slack.sh で Webhook URL を読み取る）
@@ -118,6 +119,17 @@ gcloud run worker-pools add-iam-policy-binding your-worker-pool \
 gcloud projects add-iam-policy-binding ${APP_PROJECT} \
   --member="serviceAccount:${CHATOPS_SA}" \
   --role="roles/cloudsql.admin"
+
+# chatops SA がランタイム SA として act する権限（Cloud Run 操作に必須）
+# Cloud Run はサービス更新時（トラフィック切り替え、ジョブ実行等）に、
+# 呼び出し元がランタイム SA に対する iam.serviceAccounts.actAs 権限を持つことを要求する。
+# この権限がないと ShiftTraffic / ExecuteJob が PermissionDenied で失敗する。
+APP_PROJECT_NUMBER=$(gcloud projects describe ${APP_PROJECT} --format="value(projectNumber)")
+gcloud iam service-accounts add-iam-policy-binding \
+  ${APP_PROJECT_NUMBER}-compute@developer.gserviceaccount.com \
+  --project=${APP_PROJECT} \
+  --member="serviceAccount:${CHATOPS_SA}" \
+  --role="roles/iam.serviceAccountUser"
 ```
 
 #### 3-2. APP_PROJECT の Cloud Build SA に GATEWAY_PROJECT のシークレット読み取り権限を付与

@@ -97,8 +97,24 @@ just init-app /path/to/your-app YOUR_PROJECT "frontend,backend" db-migrate
 | SA | ロール | 対象 |
 |---|---|---|
 | `slack-chatops-sa` | `roles/run.developer` | Cloud Run Service（tofu で指定した `cloud_run_target_service`） |
+| `slack-chatops-sa` | `roles/iam.serviceAccountUser` | ランタイム SA（Cloud Run 操作に必須） |
 | `slack-chatops-sa` | `roles/cloudsql.admin` | プロジェクトレベル |
 | Cloud Build デフォルト SA | `roles/secretmanager.secretAccessor` | `slack-webhook-url` シークレット |
+
+シングルプロジェクト構成では、tofu で作成された `slack-chatops-sa` は同一プロジェクト内で十分な権限を持つことが多いが、Cloud Run の操作（トラフィック切り替え、ジョブ実行等）にはランタイム SA に対する `iam.serviceAccountUser` 権限が必要。デフォルト Compute SA をランタイム SA として使っている場合:
+
+```bash
+CHATOPS_SA="slack-chatops-sa@YOUR_PROJECT.iam.gserviceaccount.com"
+PROJECT_NUMBER=$(gcloud projects describe YOUR_PROJECT --format="value(projectNumber)")
+
+gcloud iam service-accounts add-iam-policy-binding \
+  ${PROJECT_NUMBER}-compute@developer.gserviceaccount.com \
+  --project=YOUR_PROJECT \
+  --member="serviceAccount:${CHATOPS_SA}" \
+  --role="roles/iam.serviceAccountUser"
+```
+
+> **Note**: カスタムランタイム SA を使用している場合は、そのカスタム SA に対して同じ binding を付与すること。
 
 追加の Cloud Run Service / Jobs に対して `run.developer` が必要な場合は手動で付与する:
 
