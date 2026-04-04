@@ -40,15 +40,23 @@ func (c *Controller) ShiftTraffic(ctx context.Context, project, location, servic
 		return fmt.Errorf("gcp: get service: %w", err)
 	}
 
-	// Find the currently active revision (the one serving the most traffic)
-	// to assign remaining traffic during canary.
+	// Build traffic entries for idempotency check and active revision selection.
 	entries := make([]trafficEntry, len(svc.Traffic))
 	for i, t := range svc.Traffic {
 		entries[i] = trafficEntry{revision: t.Revision, percent: t.Percent}
 	}
+
+	// Idempotency: skip update if traffic already matches desired state.
+	if isTrafficAlreadyMatching(entries, revision, percent) {
+		slog.InfoContext(ctx, "gcp: traffic already at desired state, skipping update",
+			"service", serviceName, "revision", revision, "percent", percent)
+		return nil
+	}
+
+	// Find the currently active revision (the one serving the most traffic)
+	// to assign remaining traffic during canary.
 	activeRevision := selectActiveRevision(entries, revision)
 	if activeRevision == "" {
-		// Fallback: use the latest ready revision from service status
 		activeRevision = svc.GetLatestReadyRevision()
 	}
 
@@ -130,23 +138,47 @@ func (c *Controller) UpdateWorkerPool(ctx context.Context, project, location, po
 		project, location, poolName)
 
 	// GET the current worker pool to preserve template and other fields.
-	// Cloud Run API v2 requires template in UpdateWorkerPoolRequest.
 	pool, err := client.GetWorkerPool(ctx, &runpb.GetWorkerPoolRequest{Name: poolPath})
 	if err != nil {
 		return fmt.Errorf("gcp: get worker pool: %w", err)
 	}
 
-	pool.InstanceSplits = []*runpb.InstanceSplit{
+	// Build entries for idempotency check and active revision selection.
+	entries := make([]trafficEntry, len(pool.InstanceSplits))
+	for i, s := range pool.InstanceSplits {
+		entries[i] = trafficEntry{revision: s.Revision, percent: s.Percent}
+	}
+
+	// Idempotency: skip update if instance split already matches desired state.
+	if isTrafficAlreadyMatching(entries, revision, percent) {
+		slog.InfoContext(ctx, "gcp: worker pool already at desired state, skipping update",
+			"pool", poolName, "revision", revision, "percent", percent)
+		return nil
+	}
+
+	// Find the active revision (highest traffic, excluding target) — same pattern as ShiftTraffic.
+	// Using explicit revision names instead of LATEST prevents the bug where
+	// target == latest ready revision makes both splits point to the same revision.
+	activeRevision := selectActiveRevision(entries, revision)
+	if activeRevision == "" {
+		activeRevision = pool.GetLatestCreatedRevision()
+	}
+
+	splits := []*runpb.InstanceSplit{
 		{
 			Type:     runpb.InstanceSplitAllocationType_INSTANCE_SPLIT_ALLOCATION_TYPE_REVISION,
 			Revision: revision,
 			Percent:  percent,
 		},
-		{
-			Type:    runpb.InstanceSplitAllocationType_INSTANCE_SPLIT_ALLOCATION_TYPE_LATEST,
-			Percent: 100 - percent,
-		},
 	}
+	if percent < 100 && activeRevision != "" && activeRevision != revision {
+		splits = append(splits, &runpb.InstanceSplit{
+			Type:     runpb.InstanceSplitAllocationType_INSTANCE_SPLIT_ALLOCATION_TYPE_REVISION,
+			Revision: activeRevision,
+			Percent:  100 - percent,
+		})
+	}
+	pool.InstanceSplits = splits
 
 	op, err := client.UpdateWorkerPool(ctx, &runpb.UpdateWorkerPoolRequest{WorkerPool: pool})
 	if err != nil {

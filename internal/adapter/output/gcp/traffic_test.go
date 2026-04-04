@@ -93,3 +93,83 @@ func TestSelectActiveRevision_EmptyTraffic_ReturnsEmpty(t *testing.T) {
 		t.Errorf("selectActiveRevision = %q, want empty string", got)
 	}
 }
+
+// --- isTrafficAlreadyMatching tests ---
+
+func TestIsTrafficAlreadyMatching_ExactMatch(t *testing.T) {
+	// given — current traffic matches desired state
+	current := []trafficEntry{
+		{revision: "rev-new", percent: 10},
+		{revision: "rev-old", percent: 90},
+	}
+
+	// when
+	got := isTrafficAlreadyMatching(current, "rev-new", 10)
+
+	// then
+	if !got {
+		t.Error("expected match when current == desired")
+	}
+}
+
+func TestIsTrafficAlreadyMatching_DifferentPercent(t *testing.T) {
+	// given
+	current := []trafficEntry{
+		{revision: "rev-new", percent: 30},
+		{revision: "rev-old", percent: 70},
+	}
+
+	// when
+	got := isTrafficAlreadyMatching(current, "rev-new", 10)
+
+	// then
+	if got {
+		t.Error("expected no match when percent differs")
+	}
+}
+
+func TestIsTrafficAlreadyMatching_RevisionNotFound(t *testing.T) {
+	// given
+	current := []trafficEntry{
+		{revision: "rev-old", percent: 100},
+	}
+
+	// when
+	got := isTrafficAlreadyMatching(current, "rev-new", 10)
+
+	// then
+	if got {
+		t.Error("expected no match when revision not in traffic")
+	}
+}
+
+func TestIsTrafficAlreadyMatching_ZeroPercent_RevisionAbsent(t *testing.T) {
+	// given — rollback: target is not in traffic (already at 0%)
+	current := []trafficEntry{
+		{revision: "rev-old", percent: 100},
+	}
+
+	// when
+	got := isTrafficAlreadyMatching(current, "rev-new", 0)
+
+	// then — revision absent with desired 0% means already rolled back
+	if !got {
+		t.Error("expected match when revision absent and desired percent is 0")
+	}
+}
+
+func TestIsTrafficAlreadyMatching_ZeroPercent_RevisionPresent(t *testing.T) {
+	// given — revision still in traffic with 0%
+	current := []trafficEntry{
+		{revision: "rev-new", percent: 0},
+		{revision: "rev-old", percent: 100},
+	}
+
+	// when
+	got := isTrafficAlreadyMatching(current, "rev-new", 0)
+
+	// then
+	if !got {
+		t.Error("expected match when revision at 0% and desired is 0")
+	}
+}

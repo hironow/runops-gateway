@@ -27,3 +27,16 @@ func selectActiveRevision(traffic []trafficEntry, targetRevision string) string 
 	}
 	return best
 }
+
+// isTrafficAlreadyMatching checks if the current traffic state already has
+// the target revision at the desired percent. Used for idempotent ShiftTraffic:
+// if the state already matches, the update can be skipped.
+func isTrafficAlreadyMatching(traffic []trafficEntry, targetRevision string, desiredPercent int32) bool {
+	for _, t := range traffic {
+		if t.revision == targetRevision {
+			return t.percent == desiredPercent
+		}
+	}
+	// Revision not found in traffic — matches only if desired is 0%
+	return desiredPercent == 0
+}
