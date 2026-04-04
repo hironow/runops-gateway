@@ -102,6 +102,7 @@ func (m *mockGCP) UpdateWorkerPool(_ context.Context, project, location, name, t
 type mockNotifier struct {
 	updateMessageCalled      bool
 	updateMessageText        string
+	updateMessageTexts       []string
 	updateMessageErr         error
 	replaceMessageCalled     bool
 	replaceMessageText     string
@@ -118,6 +119,7 @@ type mockNotifier struct {
 func (m *mockNotifier) UpdateMessage(_ context.Context, _ port.NotifyTarget, text string) error {
 	m.updateMessageCalled = true
 	m.updateMessageText = text
+	m.updateMessageTexts = append(m.updateMessageTexts, text)
 	return m.updateMessageErr
 }
 
@@ -1259,5 +1261,66 @@ func TestApproveAction_SingleService_Fails_NoRollbackNeeded(t *testing.T) {
 	// No resources were successfully shifted, so message should say "ロールバック不要"
 	if !strings.Contains(notifier.offerContinuationSummary, "ロールバック不要") {
 		t.Errorf("expected 'ロールバック不要' for single-service failure, got: %s", notifier.offerContinuationSummary)
+	}
+}
+
+// --- Notification fallback tests ---
+
+func TestApproveAction_Service_OfferContinuationFails_FallbackNotifySent(t *testing.T) {
+	// given — GCP succeeds but OfferContinuation fails (e.g. invalid_blocks)
+	gcp := newMockGCP()
+	notifier := &mockNotifier{offerContinuationErr: errors.New("slack validate: duplicate action_id")}
+	auth := &mockAuth{authorized: true, expired: false}
+	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
+	req := newServiceReq()
+
+	// when
+	_ = svc.ApproveAction(context.Background(), req, testTarget)
+
+	// then — a fallback UpdateMessage must be sent with error notice
+	lastMsg := notifier.updateMessageText
+	if !strings.Contains(lastMsg, "ログを確認") {
+		t.Errorf("expected fallback message with 'ログを確認', got: %q", lastMsg)
+	}
+}
+
+func TestApproveAction_Job_OfferContinuationFails_FallbackNotifySent(t *testing.T) {
+	// given — job succeeds but OfferContinuation fails
+	gcp := newMockGCP()
+	notifier := &mockNotifier{offerContinuationErr: errors.New("slack 404")}
+	auth := &mockAuth{authorized: true, expired: false}
+	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
+	req := newJobReq()
+	req.NextServiceNames = "svc-A"
+	req.NextRevisions = "svc-A-v2"
+	req.NextAction = "canary_10"
+
+	// when
+	_ = svc.ApproveAction(context.Background(), req, testTarget)
+
+	// then
+	lastMsg := notifier.updateMessageText
+	if !strings.Contains(lastMsg, "ログを確認") {
+		t.Errorf("expected fallback message with '���グを確認', got: %q", lastMsg)
+	}
+}
+
+func TestOfferRetry_Fails_FallbackNotifySent(t *testing.T) {
+	// given — ShiftTraffic fails AND offerRetry (OfferContinuation) also fails
+	gcp := newMockGCP()
+	gcp.shiftErrOnIdx = 0
+	gcp.shiftTrafficErr = errors.New("gcp error")
+	notifier := &mockNotifier{offerContinuationErr: errors.New("slack 404")}
+	auth := &mockAuth{authorized: true, expired: false}
+	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
+	req := newServiceReq()
+
+	// when
+	_ = svc.ApproveAction(context.Background(), req, testTarget)
+
+	// then — fallback UpdateMessage should contain error notice
+	lastMsg := notifier.updateMessageText
+	if !strings.Contains(lastMsg, "ログを確認") {
+		t.Errorf("expected fallback message with 'ログを確認', got: %q", lastMsg)
 	}
 }

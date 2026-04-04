@@ -120,9 +120,7 @@ func (s *RunOpsService) approveShift(ctx context.Context, req domain.ApprovalReq
 			stopReq = cloneRequest(req, "rollback")
 		}
 	}
-	if err := s.notifier.OfferContinuation(ctx, target, summary, nextReq, stopReq); err != nil {
-		slog.Error("OfferContinuation failed", "err", err)
-	}
+	s.offerOrFallback(ctx, target, summary, nextReq, stopReq)
 	return nil
 }
 
@@ -160,9 +158,7 @@ func (s *RunOpsService) approveJob(ctx context.Context, req domain.ApprovalReque
 		denyReq.ResourceNames = req.NextServiceNames
 		denyReq.Targets = req.NextRevisions
 
-		if err := s.notifier.OfferContinuation(ctx, target, summary, nextReq, denyReq); err != nil {
-			slog.Error("OfferContinuation failed", "err", err)
-		}
+		s.offerOrFallback(ctx, target, summary, nextReq, denyReq)
 		return nil
 	}
 
@@ -220,7 +216,17 @@ func cloneRequest(req domain.ApprovalRequest, action string) *domain.ApprovalReq
 
 func (s *RunOpsService) offerRetry(ctx context.Context, target port.NotifyTarget, req domain.ApprovalRequest, errMsg string) {
 	retryReq := cloneRequest(req, req.Action)
-	if err := s.notifier.OfferContinuation(ctx, target, errMsg, retryReq, nil); err != nil {
-		slog.Error("OfferContinuation (retry) failed", "err", err)
+	s.offerOrFallback(ctx, target, errMsg, retryReq, nil)
+}
+
+// offerOrFallback tries OfferContinuation; on failure, sends a plain text fallback
+// so the Slack message never stays stuck at "⏳ 処理中...".
+func (s *RunOpsService) offerOrFallback(ctx context.Context, target port.NotifyTarget, summary string, nextReq, stopReq *domain.ApprovalRequest) {
+	if err := s.notifier.OfferContinuation(ctx, target, summary, nextReq, stopReq); err != nil {
+		slog.Error("OfferContinuation failed, sending fallback", "err", err)
+		fallback := fmt.Sprintf("%s\n\n⚠️ Slack メッセージの更新に失敗しました。GCP のログを確認してください。", summary)
+		if ferr := s.notifier.UpdateMessage(ctx, target, fallback); ferr != nil {
+			slog.Error("fallback UpdateMessage also failed", "err", ferr)
+		}
 	}
 }
