@@ -54,12 +54,13 @@ type interactivePayload struct {
 // Handler handles POST /slack/interactive requests.
 type Handler struct {
 	useCase       port.RunOpsUseCase
+	notifier      port.Notifier
 	signingSecret string
 }
 
 // NewHandler creates a new Slack interactive handler.
-func NewHandler(useCase port.RunOpsUseCase, signingSecret string) *Handler {
-	return &Handler{useCase: useCase, signingSecret: signingSecret}
+func NewHandler(useCase port.RunOpsUseCase, notifier port.Notifier, signingSecret string) *Handler {
+	return &Handler{useCase: useCase, notifier: notifier, signingSecret: signingSecret}
 }
 
 // ServeHTTP implements http.Handler.
@@ -138,6 +139,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			defer cancel()
 			if err := h.useCase.ApproveAction(ctx, req, target); err != nil {
 				slog.Error("ApproveAction failed", "error", err)
+				h.notifyIfTimeout(ctx, err, target)
 			}
 		}()
 	case action.ActionID == "deny":
@@ -146,6 +148,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			defer cancel()
 			if err := h.useCase.DenyAction(ctx, req, target); err != nil {
 				slog.Error("DenyAction failed", "error", err)
+				h.notifyIfTimeout(ctx, err, target)
 			}
 		}()
 	default:
@@ -181,6 +184,20 @@ func parseActionValue(s string) (actionValue, error) {
 		return av, err
 	}
 	return av, nil
+}
+
+// notifyIfTimeout sends a timeout notice to Slack when the operation context expired.
+// Uses a fresh 30-second context since the original ctx is already cancelled.
+func (h *Handler) notifyIfTimeout(ctx context.Context, err error, target port.NotifyTarget) {
+	if ctx.Err() != context.DeadlineExceeded {
+		return
+	}
+	freshCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	msg := "⏰ 操作がタイムアウトしました（Slack response_url の有効期限切れ）。GCP コンソールで実際の状態を確認してください。"
+	if ferr := h.notifier.UpdateMessage(freshCtx, target, msg); ferr != nil {
+		slog.Error("timeout fallback notification also failed", "err", ferr)
+	}
 }
 
 // firstNonEmpty returns a if non-empty, otherwise b.

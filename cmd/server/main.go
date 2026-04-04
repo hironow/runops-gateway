@@ -39,7 +39,7 @@ func main() {
 	authChecker := auth.NewEnvAuthChecker()
 
 	svc := usecase.NewRunOpsService(gcpCtrl, notifier, authChecker, state.NewMemoryStore())
-	slackHandler := slackadapter.NewHandler(svc, cfg.slackSigningSecret)
+	slackHandler := slackadapter.NewHandler(svc, notifier, cfg.slackSigningSecret)
 
 	// Register routes
 	mux := http.NewServeMux()

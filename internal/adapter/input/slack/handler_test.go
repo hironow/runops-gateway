@@ -35,6 +35,16 @@ func (m *mockUseCase) DenyAction(_ context.Context, req domain.ApprovalRequest, 
 	return nil
 }
 
+// stubNotifier is a no-op notifier for handler tests (timeout fallback path).
+type stubNotifier struct{}
+
+func (s *stubNotifier) UpdateMessage(_ context.Context, _ port.NotifyTarget, _ string) error { return nil }
+func (s *stubNotifier) ReplaceMessage(_ context.Context, _ port.NotifyTarget, _ string) error { return nil }
+func (s *stubNotifier) SendEphemeral(_ context.Context, _ port.NotifyTarget, _, _ string) error { return nil }
+func (s *stubNotifier) OfferContinuation(_ context.Context, _ port.NotifyTarget, _ string, _, _ *domain.ApprovalRequest) error { return nil }
+
+var testNotifier = &stubNotifier{}
+
 func buildValidRequest(t *testing.T, secret, payloadJSON string) *http.Request {
 	t.Helper()
 	body := "payload=" + url.QueryEscape(payloadJSON)
@@ -63,7 +73,7 @@ func newMockUseCase() *mockUseCase {
 func TestHandler_InvalidSignature(t *testing.T) {
 	// given
 	mock := newMockUseCase()
-	handler := NewHandler(mock, "correct-secret")
+	handler := NewHandler(mock, testNotifier, "correct-secret")
 
 	body := []byte("payload=test")
 	req := httptest.NewRequest(http.MethodPost, "/slack/interactive", bytes.NewBuffer(body))
@@ -85,7 +95,7 @@ func TestHandler_ValidApprove(t *testing.T) {
 	// given
 	secret := "test-secret"
 	mock := newMockUseCase()
-	handler := NewHandler(mock, secret)
+	handler := NewHandler(mock, testNotifier,secret)
 
 	av := actionValue{
 		Project:       "test-project",
@@ -142,7 +152,7 @@ func TestHandler_ValidDeny(t *testing.T) {
 	// given
 	secret := "test-secret"
 	mock := newMockUseCase()
-	handler := NewHandler(mock, secret)
+	handler := NewHandler(mock, testNotifier,secret)
 
 	av := actionValue{
 		Project:       "test-project",
@@ -190,7 +200,7 @@ func TestHandler_EmptyActions(t *testing.T) {
 	// given
 	secret := "test-secret"
 	mock := newMockUseCase()
-	handler := NewHandler(mock, secret)
+	handler := NewHandler(mock, testNotifier,secret)
 
 	payload := interactivePayload{}
 	payload.User.ID = "U789"
@@ -216,7 +226,7 @@ func TestHandler_UnknownActionID(t *testing.T) {
 	// given
 	secret := "test-secret"
 	mock := newMockUseCase()
-	handler := NewHandler(mock, secret)
+	handler := NewHandler(mock, testNotifier,secret)
 
 	av := actionValue{Project: "test-project", Location: "asia-northeast1", ResourceType: "service", ResourceNames: "svc", IssuedAt: time.Now().Unix()}
 	avBytes, _ := json.Marshal(av)
@@ -247,7 +257,7 @@ func TestHandler_MalformedActionValue(t *testing.T) {
 	// given — action_id is valid but Value is not parseable JSON
 	secret := "test-secret"
 	mock := newMockUseCase()
-	handler := NewHandler(mock, secret)
+	handler := NewHandler(mock, testNotifier,secret)
 
 	payload := interactivePayload{}
 	payload.User.ID = "U123"
@@ -281,7 +291,7 @@ func TestHandler_MultipleActions_OnlyFirstProcessed(t *testing.T) {
 	// given — two actions in the payload; only the first must be dispatched
 	secret := "test-secret"
 	mock := newMockUseCase()
-	handler := NewHandler(mock, secret)
+	handler := NewHandler(mock, testNotifier,secret)
 
 	av := actionValue{Project: "test-project", Location: "asia-northeast1", ResourceType: "service", ResourceNames: "svc", IssuedAt: time.Now().Unix()}
 	avBytes, _ := json.Marshal(av)
@@ -394,7 +404,7 @@ func TestHandler_CompressedButtonValue_Dispatched(t *testing.T) {
 	// given — button value is gz: compressed (simulates large multi-service bundle)
 	secret := "test-secret"
 	mock := newMockUseCase()
-	handler := NewHandler(mock, secret)
+	handler := NewHandler(mock, testNotifier,secret)
 
 	av := actionValue{
 		Project:       "test-project",
@@ -494,7 +504,7 @@ func TestHandler_MissingProjectOrLocation_RejectsGracefully(t *testing.T) {
 	// given — action value has no project/location; handler must return 200 without dispatching
 	secret := "test-secret"
 	mock := newMockUseCase()
-	handler := NewHandler(mock, secret)
+	handler := NewHandler(mock, testNotifier,secret)
 
 	av := actionValue{
 		ResourceType:  "service",
@@ -538,7 +548,7 @@ func TestHandler_MalformedPayloadJSON(t *testing.T) {
 	// given
 	secret := "test-secret"
 	mock := newMockUseCase()
-	handler := NewHandler(mock, secret)
+	handler := NewHandler(mock, testNotifier,secret)
 
 	req := buildValidRequest(t, secret, `{not valid json}`)
 	rr := httptest.NewRecorder()
