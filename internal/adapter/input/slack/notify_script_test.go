@@ -49,6 +49,8 @@ func TestNotifyScript_DryRun_ProducesValidJSON(t *testing.T) {
 		"main",
 		"abc1234567890abcdef",
 		"frontend-service-00001-abc",
+		"test-project",
+		"asia-northeast1",
 	)
 	out, err := cmd.Output()
 	if err != nil {
@@ -84,6 +86,8 @@ func TestNotifyScript_DryRun_ButtonValuesGzPrefixed(t *testing.T) {
 		"main",
 		"abc1234567890abcdef",
 		"frontend-service-00001-abc",
+		"test-project",
+		"asia-northeast1",
 	)
 	out, err := cmd.Output()
 	if err != nil {
@@ -144,6 +148,8 @@ func TestNotifyScript_EndToEnd_PostToMockSlack_ButtonValuesDecodable(t *testing.
 		"main",
 		"abc1234567890abcdef",
 		"frontend-service-00001-abc,backend-service-00001-def",
+		"test-project",
+		"asia-northeast1",
 	)
 	cmd.Env = append(os.Environ(), "SLACK_WEBHOOK_URL="+srv.URL)
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -201,6 +207,61 @@ func TestNotifyScript_EndToEnd_PostToMockSlack_ButtonValuesDecodable(t *testing.
 	}
 	if checked == 0 {
 		t.Error("no button values found to validate")
+	}
+}
+
+func TestNotifyScript_ButtonValuesContainProjectAndLocation(t *testing.T) {
+	skipIfToolMissing(t, "bash", "gzip", "base64", "jq")
+
+	cmd := exec.Command("bash", notifyScript(t),
+		"--dry-run",
+		"frontend-service",
+		"db-migrate-job",
+		"main",
+		"abc1234567890abcdef",
+		"frontend-service-00001-abc",
+		"test-project",
+		"asia-northeast1",
+	)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("script failed: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(out, &payload); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+
+	// collect and decode all button values
+	var checked int
+	for _, b := range payload["blocks"].([]any) {
+		block := b.(map[string]any)
+		if block["type"] != "actions" {
+			continue
+		}
+		for _, e := range block["elements"].([]any) {
+			el := e.(map[string]any)
+			val, ok := el["value"].(string)
+			if !ok {
+				continue
+			}
+			av, err := parseActionValue(val)
+			if err != nil {
+				t.Errorf("parseActionValue failed: %v", err)
+				continue
+			}
+			if av.Project != "test-project" {
+				t.Errorf("button %q: Project = %q, want %q", el["action_id"], av.Project, "test-project")
+			}
+			if av.Location != "asia-northeast1" {
+				t.Errorf("button %q: Location = %q, want %q", el["action_id"], av.Location, "asia-northeast1")
+			}
+			checked++
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no button values found to validate")
 	}
 }
 
