@@ -40,15 +40,13 @@ func (c *Controller) ShiftTraffic(ctx context.Context, project, location, servic
 		return fmt.Errorf("gcp: get service: %w", err)
 	}
 
-	// Find the currently active revision (the one serving most traffic)
+	// Find the currently active revision (the one serving the most traffic)
 	// to assign remaining traffic during canary.
-	var activeRevision string
-	for _, t := range svc.Traffic {
-		if t.Percent > 0 && t.Revision != revision {
-			activeRevision = t.Revision
-			break
-		}
+	entries := make([]trafficEntry, len(svc.Traffic))
+	for i, t := range svc.Traffic {
+		entries[i] = trafficEntry{revision: t.Revision, percent: t.Percent}
 	}
+	activeRevision := selectActiveRevision(entries, revision)
 	if activeRevision == "" {
 		// Fallback: use the latest ready revision from service status
 		activeRevision = svc.GetLatestReadyRevision()
