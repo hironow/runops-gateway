@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 
@@ -127,8 +128,17 @@ func (n *ResponseURLNotifier) post(ctx context.Context, url string, payload any)
 		return fmt.Errorf("slack notifier: post: %w", err)
 	}
 	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 300 {
-		return fmt.Errorf("slack notifier: unexpected status %d", resp.StatusCode)
+		slog.Error("slack notifier: error response", "status", resp.StatusCode, "body", string(respBody))
+		return fmt.Errorf("slack notifier: unexpected status %d: %s", resp.StatusCode, string(respBody))
+	}
+	// Slack returns 200 but may include error text (e.g. "invalid_blocks")
+	if len(respBody) > 0 {
+		respStr := string(respBody)
+		if respStr != "ok" && respStr != "" {
+			slog.Warn("slack notifier: non-ok response body", "body", respStr)
+		}
 	}
 	return nil
 }
