@@ -115,9 +115,7 @@ func (s *RunOpsService) approveService(ctx context.Context, req domain.ApprovalR
 					slog.Error("compensating rollback failed", "resource", d.name, "err", rerr)
 				}
 			}
-			if uerr := s.notifier.UpdateMessage(ctx, target, fmt.Sprintf("エラーが発生しました: %v ロールバック済み", err)); uerr != nil {
-				slog.Error("UpdateMessage failed", "err", uerr)
-			}
+			s.offerRetry(ctx, target, req, fmt.Sprintf("❌ エラーが発生しました: %v\nロールバック済み", err))
 			return err
 		}
 		done = append(done, shifted{req.Project, req.Location, name, rev})
@@ -166,9 +164,7 @@ func (s *RunOpsService) approveJob(ctx context.Context, req domain.ApprovalReque
 	}
 
 	if err := s.gcp.TriggerBackup(ctx, req.Project, req.ResourceNames); err != nil {
-		if uerr := s.notifier.UpdateMessage(ctx, target, fmt.Sprintf("バックアップエラー: %v", err)); uerr != nil {
-			slog.Error("UpdateMessage failed", "err", uerr)
-		}
+		s.offerRetry(ctx, target, req, fmt.Sprintf("❌ バックアップエラー: %v", err))
 		return err
 	}
 
@@ -177,9 +173,7 @@ func (s *RunOpsService) approveJob(ctx context.Context, req domain.ApprovalReque
 	}
 
 	if err := s.gcp.ExecuteJob(ctx, req.Project, req.Location, req.ResourceNames, []string{"--mode=apply"}); err != nil {
-		if uerr := s.notifier.UpdateMessage(ctx, target, fmt.Sprintf("マイグレーションエラー: %v", err)); uerr != nil {
-			slog.Error("UpdateMessage failed", "err", uerr)
-		}
+		s.offerRetry(ctx, target, req, fmt.Sprintf("❌ マイグレーションエラー: %v", err))
 		return err
 	}
 
@@ -256,9 +250,7 @@ func (s *RunOpsService) approveWorkerPool(ctx context.Context, req domain.Approv
 					slog.Error("compensating rollback failed", "resource", d.name, "err", rerr)
 				}
 			}
-			if uerr := s.notifier.UpdateMessage(ctx, target, fmt.Sprintf("エラーが発生しました: %v ロールバック済み", err)); uerr != nil {
-				slog.Error("UpdateMessage failed", "err", uerr)
-			}
+			s.offerRetry(ctx, target, req, fmt.Sprintf("❌ エラーが発生しました: %v\nロールバック済み", err))
 			return err
 		}
 		done = append(done, shifted{req.Project, req.Location, name, rev})
@@ -326,6 +318,29 @@ func csvAt(ss []string, i int) string {
 		return ss[i]
 	}
 	return ""
+}
+
+// offerRetry replaces the Slack message with an error summary and a retry button.
+// The retry button carries the same ApprovalRequest with a fresh IssuedAt timestamp.
+func (s *RunOpsService) offerRetry(ctx context.Context, target port.NotifyTarget, req domain.ApprovalRequest, errMsg string) {
+	retryReq := &domain.ApprovalRequest{
+		Project:          req.Project,
+		Location:         req.Location,
+		ResourceType:     req.ResourceType,
+		ResourceNames:    req.ResourceNames,
+		Targets:          req.Targets,
+		Action:           req.Action,
+		Source:           req.Source,
+		IssuedAt:         time.Now().Unix(),
+		ResponseURL:      req.ResponseURL,
+		MigrationDone:    req.MigrationDone,
+		NextServiceNames: req.NextServiceNames,
+		NextRevisions:    req.NextRevisions,
+		NextAction:       req.NextAction,
+	}
+	if err := s.notifier.OfferContinuation(ctx, target, errMsg, retryReq, nil); err != nil {
+		slog.Error("OfferContinuation (retry) failed", "err", err)
+	}
 }
 
 // completionBlocks builds the Slack blocks array for operation completion messages.
