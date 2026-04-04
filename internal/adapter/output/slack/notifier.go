@@ -94,6 +94,9 @@ func (n *ResponseURLNotifier) post(ctx context.Context, url string, payload Slac
 	if url == "" {
 		return fmt.Errorf("slack notifier: response_url is empty")
 	}
+	if err := payload.Validate(); err != nil {
+		return fmt.Errorf("slack notifier: %w", err)
+	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("slack notifier: marshal payload: %w", err)
