@@ -27,19 +27,19 @@ var _ port.RunOpsUseCase = (*stubUseCase)(nil)
 // stubGCPController implements GCPController.
 type stubGCPController struct{}
 
-func (s *stubGCPController) ShiftTraffic(_ context.Context, _, _ string, _ int32) error {
+func (s *stubGCPController) ShiftTraffic(_ context.Context, _, _, _, _ string, _ int32) error {
 	return nil
 }
 
-func (s *stubGCPController) ExecuteJob(_ context.Context, _ string, _ []string) error {
+func (s *stubGCPController) ExecuteJob(_ context.Context, _, _, _ string, _ []string) error {
 	return nil
 }
 
-func (s *stubGCPController) TriggerBackup(_ context.Context, _ string) error {
+func (s *stubGCPController) TriggerBackup(_ context.Context, _, _ string) error {
 	return nil
 }
 
-func (s *stubGCPController) UpdateWorkerPool(_ context.Context, _, _ string, _ int32) error {
+func (s *stubGCPController) UpdateWorkerPool(_ context.Context, _, _, _, _ string, _ int32) error {
 	return nil
 }
 

@@ -22,13 +22,13 @@ type RunOpsUseCase interface {
 // GCPController is a secondary port for interacting with GCP resources.
 type GCPController interface {
 	// ShiftTraffic adjusts traffic on a Cloud Run service revision to the given percent.
-	ShiftTraffic(ctx context.Context, serviceName, revision string, percent int32) error
+	ShiftTraffic(ctx context.Context, project, location, serviceName, revision string, percent int32) error
 	// ExecuteJob triggers a Cloud Run job with the provided arguments.
-	ExecuteJob(ctx context.Context, jobName string, args []string) error
+	ExecuteJob(ctx context.Context, project, location, jobName string, args []string) error
 	// TriggerBackup initiates a database backup for the specified Cloud SQL instance.
-	TriggerBackup(ctx context.Context, instanceName string) error
+	TriggerBackup(ctx context.Context, project, instanceName string) error
 	// UpdateWorkerPool shifts instance allocation for a Cloud Run worker pool revision to the given percent.
-	UpdateWorkerPool(ctx context.Context, poolName, revision string, percent int32) error
+	UpdateWorkerPool(ctx context.Context, project, location, poolName, revision string, percent int32) error
 }
 
 // NotifyTarget describes where and how a notification should be delivered.
@@ -74,6 +74,6 @@ type StateStore interface {
 
 // OperationKey returns a canonical deduplication key for an ApprovalRequest.
 func OperationKey(req domain.ApprovalRequest) string {
-	return fmt.Sprintf("%s/%s/%s/%d",
-		req.ResourceType, req.ResourceNames, req.Action, req.IssuedAt)
+	return fmt.Sprintf("%s/%s/%s/%s/%d",
+		req.Project, req.ResourceType, req.ResourceNames, req.Action, req.IssuedAt)
 }
