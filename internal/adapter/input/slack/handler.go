@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/hironow/runops-gateway/internal/core/domain"
 	"github.com/hironow/runops-gateway/internal/core/port"
@@ -126,17 +127,24 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		CallbackURL: slackPayload.ResponseURL,
 		Mode:        port.ModeSlack,
 	}
-	// 4. Dispatch asynchronously (avoid Slack 3-second timeout)
+	// 4. Dispatch asynchronously (avoid Slack 3-second timeout).
+	// Use a 25-minute timeout to stay within Slack's 30-minute response_url validity,
+	// leaving 5 minutes of margin for the final notification POST.
+	const responseURLTimeout = 25 * time.Minute
 	switch {
 	case strings.HasPrefix(action.ActionID, "approve"):
 		go func() {
-			if err := h.useCase.ApproveAction(context.Background(), req, target); err != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), responseURLTimeout)
+			defer cancel()
+			if err := h.useCase.ApproveAction(ctx, req, target); err != nil {
 				slog.Error("ApproveAction failed", "error", err)
 			}
 		}()
 	case action.ActionID == "deny":
 		go func() {
-			if err := h.useCase.DenyAction(context.Background(), req, target); err != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), responseURLTimeout)
+			defer cancel()
+			if err := h.useCase.DenyAction(ctx, req, target); err != nil {
 				slog.Error("DenyAction failed", "error", err)
 			}
 		}()
