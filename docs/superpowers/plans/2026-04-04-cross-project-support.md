@@ -12,9 +12,12 @@
 
 ---
 
+## Tasks
+
 ### Task 1: Domain Model — Add Project and Location to ApprovalRequest
 
 **Files:**
+
 - Modify: `internal/core/domain/domain.go:76-104`
 - Modify: `internal/core/domain/domain_test.go`
 
@@ -24,13 +27,13 @@ In `internal/core/domain/domain.go`, add `Project` and `Location` as the first t
 
 ```go
 type ApprovalRequest struct {
-	// Project is the GCP project ID of the target resource (e.g. "trade-non").
-	Project string
-	// Location is the GCP region of the target resource (e.g. "asia-northeast1").
-	Location string
-	// ResourceType is the kind of GCP resource to operate on.
-	ResourceType ResourceType
-	// ... rest unchanged
+ // Project is the GCP project ID of the target resource (e.g. "trade-non").
+ Project string
+ // Location is the GCP region of the target resource (e.g. "asia-northeast1").
+ Location string
+ // ResourceType is the kind of GCP resource to operate on.
+ ResourceType ResourceType
+ // ... rest unchanged
 ```
 
 - [ ] **Step 2: Update domain_test.go fixtures**
@@ -54,6 +57,7 @@ git commit -m "feat: add Project and Location fields to ApprovalRequest"
 ### Task 2: Port Interface — Update GCPController and OperationKey
 
 **Files:**
+
 - Modify: `internal/core/port/port.go:22-32,75-79`
 - Modify: `internal/core/port/port_test.go`
 
@@ -63,10 +67,10 @@ In `internal/core/port/port.go`, change the interface:
 
 ```go
 type GCPController interface {
-	ShiftTraffic(ctx context.Context, project, location, serviceName, revision string, percent int32) error
-	ExecuteJob(ctx context.Context, project, location, jobName string, args []string) error
-	TriggerBackup(ctx context.Context, project, instanceName string) error
-	UpdateWorkerPool(ctx context.Context, project, location, poolName, revision string, percent int32) error
+ ShiftTraffic(ctx context.Context, project, location, serviceName, revision string, percent int32) error
+ ExecuteJob(ctx context.Context, project, location, jobName string, args []string) error
+ TriggerBackup(ctx context.Context, project, instanceName string) error
+ UpdateWorkerPool(ctx context.Context, project, location, poolName, revision string, percent int32) error
 }
 ```
 
@@ -76,8 +80,8 @@ In the same file, update `OperationKey`:
 
 ```go
 func OperationKey(req domain.ApprovalRequest) string {
-	return fmt.Sprintf("%s/%s/%s/%s/%d",
-		req.Project, req.ResourceType, req.ResourceNames, req.Action, req.IssuedAt)
+ return fmt.Sprintf("%s/%s/%s/%s/%d",
+  req.Project, req.ResourceType, req.ResourceNames, req.Action, req.IssuedAt)
 }
 ```
 
@@ -87,16 +91,16 @@ In `internal/core/port/port_test.go`, update `stubGCPController` methods:
 
 ```go
 func (s *stubGCPController) ShiftTraffic(_ context.Context, _, _, _, _ string, _ int32) error {
-	return nil
+ return nil
 }
 func (s *stubGCPController) ExecuteJob(_ context.Context, _, _, _ string, _ []string) error {
-	return nil
+ return nil
 }
 func (s *stubGCPController) TriggerBackup(_ context.Context, _, _ string) error {
-	return nil
+ return nil
 }
 func (s *stubGCPController) UpdateWorkerPool(_ context.Context, _, _, _, _ string, _ int32) error {
-	return nil
+ return nil
 }
 ```
 
@@ -119,6 +123,7 @@ git commit -m "feat: add project/location to GCPController interface and Operati
 ### Task 3: GCP Controller — Remove Config, Accept project/location per call
 
 **Files:**
+
 - Modify: `internal/adapter/output/gcp/controller.go`
 - Modify: `internal/adapter/output/gcp/controller_test.go`
 
@@ -130,19 +135,19 @@ Remove `Config` struct, `NewController` constructor, and `Location()` method. Re
 type Controller struct{}
 
 func NewController() *Controller {
-	return &Controller{}
+ return &Controller{}
 }
 
 func (c *Controller) ShiftTraffic(ctx context.Context, project, location, serviceName, revision string, percent int32) error {
-	slog.InfoContext(ctx, "gcp: shifting traffic",
-		"project", project, "service", serviceName, "revision", revision, "percent", percent)
-	client, err := run.NewServicesClient(ctx)
-	if err != nil {
-		return fmt.Errorf("gcp: create services client: %w", err)
-	}
-	defer client.Close()
-	servicePath := fmt.Sprintf("projects/%s/locations/%s/services/%s", project, location, serviceName)
-	// ... rest of method unchanged except using project/location args
+ slog.InfoContext(ctx, "gcp: shifting traffic",
+  "project", project, "service", serviceName, "revision", revision, "percent", percent)
+ client, err := run.NewServicesClient(ctx)
+ if err != nil {
+  return fmt.Errorf("gcp: create services client: %w", err)
+ }
+ defer client.Close()
+ servicePath := fmt.Sprintf("projects/%s/locations/%s/services/%s", project, location, serviceName)
+ // ... rest of method unchanged except using project/location args
 ```
 
 Apply the same pattern to `ExecuteJob` (use `project`, `location`), `UpdateWorkerPool` (use `project`, `location`), and `TriggerBackup` (use `project` only).
@@ -153,13 +158,13 @@ Remove all `Config`-based tests. Update method call signatures:
 
 ```go
 func TestController_ImplementsInterface(t *testing.T) {
-	var _ port.GCPController = (*gcp.Controller)(nil)
+ var _ port.GCPController = (*gcp.Controller)(nil)
 }
 
 func TestShiftTraffic_ReturnsError_WhenAPIFails(t *testing.T) {
-	ctrl := gcp.NewController()
-	err := ctrl.ShiftTraffic(ctx, "test-project", "asia-northeast1", "my-service", "my-revision", 10)
-	// ... existing error assertion
+ ctrl := gcp.NewController()
+ err := ctrl.ShiftTraffic(ctx, "test-project", "asia-northeast1", "my-service", "my-revision", 10)
+ // ... existing error assertion
 }
 ```
 
@@ -182,6 +187,7 @@ git commit -m "refactor: remove Config from GCP Controller, accept project/locat
 ### Task 4: Usecase — Pass project/location to GCP Controller
 
 **Files:**
+
 - Modify: `internal/usecase/runops.go`
 - Modify: `internal/usecase/runops_test.go`
 
@@ -191,17 +197,17 @@ Update `mockGCP` to capture project/location:
 
 ```go
 type gcpCall struct {
-	project  string
-	location string
-	name     string
-	target   string
-	percent  int32
+ project  string
+ location string
+ name     string
+ target   string
+ percent  int32
 }
 
 func (m *mockGCP) ShiftTraffic(_ context.Context, project, location, name, target string, percent int32) error {
-	m.shiftTrafficCalled = true
-	m.shiftTrafficCalls = append(m.shiftTrafficCalls, gcpCall{project: project, location: location, name: name, target: target, percent: percent})
-	return m.shiftTrafficErr
+ m.shiftTrafficCalled = true
+ m.shiftTrafficCalls = append(m.shiftTrafficCalls, gcpCall{project: project, location: location, name: name, target: target, percent: percent})
+ return m.shiftTrafficErr
 }
 ```
 
@@ -213,12 +219,12 @@ Update `newServiceReq()`, `newJobReq()`, `newWorkerPoolReq()`:
 
 ```go
 func newServiceReq() domain.ApprovalRequest {
-	return domain.ApprovalRequest{
-		Project:       "test-project",
-		Location:      "asia-northeast1",
-		ResourceType:  domain.ResourceTypeService,
-		// ... rest unchanged
-	}
+ return domain.ApprovalRequest{
+  Project:       "test-project",
+  Location:      "asia-northeast1",
+  ResourceType:  domain.ResourceTypeService,
+  // ... rest unchanged
+ }
 }
 ```
 
@@ -241,6 +247,7 @@ Update `shifted` struct to include project/location, and update nextReq/stopReq 
 ```go
 if err := s.gcp.TriggerBackup(ctx, req.Project, req.ResourceNames); err != nil {
 ```
+
 ```go
 if err := s.gcp.ExecuteJob(ctx, req.Project, req.Location, req.ResourceNames, []string{"--mode=apply"}); err != nil {
 ```
@@ -257,14 +264,14 @@ Add to an existing test (e.g. `TestApproveAction_Service_Success`):
 
 ```go
 if len(gcp.shiftTrafficCalls) == 0 {
-	t.Fatal("expected ShiftTraffic to be called")
+ t.Fatal("expected ShiftTraffic to be called")
 }
 call := gcp.shiftTrafficCalls[0]
 if call.project != "test-project" {
-	t.Errorf("expected project %q, got %q", "test-project", call.project)
+ t.Errorf("expected project %q, got %q", "test-project", call.project)
 }
 if call.location != "asia-northeast1" {
-	t.Errorf("expected location %q, got %q", "asia-northeast1", call.location)
+ t.Errorf("expected location %q, got %q", "asia-northeast1", call.location)
 }
 ```
 
@@ -285,6 +292,7 @@ git commit -m "feat: pass project/location from ApprovalRequest to GCP Controlle
 ### Task 5: Slack Handler — Parse project/location from button value
 
 **Files:**
+
 - Modify: `internal/adapter/input/slack/handler.go:23-37,104-117`
 - Modify: `internal/adapter/input/slack/handler_test.go`
 
@@ -294,15 +302,15 @@ Add test in `handler_test.go`:
 
 ```go
 func TestHandler_ParsesProjectAndLocation(t *testing.T) {
-	av := actionValue{
-		Project:      "trade-non",
-		Location:     "asia-northeast1",
-		ResourceType: "service",
-		ResourceNames: "svc",
-		Action:       "canary_10",
-		IssuedAt:     time.Now().Unix(),
-	}
-	// ... build and send request, assert req.Project == "trade-non" and req.Location == "asia-northeast1"
+ av := actionValue{
+  Project:      "trade-non",
+  Location:     "asia-northeast1",
+  ResourceType: "service",
+  ResourceNames: "svc",
+  Action:       "canary_10",
+  IssuedAt:     time.Now().Unix(),
+ }
+ // ... build and send request, assert req.Project == "trade-non" and req.Location == "asia-northeast1"
 }
 ```
 
@@ -317,10 +325,10 @@ In `handler.go`, add to `actionValue`:
 
 ```go
 type actionValue struct {
-	Project          string `json:"project"`
-	Location         string `json:"location"`
-	ResourceType     string `json:"resource_type"`
-	// ... rest unchanged
+ Project          string `json:"project"`
+ Location         string `json:"location"`
+ ResourceType     string `json:"resource_type"`
+ // ... rest unchanged
 }
 ```
 
@@ -328,10 +336,10 @@ In `ServeHTTP`, add to the `ApprovalRequest` construction:
 
 ```go
 req := domain.ApprovalRequest{
-	Project:          av.Project,
-	Location:         av.Location,
-	ResourceType:     domain.ResourceType(av.ResourceType),
-	// ... rest unchanged
+ Project:          av.Project,
+ Location:         av.Location,
+ ResourceType:     domain.ResourceType(av.ResourceType),
+ // ... rest unchanged
 }
 ```
 
@@ -341,9 +349,9 @@ After constructing `av`, before building `req`:
 
 ```go
 if av.Project == "" || av.Location == "" {
-	slog.Warn("missing project or location in button value", "project", av.Project, "location", av.Location)
-	w.WriteHeader(http.StatusOK)
-	return
+ slog.Warn("missing project or location in button value", "project", av.Project, "location", av.Location)
+ w.WriteHeader(http.StatusOK)
+ return
 }
 ```
 
@@ -351,14 +359,14 @@ if av.Project == "" || av.Location == "" {
 
 ```go
 func TestHandler_RejectsEmptyProject(t *testing.T) {
-	av := actionValue{
-		ResourceType:  "service",
-		ResourceNames: "svc",
-		Action:        "canary_10",
-		IssuedAt:      time.Now().Unix(),
-		// Project and Location intentionally empty
-	}
-	// ... build request, assert 200 OK returned but usecase NOT called
+ av := actionValue{
+  ResourceType:  "service",
+  ResourceNames: "svc",
+  Action:        "canary_10",
+  IssuedAt:      time.Now().Unix(),
+  // Project and Location intentionally empty
+ }
+ // ... build request, assert 200 OK returned but usecase NOT called
 }
 ```
 
@@ -383,6 +391,7 @@ git commit -m "feat: parse and validate project/location from Slack button value
 ### Task 6: Block Kit — Add project/location to marshalActionValue
 
 **Files:**
+
 - Modify: `internal/adapter/output/slack/blockkit.go:267-297`
 - Modify: `internal/adapter/output/slack/blockkit_test.go`
 
@@ -392,26 +401,26 @@ In `blockkit_test.go`, add a test that `marshalActionValue` includes `project` a
 
 ```go
 func TestMarshalActionValue_IncludesProjectAndLocation(t *testing.T) {
-	req := &domain.ApprovalRequest{
-		Project:       "trade-non",
-		Location:      "asia-northeast1",
-		ResourceType:  domain.ResourceTypeService,
-		ResourceNames: "svc",
-		Action:        "canary_10",
-		IssuedAt:      1700000000,
-	}
-	val := marshalActionValue(req)
-	// decompress and parse
-	av, err := parseActionValue(val)
-	if err != nil {
-		t.Fatalf("parseActionValue failed: %v", err)
-	}
-	if av.Project != "trade-non" {
-		t.Errorf("expected project %q, got %q", "trade-non", av.Project)
-	}
-	if av.Location != "asia-northeast1" {
-		t.Errorf("expected location %q, got %q", "asia-northeast1", av.Location)
-	}
+ req := &domain.ApprovalRequest{
+  Project:       "trade-non",
+  Location:      "asia-northeast1",
+  ResourceType:  domain.ResourceTypeService,
+  ResourceNames: "svc",
+  Action:        "canary_10",
+  IssuedAt:      1700000000,
+ }
+ val := marshalActionValue(req)
+ // decompress and parse
+ av, err := parseActionValue(val)
+ if err != nil {
+  t.Fatalf("parseActionValue failed: %v", err)
+ }
+ if av.Project != "trade-non" {
+  t.Errorf("expected project %q, got %q", "trade-non", av.Project)
+ }
+ if av.Location != "asia-northeast1" {
+  t.Errorf("expected location %q, got %q", "asia-northeast1", av.Location)
+ }
 }
 ```
 
@@ -426,19 +435,19 @@ Expected: FAIL
 
 ```go
 type progressActionValue struct {
-	Project          string `json:"project"`
-	Location         string `json:"location"`
-	ResourceType     string `json:"resource_type"`
-	// ... rest unchanged
+ Project          string `json:"project"`
+ Location         string `json:"location"`
+ ResourceType     string `json:"resource_type"`
+ // ... rest unchanged
 }
 
 func marshalActionValue(req *domain.ApprovalRequest) string {
-	v := progressActionValue{
-		Project:          req.Project,
-		Location:         req.Location,
-		ResourceType:     string(req.ResourceType),
-		// ... rest unchanged
-	}
+ v := progressActionValue{
+  Project:          req.Project,
+  Location:         req.Location,
+  ResourceType:     string(req.ResourceType),
+  // ... rest unchanged
+ }
 ```
 
 - [ ] **Step 4: Update existing blockkit_test.go fixtures**
@@ -462,6 +471,7 @@ git commit -m "feat: include project/location in marshalActionValue button value
 ### Task 7: CLI — Add --project and --location flags
 
 **Files:**
+
 - Modify: `internal/adapter/input/cli/approve.go`
 - Modify: `internal/adapter/input/cli/deny.go`
 
@@ -471,19 +481,19 @@ Add `--project` and `--location` flags (required):
 
 ```go
 func newApproveCmd(useCase port.RunOpsUseCase) *cobra.Command {
-	var action, target, approver, project, location string
-	var noSlack bool
+ var action, target, approver, project, location string
+ var noSlack bool
 
-	cmd := &cobra.Command{
-		// ...
-		RunE: func(cmd *cobra.Command, args []string) error {
-			// ...
-			req := domain.ApprovalRequest{
-				Project:       project,
-				Location:      location,
-				ResourceType:  domain.ResourceType(resourceType),
-				// ... rest unchanged
-			}
+ cmd := &cobra.Command{
+  // ...
+  RunE: func(cmd *cobra.Command, args []string) error {
+   // ...
+   req := domain.ApprovalRequest{
+    Project:       project,
+    Location:      location,
+    ResourceType:  domain.ResourceType(resourceType),
+    // ... rest unchanged
+   }
 ```
 
 Add required flag marking:
@@ -501,16 +511,16 @@ Same pattern — add `--project` and `--location` flags:
 
 ```go
 func newDenyCmd(useCase port.RunOpsUseCase) *cobra.Command {
-	var approver, project, location string
-	var noSlack bool
+ var approver, project, location string
+ var noSlack bool
 
-	// ...
-	req := domain.ApprovalRequest{
-		Project:       project,
-		Location:      location,
-		ResourceType:  domain.ResourceType(args[0]),
-		// ... rest unchanged
-	}
+ // ...
+ req := domain.ApprovalRequest{
+  Project:       project,
+  Location:      location,
+  ResourceType:  domain.ResourceType(args[0]),
+  // ... rest unchanged
+ }
 ```
 
 ```go
@@ -537,6 +547,7 @@ git commit -m "feat: add required --project and --location flags to CLI"
 ### Task 8: Server and CLI Entrypoints — Remove Config dependency
 
 **Files:**
+
 - Modify: `cmd/server/main.go`
 - Modify: `cmd/runops/main.go`
 
@@ -552,23 +563,23 @@ Remove `projectID` and `location` from `config` struct and `loadConfig`. Keep on
 
 ```go
 type config struct {
-	slackSigningSecret string
-	port               string
+ slackSigningSecret string
+ port               string
 }
 
 func loadConfig() (config, error) {
-	cfg := config{
-		slackSigningSecret: os.Getenv("SLACK_SIGNING_SECRET"),
-		port:               os.Getenv("PORT"),
-	}
-	if cfg.slackSigningSecret == "" {
-		return config{}, fmt.Errorf("SLACK_SIGNING_SECRET is required")
-	}
-	if cfg.port == "" {
-		cfg.port = "8080"
-	}
-	slog.Info("config loaded", "port", cfg.port)
-	return cfg, nil
+ cfg := config{
+  slackSigningSecret: os.Getenv("SLACK_SIGNING_SECRET"),
+  port:               os.Getenv("PORT"),
+ }
+ if cfg.slackSigningSecret == "" {
+  return config{}, fmt.Errorf("SLACK_SIGNING_SECRET is required")
+ }
+ if cfg.port == "" {
+  cfg.port = "8080"
+ }
+ slog.Info("config loaded", "port", cfg.port)
+ return cfg, nil
 }
 ```
 
@@ -578,15 +589,15 @@ Replace `gcpadapter.NewController(gcpadapter.Config{...})` with `gcpadapter.NewC
 
 ```go
 func main() {
-	gcpCtrl := gcpadapter.NewController()
-	notifier := slacknotifier.NewResponseURLNotifier()
-	authChecker := auth.NewEnvAuthChecker()
-	svc := usecase.NewRunOpsService(gcpCtrl, notifier, authChecker, state.NewMemoryStore())
+ gcpCtrl := gcpadapter.NewController()
+ notifier := slacknotifier.NewResponseURLNotifier()
+ authChecker := auth.NewEnvAuthChecker()
+ svc := usecase.NewRunOpsService(gcpCtrl, notifier, authChecker, state.NewMemoryStore())
 
-	root := cli.NewRootCmd(svc)
-	if err := root.Execute(); err != nil {
-		os.Exit(1)
-	}
+ root := cli.NewRootCmd(svc)
+ if err := root.Execute(); err != nil {
+  os.Exit(1)
+ }
 }
 ```
 
@@ -612,6 +623,7 @@ git commit -m "refactor: remove GCP Config from server and CLI entrypoints"
 ### Task 9: notify-slack.sh — Add PROJECT_ID and REGION to button values
 
 **Files:**
+
 - Modify: `scripts/notify-slack.sh`
 - Modify: `internal/adapter/input/slack/notify_script_test.go`
 
@@ -621,14 +633,14 @@ In `notify_script_test.go`, update `TestNotifyScript_DryRun_ProducesValidJSON` t
 
 ```go
 cmd := exec.Command("bash", notifyScript(t),
-	"--dry-run",
-	"frontend-service",
-	"db-migrate-job",
-	"main",
-	"abc1234567890abcdef",
-	"frontend-service-00001-abc",
-	"test-project",
-	"asia-northeast1",
+ "--dry-run",
+ "frontend-service",
+ "db-migrate-job",
+ "main",
+ "abc1234567890abcdef",
+ "frontend-service-00001-abc",
+ "test-project",
+ "asia-northeast1",
 )
 ```
 
@@ -636,23 +648,23 @@ Add a new test `TestNotifyScript_ButtonValuesContainProjectAndLocation`:
 
 ```go
 func TestNotifyScript_ButtonValuesContainProjectAndLocation(t *testing.T) {
-	skipIfToolMissing(t, "bash", "gzip", "base64", "jq")
-	cmd := exec.Command("bash", notifyScript(t),
-		"--dry-run",
-		"frontend-service",
-		"db-migrate-job",
-		"main",
-		"abc1234567890abcdef",
-		"frontend-service-00001-abc",
-		"my-app-project",
-		"us-central1",
-	)
-	out, err := cmd.Output()
-	if err != nil {
-		t.Fatalf("script failed: %v", err)
-	}
-	// decode each button value and check project/location
-	// ... parse JSON, iterate buttons, decompress gz values, assert project=="my-app-project" and location=="us-central1"
+ skipIfToolMissing(t, "bash", "gzip", "base64", "jq")
+ cmd := exec.Command("bash", notifyScript(t),
+  "--dry-run",
+  "frontend-service",
+  "db-migrate-job",
+  "main",
+  "abc1234567890abcdef",
+  "frontend-service-00001-abc",
+  "my-app-project",
+  "us-central1",
+ )
+ out, err := cmd.Output()
+ if err != nil {
+  t.Fatalf("script failed: %v", err)
+ }
+ // decode each button value and check project/location
+ // ... parse JSON, iterate buttons, decompress gz values, assert project=="my-app-project" and location=="us-central1"
 }
 ```
 
@@ -715,6 +727,7 @@ git commit -m "feat: add project/location to notify-slack.sh button values"
 ### Task 10: cloudbuild.yaml — Pass PROJECT_ID and REGION to notify-slack.sh
 
 **Files:**
+
 - Modify: `cloudbuild.yaml`
 
 - [ ] **Step 1: Update notify-slack step**
@@ -751,6 +764,7 @@ git commit -m "feat: pass PROJECT_ID and REGION to notify-slack.sh in Cloud Buil
 ### Task 11: Scenario Tests (runn) — Add project/location to payloads
 
 **Files:**
+
 - Modify: `tests/runn/approve_canary.yaml`
 - Modify: `tests/runn/deny_operation.yaml`
 
@@ -778,6 +792,7 @@ git commit -m "test: add project/location to runn scenario test payloads"
 ### Task 12: Documentation — Update README and slack-setup
 
 **Files:**
+
 - Modify: `README.md`
 - Modify: `docs/slack-setup.md`
 
