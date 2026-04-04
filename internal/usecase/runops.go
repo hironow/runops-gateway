@@ -102,19 +102,15 @@ func (s *RunOpsService) approveService(ctx context.Context, req domain.ApprovalR
 
 	names := splitCSV(req.ResourceNames)
 	targets := splitCSV(req.Targets)
-	type shifted struct{ project, location, name, target string }
 	done := make([]shifted, 0, len(names))
 
 	for i, name := range names {
 		rev := csvAt(targets, i)
 		if err := s.gcp.ShiftTraffic(ctx, req.Project, req.Location, name, rev, percent); err != nil {
-			// Compensating rollback: restore all already-shifted resources to 0%.
-			for _, d := range done {
-				if rerr := s.gcp.ShiftTraffic(ctx, d.project, d.location, d.name, d.target, 0); rerr != nil {
-					slog.Error("compensating rollback failed", "resource", d.name, "err", rerr)
-				}
-			}
-			s.offerRetry(ctx, target, req, fmt.Sprintf("❌ エラーが発生しました: %v\nロールバック済み", err))
+			rollbackMsg := s.compensateRollback(ctx, done, func(d shifted) error {
+				return s.gcp.ShiftTraffic(ctx, d.project, d.location, d.name, d.target, 0)
+			})
+			s.offerRetry(ctx, target, req, fmt.Sprintf("❌ エラーが発生しました: %v\n%s", err, rollbackMsg))
 			return err
 		}
 		done = append(done, shifted{req.Project, req.Location, name, rev})
@@ -237,18 +233,15 @@ func (s *RunOpsService) approveWorkerPool(ctx context.Context, req domain.Approv
 
 	names := splitCSV(req.ResourceNames)
 	targets := splitCSV(req.Targets)
-	type shifted struct{ project, location, name, target string }
 	done := make([]shifted, 0, len(names))
 
 	for i, name := range names {
 		rev := csvAt(targets, i)
 		if err := s.gcp.UpdateWorkerPool(ctx, req.Project, req.Location, name, rev, percent); err != nil {
-			for _, d := range done {
-				if rerr := s.gcp.UpdateWorkerPool(ctx, d.project, d.location, d.name, d.target, 0); rerr != nil {
-					slog.Error("compensating rollback failed", "resource", d.name, "err", rerr)
-				}
-			}
-			s.offerRetry(ctx, target, req, fmt.Sprintf("❌ エラーが発生しました: %v\nロールバック済み", err))
+			rollbackMsg := s.compensateRollback(ctx, done, func(d shifted) error {
+				return s.gcp.UpdateWorkerPool(ctx, d.project, d.location, d.name, d.target, 0)
+			})
+			s.offerRetry(ctx, target, req, fmt.Sprintf("❌ エラーが発生しました: %v\n%s", err, rollbackMsg))
 			return err
 		}
 		done = append(done, shifted{req.Project, req.Location, name, rev})
@@ -316,6 +309,28 @@ func csvAt(ss []string, i int) string {
 		return ss[i]
 	}
 	return ""
+}
+
+// shifted records a successfully applied resource change for compensating rollback.
+type shifted struct{ project, location, name, target string }
+
+// compensateRollback attempts to undo all successfully applied changes.
+// Returns a human-readable message indicating whether rollback succeeded or failed.
+func (s *RunOpsService) compensateRollback(ctx context.Context, done []shifted, rollbackFn func(shifted) error) string {
+	if len(done) == 0 {
+		return "ロールバック不要（変更なし）"
+	}
+	var failed []string
+	for _, d := range done {
+		if err := rollbackFn(d); err != nil {
+			slog.Error("compensating rollback failed", "resource", d.name, "err", err)
+			failed = append(failed, d.name)
+		}
+	}
+	if len(failed) > 0 {
+		return fmt.Sprintf("⚠️ 一部ロールバック失敗（手動確認が必要）: %s", strings.Join(failed, ", "))
+	}
+	return "ロールバック済み"
 }
 
 // offerRetry replaces the Slack message with an error summary and a retry button.

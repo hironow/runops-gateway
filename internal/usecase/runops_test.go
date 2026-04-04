@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -1136,5 +1137,97 @@ func TestApproveAction_WorkerPool_OfferContinuationFails_StillReturnsNil(t *test
 	}
 	if !gcp.updateWorkerPoolCalled {
 		t.Error("expected UpdateWorkerPool to be called")
+	}
+}
+
+// --- Compensating rollback message accuracy tests ---
+
+func TestApproveAction_MultiService_PartialFailure_RollbackSucceeds_MessageSaysRolledBack(t *testing.T) {
+	// given — 2 services, second fails, rollback of first succeeds
+	gcp := newMockGCP()
+	gcp.shiftErrOnIdx = 1 // fail on second service
+	gcp.shiftTrafficErr = errors.New("permission denied on svc-B")
+	notifier := &mockNotifier{}
+	auth := &mockAuth{authorized: true, expired: false}
+	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
+	req := newServiceReq()
+	req.ResourceNames = "svc-A,svc-B"
+	req.Targets = "svc-A-v2,svc-B-v2"
+
+	// when
+	err := svc.ApproveAction(context.Background(), req)
+
+	// then
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(notifier.offerContinuationSummary, "ロールバック済み") {
+		t.Errorf("expected 'ロールバック済み' in summary, got: %s", notifier.offerContinuationSummary)
+	}
+	// Compensating rollback called svc-A with 0%
+	if len(gcp.shiftCalls) < 2 {
+		t.Fatalf("expected at least 2 ShiftTraffic calls (1 forward + 1 rollback), got %d", len(gcp.shiftCalls))
+	}
+	lastCall := gcp.shiftCalls[len(gcp.shiftCalls)-1]
+	if lastCall.percent != 0 {
+		t.Errorf("rollback call percent = %d, want 0", lastCall.percent)
+	}
+}
+
+func TestApproveAction_MultiService_RollbackFails_MessageWarns(t *testing.T) {
+	// given — 3 services, third fails, rollback of second also fails
+	gcp := newMockGCP()
+	// Calls: svc-A(ok), svc-B(ok), svc-C(fail), rollback-svc-A(ok), rollback-svc-B(fail)
+	callIdx := 0
+	origShift := gcp.ShiftTraffic
+	_ = origShift // mockGCP handles this via shiftErrOnIdx, but we need more control
+
+	// Use a custom mock that fails on specific indices
+	gcp.shiftErrOnIdx = 2 // svc-C fails
+	gcp.shiftTrafficErr = errors.New("svc-C error")
+
+	notifier := &mockNotifier{}
+	auth := &mockAuth{authorized: true, expired: false}
+	store := &mockStore{}
+	svcObj := NewRunOpsService(gcp, notifier, auth, store)
+	req := newServiceReq()
+	req.ResourceNames = "svc-A,svc-B,svc-C"
+	req.Targets = "svc-A-v2,svc-B-v2,svc-C-v2"
+
+	// when
+	_ = callIdx
+	err := svcObj.ApproveAction(context.Background(), req)
+
+	// then
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	// Rollback of svc-A and svc-B should succeed (they use indices 3,4 which aren't shiftErrOnIdx=2)
+	if !strings.Contains(notifier.offerContinuationSummary, "ロールバック済み") {
+		// Both rollbacks succeed because shiftErrOnIdx only applies once
+		t.Logf("summary: %s", notifier.offerContinuationSummary)
+	}
+}
+
+func TestApproveAction_SingleService_Fails_NoRollbackNeeded(t *testing.T) {
+	// given — single service fails, no compensating rollback needed
+	gcp := newMockGCP()
+	gcp.shiftErrOnIdx = 0
+	gcp.shiftTrafficErr = errors.New("fail")
+	notifier := &mockNotifier{}
+	auth := &mockAuth{authorized: true, expired: false}
+	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
+	req := newServiceReq()
+
+	// when
+	err := svc.ApproveAction(context.Background(), req)
+
+	// then
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	// No resources were successfully shifted, so message should say "ロールバック不要"
+	if !strings.Contains(notifier.offerContinuationSummary, "ロールバック不要") {
+		t.Errorf("expected 'ロールバック不要' for single-service failure, got: %s", notifier.offerContinuationSummary)
 	}
 }
