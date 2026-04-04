@@ -126,29 +126,67 @@ runops-gateway/
 - `--dry-run` フラグで標準出力にペイロードを出力（テスト用）
 - `TestNotifyScript_EndToEnd_PostToMockSlack_ButtonValuesDecodable` で bash→Go のラウンドトリップを保証
 
+## 2026-04-04 セッション引き継ぎ
+
+### 実施した作業
+
+1. **クロスプロジェクト対応** — `ApprovalRequest` に `Project`/`Location` 追加、GCPController インターフェースを per-call 引数に変更、Config 構造体を廃止。ボタン value JSON に `project`/`location` を埋め込み、gateway がステートレスルーターとして 1:N のプロジェクト構成をサポート
+2. **nn-makers (trade-non) を初の管理対象アプリとして設定** — WIF, IAM, Cloud Build, GHA 全て構築済み
+3. **`just init-app` / `just check-app` コマンド追加** — 管理対象アプリの初期化と設定検証
+4. **デプロイトポロジガイド作成** — `docs/guide-single-project.md`, `guide-two-projects.md`, `guide-multi-project.md`
+5. **多数のバグ修正** — Block Kit の action_id 重複、completionBlocks のネスト、cloudbuild.yaml の bash 変数エスケープ、Cloud Run API v2 の template 必須フィールド等
+
+### 未解決の問題（最優先）
+
+1. **OfferContinuation が 404 を返す問題**
+   - トラフィックシフト自体は成功するが、次のカナリアステップボタンを表示する `OfferContinuation` が Slack response_url への POST で 404 を返す
+   - `notifier.go` にレスポンスボディのログ出力を追加済み（`5e1e8db`）だが、まだ原因未特定
+   - 次のデプロイ後にログを確認して原因を特定する必要がある
+   - 可能性: response_url の使用回数制限（5回）超過、Block Kit ペイロード構造の問題
+
+2. **Slack API モックテストの構築が必要**
+   - 手動での動作確認が限界を超えている
+   - `httptest.NewServer` で mock Slack server を構築し、response_url への POST の全応答パターンをテスト
+   - テスト対象: 200 ok, 200 invalid_blocks, 404, 5xx, UpdateMessage成功→OfferContinuation失敗のフロー
+   - リトライボタン（`offerRetry`）のペイロード構造検証も含む
+
+### リトライボタン（実装済み・未コミット → コミット済み `98f587f`）
+
+エラー発生時に `UpdateMessage` でテキストエラーを表示する代わりに、`offerRetry` ヘルパーが `OfferContinuation` を使ってリトライボタン付きエラーメッセージを表示する。ただし OfferContinuation 自体が 404 で失敗する問題があるため、この機能の動作確認はまだ。
+
+### IAM 学び
+
+| 権限 | レベル | 理由 |
+|---|---|---|
+| `roles/run.developer` | **プロジェクトレベル** | サービスレベルだと `run.operations.get`（LRO ポーリング）が含まれない |
+| `roles/iam.serviceAccountUser` | ランタイム SA 単位 | Cloud Run がサービス更新時にランタイム SA を act as する必要がある |
+| `roles/artifactregistry.reader` | リポジトリ単位 | トラフィックシフト時に新リビジョンのイメージを pull する必要がある |
+
 ## 今後の課題
+
+### 最優先
+
+1. **OfferContinuation 404 問題の原因特定と修正** — ログ改善済み、次のテストで原因を特定
+
+2. **Slack API モックテスト構築** — response_url への POST の全応答パターンを `httptest.NewServer` でテスト
 
 ### 高優先度
 
-1. **Block Kit テンプレートの画像 URL** — `EnvironmentImageURL` が `placehold.co` の仮 URL を使用。GCS に本番用画像をホストして差し替えが必要
-
-2. **Cloud SQL インスタンス名の設定** — `approveJob` で `TriggerBackup(ctx, req.ResourceNames)` としているが、運用では Cloud SQL インスタンス名と Cloud Run ジョブ名が異なる場合がある。`ApprovalRequest` にフィールド追加またはマッピング設定の導入を検討
+1. **Cloud SQL インスタンス名の設定** — `approveJob` で `TriggerBackup(ctx, req.Project, req.ResourceNames)` としているが、Cloud SQL インスタンス名と Cloud Run ジョブ名が異なる場合がある
 
 ### 中優先度
 
-1. **Slack `chat.update` API 対応** — CLI 実行時に既存 Slack メッセージを更新する `SlackAPINotifier` が未実装（ADR 0006）。現在は `--no-slack` 時に stdout のみ
+1. **Slack `chat.update` API 対応** — CLI 実行時に既存 Slack メッセージを更新する `SlackAPINotifier` が未実装（ADR 0006）
 
-2. **状態管理の永続化** — 現在の `MemoryStore` はプロセス再起動でリセットされる。Firestore または Redis を `StateStore` インターフェースの実装として差し替えることで対応可能
+2. **状態管理の永続化** — `MemoryStore` はプロセス再起動でリセットされる
 
-3. **自動ロールバック** — Cloud Monitoring 連携による 5xx 閾値超過時の自動ロールバックが未実装
+3. **自動ロールバック** — Cloud Monitoring 連携による自動ロールバックが未実装
 
 ### 低優先度
 
 1. **Four-Eyes Principle** — コミット者と承認者の同一人物チェックが未実装
 
-2. **`output/gcp` の統合テスト** — 現在 58.8%。実 GCP SDK を呼ぶため、emulator またはモックサーバーでの integration テストが必要
-
-3. **`cmd/runops` の統合テスト** — `cmd/runops/main.go` にテストなし
+2. **`output/gcp` の統合テスト** — emulator またはモックサーバーでの integration テストが必要
 
 ## ローカル動作確認
 
