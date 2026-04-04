@@ -128,18 +128,38 @@ notify-slack ステップに `${PROJECT_ID}` と `${_REGION}` を追加:
   "${_REGION}"
 ```
 
-### 8. CLI
+### 8. OperationKey の更新
 
-`cmd/runops` の `approve` / `deny` コマンドに `--project` と `--location` フラグを追加（必須）。
+`OperationKey`（重複実行防止キー）に `Project` を含める:
 
-### 9. Environment Variables
+```go
+func OperationKey(req domain.ApprovalRequest) string {
+    return fmt.Sprintf("%s/%s/%s/%s/%d",
+        req.Project, req.ResourceType, req.ResourceNames, req.Action, req.IssuedAt)
+}
+```
+
+異なるプロジェクトで同名サービスが同時にカナリア実行されても衝突しない。
+
+### 9. 入力バリデーション
+
+`Project` と `Location` が空の場合はエラーを返す。バリデーションは入力アダプター層（handler.go / CLI）で行い、ユースケース層には有効な値のみが到達することを保証する。
+
+- **handler.go**: `parseActionValue` 後に `Project` / `Location` が空なら `slog.Warn` + 200 OK（Slack リトライ防止）
+- **CLI**: `--project` / `--location` フラグに `MarkFlagRequired` を設定
+
+### 10. CLI
+
+`cmd/runops` の `approve` / `deny` コマンドに `--project` と `--location` フラグを追加（必須、`MarkFlagRequired`）。
+
+### 11. Environment Variables
 
 | 変数 | 変更後 |
 |---|---|
 | `GOOGLE_CLOUD_PROJECT` | gateway 自身の設定のみ（Slack 署名検証のコンテキスト等）。GCP 操作には使わない |
 | `CLOUD_RUN_LOCATION` | 削除。ボタン value / CLI フラグから取得 |
 
-### 10. Test Strategy
+### 12. Test Strategy
 
 - **usecase/runops_test.go**: 全テストの `ApprovalRequest` に `Project` / `Location` を設定。mock GCPController のシグネチャ更新。`project` / `location` が controller に正しく渡されるか検証
 - **controller_test.go**: 新シグネチャに合わせて更新
@@ -148,12 +168,12 @@ notify-slack ステップに `${PROJECT_ID}` と `${_REGION}` を追加:
 - **notify_script_test.go**: 引数に `PROJECT_ID` / `REGION` を追加。デコードしたボタン value に `project` / `location` が入ってるか検証
 - **tests/runn/**: シナリオテストの YAML に `project` / `location` を追加
 
-### 11. Affected Files
+### 13. Affected Files
 
 | ファイル | 変更内容 |
 |---|---|
 | `internal/core/domain/domain.go` | `ApprovalRequest` に `Project`, `Location` 追加 |
-| `internal/core/port/port.go` | `GCPController` メソッドシグネチャ変更 |
+| `internal/core/port/port.go` | `GCPController` メソッドシグネチャ変更 + `OperationKey` に `Project` 追加 |
 | `internal/adapter/output/gcp/controller.go` | `Config` 削除、各メソッドが引数から project/location を使用 |
 | `internal/usecase/runops.go` | `req.Project` / `req.Location` を controller に渡す。nextReq/stopReq に伝搬 |
 | `internal/adapter/input/slack/handler.go` | `actionValue` に `Project` / `Location` 追加 |
@@ -161,6 +181,7 @@ notify-slack ステップに `${PROJECT_ID}` と `${_REGION}` を追加:
 | `internal/adapter/input/cli/approve.go` | `--project` / `--location` フラグ追加 |
 | `internal/adapter/input/cli/deny.go` | `--project` / `--location` フラグ追加 |
 | `cmd/server/main.go` | Controller 初期化から Config 削除 |
+| `cmd/runops/main.go` | Controller 初期化から Config 削除、環境変数依存を除去 |
 | `scripts/notify-slack.sh` | `PROJECT_ID` / `REGION` 引数追加、JSON value に埋め込み |
 | `cloudbuild.yaml` | notify-slack ステップに引数追加 |
 | `scripts/init-app.sh` | cloudbuild.yaml の substitution 置換は既存ロジックで対応 |
