@@ -74,7 +74,7 @@ func (s *RunOpsService) DenyAction(ctx context.Context, req domain.ApprovalReque
 		Mode:        modeFrom(req.Source),
 	}
 
-	blocks := completionBlock(fmt.Sprintf(":x: 操作が拒否されました。リソース: *%s*", req.ResourceNames))
+	blocks := completionBlocks(fmt.Sprintf(":x: 操作が拒否されました。リソース: *%s*", req.ResourceNames))
 	if err := s.notifier.ReplaceMessage(ctx, target, blocks); err != nil {
 		return fmt.Errorf("usecase: deny notification failed: %w", err)
 	}
@@ -209,7 +209,7 @@ func (s *RunOpsService) approveJob(ctx context.Context, req domain.ApprovalReque
 		return nil
 	}
 
-	blocks := completionBlock(summary)
+	blocks := completionBlocks(summary)
 	if err := s.notifier.ReplaceMessage(ctx, target, blocks); err != nil {
 		slog.Error("ReplaceMessage failed", "err", err)
 	}
@@ -316,12 +316,10 @@ func csvAt(ss []string, i int) string {
 	return ""
 }
 
-// completionBlock builds a Slack block payload for operation completion messages.
-func completionBlock(summary string) map[string]any {
-	return map[string]any{
-		"replace_original": true,
-		"blocks": []map[string]any{
-			{"type": "section", "text": map[string]any{"type": "mrkdwn", "text": summary}},
-		},
+// completionBlocks builds the Slack blocks array for operation completion messages.
+// The caller (ReplaceMessage) wraps this in the final payload with replace_original.
+func completionBlocks(summary string) []map[string]any {
+	return []map[string]any{
+		{"type": "section", "text": map[string]any{"type": "mrkdwn", "text": summary}},
 	}
 }

@@ -360,6 +360,17 @@ func TestDenyAction_Success(t *testing.T) {
 	if !notifier.replaceMessageCalled {
 		t.Error("expected ReplaceMessage to be called")
 	}
+	// blocks must be a slice (not a map with nested replace_original/blocks)
+	blocks, ok := notifier.replaceMessageBlocks.([]map[string]any)
+	if !ok {
+		t.Fatalf("expected blocks to be []map[string]any, got %T", notifier.replaceMessageBlocks)
+	}
+	if len(blocks) == 0 {
+		t.Fatal("expected non-empty blocks array")
+	}
+	if blocks[0]["type"] != "section" {
+		t.Errorf("expected first block type to be section, got %v", blocks[0]["type"])
+	}
 }
 
 func TestApproveAction_CLIMode(t *testing.T) {
