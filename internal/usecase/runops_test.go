@@ -42,21 +42,21 @@ type triggerBackupCall struct {
 }
 
 type mockGCP struct {
-	shiftCalls              []shiftCall // all recorded ShiftTraffic calls in order
-	shiftTrafficCalled      bool
-	shiftTrafficPercent     int32
-	shiftErrOnIdx           int   // if >= 0, return shiftTrafficErr on this call index
-	shiftTrafficErr         error
-	executeJobCalled        bool
-	executeJobErr           error
-	executeJobCalls         []executeJobCall
-	triggerBackupCalled     bool
-	triggerBackupErr        error
-	triggerBackupCalls      []triggerBackupCall
-	updateWorkerPoolCalled  bool
-	updateWorkerPoolErr     error
-	workerPoolCalls         []workerPoolCall // all recorded UpdateWorkerPool calls in order
-	workerPoolErrOnIdx      int              // if >= 0, return updateWorkerPoolErr on this call index
+	shiftCalls             []shiftCall // all recorded ShiftTraffic calls in order
+	shiftTrafficCalled     bool
+	shiftTrafficPercent    int32
+	shiftErrOnIdx          int // if >= 0, return shiftTrafficErr on this call index
+	shiftTrafficErr        error
+	executeJobCalled       bool
+	executeJobErr          error
+	executeJobCalls        []executeJobCall
+	triggerBackupCalled    bool
+	triggerBackupErr       error
+	triggerBackupCalls     []triggerBackupCall
+	updateWorkerPoolCalled bool
+	updateWorkerPoolErr    error
+	workerPoolCalls        []workerPoolCall // all recorded UpdateWorkerPool calls in order
+	workerPoolErrOnIdx     int              // if >= 0, return updateWorkerPoolErr on this call index
 }
 
 func newMockGCP() *mockGCP { return &mockGCP{shiftErrOnIdx: -1, workerPoolErrOnIdx: -1} }
@@ -95,16 +95,16 @@ func (m *mockGCP) UpdateWorkerPool(_ context.Context, project, location, name, t
 }
 
 type mockNotifier struct {
-	updateMessageCalled     bool
-	updateMessageErr        error
-	replaceMessageCalled    bool
-	replaceMessageBlocks    any
-	replaceErr              error
-	sendEphemeralCalled     bool
-	sendEphemeralText       string
-	offerContinuationCalled bool
+	updateMessageCalled      bool
+	updateMessageErr         error
+	replaceMessageCalled     bool
+	replaceMessageBlocks     any
+	replaceErr               error
+	sendEphemeralCalled      bool
+	sendEphemeralText        string
+	offerContinuationCalled  bool
 	offerContinuationNextReq *domain.ApprovalRequest
-	offerContinuationErr    error
+	offerContinuationErr     error
 }
 
 func (m *mockNotifier) UpdateMessage(_ context.Context, _ port.NotifyTarget, _ string) error {
@@ -896,8 +896,8 @@ func TestApproveAction_Service_Canary0_FallsBackToPercent10(t *testing.T) {
 func TestApproveAction_MultiWorkerPool_SecondFails_CompensatesFirst(t *testing.T) {
 	// given — first worker pool succeeds, second fails; first must be rolled back to 0%
 	gcp := &mockGCP{
-		shiftErrOnIdx:      -1,
-		workerPoolErrOnIdx: 1,
+		shiftErrOnIdx:       -1,
+		workerPoolErrOnIdx:  1,
 		updateWorkerPoolErr: errors.New("gcp error"),
 	}
 	notifier := &mockNotifier{}

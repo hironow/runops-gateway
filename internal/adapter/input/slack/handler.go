@@ -25,16 +25,16 @@ type actionValue struct {
 	Location         string `json:"location"`
 	ResourceType     string `json:"resource_type"`
 	ResourceNames    string `json:"resource_names"`
-	ResourceName     string `json:"resource_name"`     // legacy: singular form
+	ResourceName     string `json:"resource_name"` // legacy: singular form
 	Targets          string `json:"targets"`
-	Target           string `json:"target"`            // legacy: singular form
+	Target           string `json:"target"` // legacy: singular form
 	Action           string `json:"action"`
 	IssuedAt         int64  `json:"issued_at"`
 	MigrationDone    bool   `json:"migration_done"`
 	NextServiceNames string `json:"next_service_names"`
 	NextServiceName  string `json:"next_service_name"` // legacy: singular form
 	NextRevisions    string `json:"next_revisions"`
-	NextRevision     string `json:"next_revision"`     // legacy: singular form
+	NextRevision     string `json:"next_revision"` // legacy: singular form
 	NextAction       string `json:"next_action"`
 }
 

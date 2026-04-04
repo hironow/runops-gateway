@@ -66,6 +66,7 @@ Cloud Run / Cloud SQL API
 ### 4. Button Value JSON
 
 変更前:
+
 ```json
 {
   "resource_type": "service",
@@ -78,6 +79,7 @@ Cloud Run / Cloud SQL API
 ```
 
 変更後:
+
 ```json
 {
   "project": "trade-non",
@@ -98,6 +100,7 @@ gz 圧縮後のサイズ増加は約 30 文字。Slack の 2,000 文字制限に
 ユースケース層でカナリア段階の次ボタンを生成する際、`req.Project` と `req.Location` を `nextReq` / `stopReq` にコピーする。`marshalActionValue` が自動的に JSON に含める。
 
 影響箇所:
+
 - `approveService` の nextReq / stopReq 構築
 - `approveWorkerPool` の nextReq / stopReq 構築
 - `approveJob` の nextReq / denyReq 構築

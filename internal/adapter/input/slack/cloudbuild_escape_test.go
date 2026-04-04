@@ -27,18 +27,18 @@ func TestCloudbuild_BashVarsEscaped(t *testing.T) {
 	// Cloud Build built-in and user-defined substitution patterns.
 	// These are the ONLY variables allowed to use single $.
 	allowedSubstitutions := map[string]bool{
-		"PROJECT_ID":          true,
-		"COMMIT_SHA":          true,
-		"BRANCH_NAME":         true,
-		"BUILD_ID":            true,
-		"REPO_NAME":           true,
-		"REPO_FULL_NAME":      true,
-		"REVISION_ID":         true,
-		"SHORT_SHA":           true,
-		"TRIGGER_NAME":        true,
+		"PROJECT_ID":                true,
+		"COMMIT_SHA":                true,
+		"BRANCH_NAME":               true,
+		"BUILD_ID":                  true,
+		"REPO_NAME":                 true,
+		"REPO_FULL_NAME":            true,
+		"REVISION_ID":               true,
+		"SHORT_SHA":                 true,
+		"TRIGGER_NAME":              true,
 		"TRIGGER_BUILD_CONFIG_PATH": true,
 		"SERVICE_ACCOUNT_EMAIL":     true,
-		"LOCATION":            true,
+		"LOCATION":                  true,
 	}
 
 	// User-defined substitutions start with _.
