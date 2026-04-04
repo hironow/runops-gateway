@@ -128,22 +128,16 @@ gcloud iam service-accounts add-iam-policy-binding \
 >   --role="roles/artifactregistry.reader"
 > ```
 
-追加の Cloud Run Service / Jobs に対して `run.developer` が必要な場合は手動で付与する:
+追加の Cloud Run リソースに対して `run.developer` が必要な場合はプロジェクトレベルで付与する:
 
 ```bash
 CHATOPS_SA="slack-chatops-sa@YOUR_PROJECT.iam.gserviceaccount.com"
 
-# Cloud Run Service
-gcloud run services add-iam-policy-binding your-service \
-  --project=YOUR_PROJECT \
-  --region=asia-northeast1 \
-  --member="serviceAccount:${CHATOPS_SA}" \
-  --role="roles/run.developer"
-
-# Cloud Run Jobs
-gcloud run jobs add-iam-policy-binding your-migrate-job \
-  --project=YOUR_PROJECT \
-  --region=asia-northeast1 \
+# Cloud Run の操作権限（プロジェクトレベル）
+# Cloud Run の LRO（Long-Running Operation）ポーリングには run.operations.get 権限が必要で、
+# これはプロジェクトレベルの run.developer にのみ含まれる。
+# この 1 つのバインディングでプロジェクト内の全 Cloud Run Service / Jobs / Worker Pool を操作できる。
+gcloud projects add-iam-policy-binding YOUR_PROJECT \
   --member="serviceAccount:${CHATOPS_SA}" \
   --role="roles/run.developer"
 ```

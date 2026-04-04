@@ -80,16 +80,14 @@ for SVC in "${SERVICES[@]}"; do
       --project="$APP_PROJECT" --region="$REGION" --format="value(name)"
 done
 
-# ---- 2. chatops SA → run.developer on each service ----
+# ---- 2. chatops SA → run.developer (project-level) ----
 echo ""
-echo "[IAM: chatops SA -> Cloud Run Services]"
-for SVC in "${SERVICES[@]}"; do
-  SVC=$(echo "$SVC" | xargs)
-  SVC_IAM=$(gcloud run services get-iam-policy "$SVC" \
-    --project="$APP_PROJECT" --region="$REGION" --format=json 2>/dev/null || echo "{}")
-  check "run.developer on ${SVC}" \
-    bash -c "echo '$SVC_IAM' | grep -q 'run.developer' && echo '$SVC_IAM' | grep -q '$CHATOPS_SA'"
-done
+echo "[IAM: chatops SA -> run.developer (project-level)]"
+check "run.developer on project ${APP_PROJECT}" \
+  bash -c "gcloud projects get-iam-policy '$APP_PROJECT' \
+    --flatten='bindings[].members' \
+    --filter='bindings.members:$CHATOPS_SA AND bindings.role:roles/run.developer' \
+    --format='value(bindings.role)' 2>/dev/null | grep -q 'run.developer'"
 
 # ---- 3. chatops SA → iam.serviceAccountUser on runtime SA ----
 echo ""
@@ -129,12 +127,7 @@ warn "Job '${MIGRATION_JOB}' exists" \
   gcloud run jobs describe "$MIGRATION_JOB" \
     --project="$APP_PROJECT" --region="$REGION" --format="value(name)"
 
-if gcloud run jobs describe "$MIGRATION_JOB" --project="$APP_PROJECT" --region="$REGION" --format="value(name)" > /dev/null 2>&1; then
-  JOB_IAM=$(gcloud run jobs get-iam-policy "$MIGRATION_JOB" \
-    --project="$APP_PROJECT" --region="$REGION" --format=json 2>/dev/null || echo "{}")
-  check "run.developer on ${MIGRATION_JOB}" \
-    bash -c "echo '$JOB_IAM' | grep -q 'run.developer' && echo '$JOB_IAM' | grep -q '$CHATOPS_SA'"
-fi
+# run.developer はプロジェクトレベルで確認済み（セクション 2）のため、ジョブ単位のチェックは不要
 
 # ---- 8. WIF ----
 echo ""

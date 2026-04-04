@@ -19,8 +19,8 @@ runops-gateway を **GATEWAY_PROJECT** に、管理対象アプリを **APP_PROJ
 |  | (Cloud Run)            |                   |    |  | (your-app)       |  | Jobs      |             |
 |  |                        |  roles/           |    |  +------------------+  | (migrate) |             |
 |  |  SA: slack-chatops-sa -+--run.developer--> |    |         ^              +-----------+             |
-|  +------------------------+  (cross-project)  |    |         |                    ^                   |
-|                               ----------------+----+-> grant on each resource ----+                   |
+|  +------------------------+  (project-level)  |    |         |                    ^                   |
+|                               ----------------+----+-> covers all Run resources --+                   |
 |  +------------------------+                   |    |                                                  |
 |  | Secret Manager         |                   |    |  +------------------+                            |
 |  | - slack-signing-secret |                   |    |  | Cloud SQL        |                            |
@@ -41,7 +41,7 @@ Legend / 凡例:
 - GATEWAY_PROJECT: runops-gateway が稼働する GCP プロジェクト
 - APP_PROJECT: 管理対象アプリが稼働する GCP プロジェクト
 - slack-chatops-sa: runops-gateway のランタイムサービスアカウント
-- roles/run.developer: Cloud Run Service / Jobs の操作権限（APP_PROJECT 側で付与）
+- roles/run.developer: Cloud Run の操作権限（APP_PROJECT のプロジェクトレベルで付与）
 - roles/iam.serviceAccountUser: ランタイム SA への actAs 権限（Cloud Run 操作に必須、APP_PROJECT 側で付与）
 - roles/artifactregistry.reader: Artifact Registry の読み取り権限（トラフィック切り替え時のイメージ pull に必要、APP_PROJECT 側で付与）
 - roles/cloudsql.admin: Cloud SQL バックアップ権限（APP_PROJECT 側で付与）
@@ -95,24 +95,12 @@ GATEWAY_PROJECT=YOUR_GATEWAY_PROJECT
 APP_PROJECT=YOUR_APP_PROJECT
 CHATOPS_SA="slack-chatops-sa@${GATEWAY_PROJECT}.iam.gserviceaccount.com"
 
-# Cloud Run Service のトラフィック切り替え権限
-gcloud run services add-iam-policy-binding your-service \
-  --project=${APP_PROJECT} \
-  --region=asia-northeast1 \
-  --member="serviceAccount:${CHATOPS_SA}" \
-  --role="roles/run.developer"
-
-# Cloud Run Jobs のマイグレーション実行権限
-gcloud run jobs add-iam-policy-binding your-migrate-job \
-  --project=${APP_PROJECT} \
-  --region=asia-northeast1 \
-  --member="serviceAccount:${CHATOPS_SA}" \
-  --role="roles/run.developer"
-
-# Cloud Run Worker Pool がある場合
-gcloud run worker-pools add-iam-policy-binding your-worker-pool \
-  --project=${APP_PROJECT} \
-  --region=asia-northeast1 \
+# Cloud Run の操作権限（プロジェクトレベル）
+# Cloud Run の LRO（Long-Running Operation）ポーリングには run.operations.get 権限が必要で、
+# これはプロジェクトレベルの run.developer にのみ含まれる。
+# サービス単位のバインディングでは不足するため、プロジェクトレベルで付与する。
+# この 1 つのバインディングでプロジェクト内の全 Cloud Run Service / Jobs / Worker Pool を操作できる。
+gcloud projects add-iam-policy-binding ${APP_PROJECT} \
   --member="serviceAccount:${CHATOPS_SA}" \
   --role="roles/run.developer"
 
@@ -194,9 +182,10 @@ gcloud run services describe runops-gateway \
 # のフローが動作するか確認する
 
 # IAM が正しく設定されているか確認
-gcloud run services get-iam-policy your-service \
-  --project=YOUR_APP_PROJECT \
-  --region=asia-northeast1
+gcloud projects get-iam-policy YOUR_APP_PROJECT \
+  --flatten="bindings[].members" \
+  --filter="bindings.members:slack-chatops-sa AND bindings.role:roles/run.developer" \
+  --format="value(bindings.role)"
 
 gcloud secrets get-iam-policy slack-webhook-url \
   --project=YOUR_GATEWAY_PROJECT
