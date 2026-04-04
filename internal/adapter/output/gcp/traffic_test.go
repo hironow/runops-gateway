@@ -173,3 +173,115 @@ func TestIsTrafficAlreadyMatching_ZeroPercent_RevisionPresent(t *testing.T) {
 		t.Error("expected match when revision at 0% and desired is 0")
 	}
 }
+
+// --- Idempotency scenario tests ---
+
+func TestIdempotency_CanaryAlreadyAt30_SkipUpdate(t *testing.T) {
+	// given — canary already at 30%, requesting 30% again
+	current := []trafficEntry{
+		{revision: "rev-new", percent: 30},
+		{revision: "rev-old", percent: 70},
+	}
+
+	// then — isTrafficAlreadyMatching returns true → controller skips UpdateService
+	if !isTrafficAlreadyMatching(current, "rev-new", 30) {
+		t.Error("expected idempotent skip when canary already at desired percent")
+	}
+}
+
+func TestIdempotency_100Percent_NoActiveRevisionNeeded(t *testing.T) {
+	// given — revision at 100%, requesting 100% again
+	current := []trafficEntry{
+		{revision: "rev-new", percent: 100},
+	}
+
+	if !isTrafficAlreadyMatching(current, "rev-new", 100) {
+		t.Error("expected idempotent skip at 100%")
+	}
+}
+
+func TestIdempotency_RollbackAlreadyDone(t *testing.T) {
+	// given — rollback already done: target not in traffic
+	current := []trafficEntry{
+		{revision: "rev-old", percent: 100},
+	}
+
+	if !isTrafficAlreadyMatching(current, "rev-new", 0) {
+		t.Error("expected idempotent skip for already-rolled-back revision")
+	}
+}
+
+func TestIdempotency_DifferentPercent_MustUpdate(t *testing.T) {
+	// given — canary at 10%, requesting 30%
+	current := []trafficEntry{
+		{revision: "rev-new", percent: 10},
+		{revision: "rev-old", percent: 90},
+	}
+
+	if isTrafficAlreadyMatching(current, "rev-new", 30) {
+		t.Error("expected no skip when percent differs")
+	}
+}
+
+// --- selectActiveRevision for WorkerPool scenarios ---
+
+func TestSelectActiveRevision_WorkerPool_TargetIsLatest(t *testing.T) {
+	// given — target revision IS the latest, simulating the LATEST bug scenario
+	// WorkerPool with 2 instance splits: rev-v2(10%), rev-v1(90%)
+	// If we used LATEST and rev-v2 is latest, both splits would point to rev-v2.
+	// With selectActiveRevision, we correctly pick rev-v1.
+	traffic := []trafficEntry{
+		{revision: "pool-rev-v2", percent: 10},
+		{revision: "pool-rev-v1", percent: 90},
+	}
+
+	got := selectActiveRevision(traffic, "pool-rev-v2")
+	if got != "pool-rev-v1" {
+		t.Errorf("selectActiveRevision = %q, want pool-rev-v1", got)
+	}
+}
+
+func TestSelectActiveRevision_TiedPercent_PicksFirst(t *testing.T) {
+	// given — two revisions with equal traffic
+	traffic := []trafficEntry{
+		{revision: "rev-A", percent: 50},
+		{revision: "rev-B", percent: 50},
+	}
+
+	// when — either is acceptable; implementation picks the first one found (strict >)
+	got := selectActiveRevision(traffic, "rev-C")
+	if got != "rev-A" {
+		t.Errorf("selectActiveRevision = %q, want rev-A (first with highest)", got)
+	}
+}
+
+// --- Compensating rollback: selectActiveRevision during rollback ---
+
+func TestSelectActiveRevision_RollbackScenario(t *testing.T) {
+	// given — canary in progress: rev-old(90%), rev-new(10%)
+	// Rollback means ShiftTraffic(rev-new, 0): need activeRevision = rev-old
+	traffic := []trafficEntry{
+		{revision: "rev-old", percent: 90},
+		{revision: "rev-new", percent: 10},
+	}
+
+	got := selectActiveRevision(traffic, "rev-new")
+	if got != "rev-old" {
+		t.Errorf("rollback: selectActiveRevision = %q, want rev-old", got)
+	}
+}
+
+func TestSelectActiveRevision_CompensatingRollback_AfterPartialShift(t *testing.T) {
+	// given — svc-A was shifted to 10%, now compensating back to 0%
+	// Current traffic on svc-A: rev-new(10%), rev-old(90%)
+	traffic := []trafficEntry{
+		{revision: "rev-new", percent: 10},
+		{revision: "rev-old", percent: 90},
+	}
+
+	// Compensating: ShiftTraffic(svc-A, rev-new, 0) → activeRevision = rev-old
+	got := selectActiveRevision(traffic, "rev-new")
+	if got != "rev-old" {
+		t.Errorf("compensating rollback: selectActiveRevision = %q, want rev-old", got)
+	}
+}

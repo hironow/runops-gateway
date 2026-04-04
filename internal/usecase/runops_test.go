@@ -46,7 +46,8 @@ type mockGCP struct {
 	shiftCalls             []shiftCall // all recorded ShiftTraffic calls in order
 	shiftTrafficCalled     bool
 	shiftTrafficPercent    int32
-	shiftErrOnIdx          int // if >= 0, return shiftTrafficErr on this call index
+	shiftErrOnIdx          int            // if >= 0, return shiftTrafficErr on this call index
+	shiftErrOnIndices      map[int]error  // multiple indices with specific errors (takes priority over shiftErrOnIdx)
 	shiftTrafficErr        error
 	executeJobCalled       bool
 	executeJobErr          error
@@ -67,6 +68,9 @@ func (m *mockGCP) ShiftTraffic(_ context.Context, project, location, name, targe
 	m.shiftCalls = append(m.shiftCalls, shiftCall{project, location, name, target, percent})
 	m.shiftTrafficCalled = true
 	m.shiftTrafficPercent = percent
+	if e, ok := m.shiftErrOnIndices[idx]; ok {
+		return e
+	}
 	if m.shiftErrOnIdx >= 0 && idx == m.shiftErrOnIdx {
 		return m.shiftTrafficErr
 	}
@@ -1174,38 +1178,68 @@ func TestApproveAction_MultiService_PartialFailure_RollbackSucceeds_MessageSaysR
 	}
 }
 
-func TestApproveAction_MultiService_RollbackFails_MessageWarns(t *testing.T) {
-	// given — 3 services, third fails, rollback of second also fails
+func TestApproveAction_MultiService_RollbackAlsoFails_MessageWarnsPartialFailure(t *testing.T) {
+	// given — 3 services: svc-A(ok), svc-B(ok), svc-C(fail)
+	// Compensating: rollback-svc-A(ok), rollback-svc-B(FAIL)
+	// Call indices: 0=svc-A, 1=svc-B, 2=svc-C(fail), 3=rollback-svc-A, 4=rollback-svc-B
 	gcp := newMockGCP()
-	// Calls: svc-A(ok), svc-B(ok), svc-C(fail), rollback-svc-A(ok), rollback-svc-B(fail)
-	callIdx := 0
-	origShift := gcp.ShiftTraffic
-	_ = origShift // mockGCP handles this via shiftErrOnIdx, but we need more control
-
-	// Use a custom mock that fails on specific indices
-	gcp.shiftErrOnIdx = 2 // svc-C fails
-	gcp.shiftTrafficErr = errors.New("svc-C error")
+	gcp.shiftErrOnIndices = map[int]error{
+		2: errors.New("svc-C error"),
+		4: errors.New("rollback svc-B failed"),
+	}
 
 	notifier := &mockNotifier{}
 	auth := &mockAuth{authorized: true, expired: false}
-	store := &mockStore{}
-	svcObj := NewRunOpsService(gcp, notifier, auth, store)
+	svcObj := NewRunOpsService(gcp, notifier, auth, &mockStore{})
 	req := newServiceReq()
 	req.ResourceNames = "svc-A,svc-B,svc-C"
 	req.Targets = "svc-A-v2,svc-B-v2,svc-C-v2"
 
 	// when
-	_ = callIdx
 	err := svcObj.ApproveAction(context.Background(), req)
 
 	// then
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	// Rollback of svc-A and svc-B should succeed (they use indices 3,4 which aren't shiftErrOnIdx=2)
+	// Must warn about partial rollback failure
+	if !strings.Contains(notifier.offerContinuationSummary, "一部ロールバック失敗") {
+		t.Errorf("expected '一部ロールバック失敗' in summary, got: %s", notifier.offerContinuationSummary)
+	}
+	// Must include the failed resource name
+	if !strings.Contains(notifier.offerContinuationSummary, "svc-B") {
+		t.Errorf("expected failed resource 'svc-B' in summary, got: %s", notifier.offerContinuationSummary)
+	}
+}
+
+func TestApproveAction_MultiService_RollbackSucceeds_MessageSaysRolledBack(t *testing.T) {
+	// given — 3 services: svc-A(ok), svc-B(ok), svc-C(fail)
+	// Compensating: rollback-svc-A(ok), rollback-svc-B(ok)
+	gcp := newMockGCP()
+	gcp.shiftErrOnIndices = map[int]error{
+		2: errors.New("svc-C error"),
+	}
+
+	notifier := &mockNotifier{}
+	auth := &mockAuth{authorized: true, expired: false}
+	svcObj := NewRunOpsService(gcp, notifier, auth, &mockStore{})
+	req := newServiceReq()
+	req.ResourceNames = "svc-A,svc-B,svc-C"
+	req.Targets = "svc-A-v2,svc-B-v2,svc-C-v2"
+
+	// when
+	err := svcObj.ApproveAction(context.Background(), req)
+
+	// then
+	if err == nil {
+		t.Fatal("expected error")
+	}
 	if !strings.Contains(notifier.offerContinuationSummary, "ロールバック済み") {
-		// Both rollbacks succeed because shiftErrOnIdx only applies once
-		t.Logf("summary: %s", notifier.offerContinuationSummary)
+		t.Errorf("expected 'ロールバック済み' in summary, got: %s", notifier.offerContinuationSummary)
+	}
+	// Must NOT contain the partial failure warning
+	if strings.Contains(notifier.offerContinuationSummary, "一部ロールバック失敗") {
+		t.Error("should not warn about partial failure when all rollbacks succeed")
 	}
 }
 

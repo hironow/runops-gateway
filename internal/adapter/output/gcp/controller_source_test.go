@@ -57,6 +57,78 @@ func TestShiftTraffic_GetServiceBeforeUpdate(t *testing.T) {
 	}
 }
 
+// TestShiftTraffic_UsesIdempotencyCheck verifies that ShiftTraffic calls
+// isTrafficAlreadyMatching before UpdateService to enable idempotent behavior.
+func TestShiftTraffic_UsesIdempotencyCheck(t *testing.T) {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	controllerPath := filepath.Join(filepath.Dir(file), "controller.go")
+	content, err := os.ReadFile(controllerPath)
+	if err != nil {
+		t.Fatalf("failed to read controller.go: %v", err)
+	}
+
+	src := string(content)
+	startIdx := strings.Index(src, "func (c *Controller) ShiftTraffic(")
+	if startIdx == -1 {
+		t.Fatal("ShiftTraffic method not found")
+	}
+	endIdx := strings.Index(src[startIdx+1:], "\nfunc ")
+	var methodBody string
+	if endIdx == -1 {
+		methodBody = src[startIdx:]
+	} else {
+		methodBody = src[startIdx : startIdx+1+endIdx]
+	}
+
+	if !strings.Contains(methodBody, "isTrafficAlreadyMatching(") {
+		t.Error("ShiftTraffic must call isTrafficAlreadyMatching for idempotent behavior")
+	}
+	if !strings.Contains(methodBody, "selectActiveRevision(") {
+		t.Error("ShiftTraffic must call selectActiveRevision to pick highest-traffic revision")
+	}
+}
+
+// TestUpdateWorkerPool_UsesExplicitRevisions verifies that UpdateWorkerPool uses
+// selectActiveRevision instead of LATEST to prevent the bug where target == latest
+// ready revision makes both splits point to the same revision.
+func TestUpdateWorkerPool_UsesExplicitRevisions(t *testing.T) {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	controllerPath := filepath.Join(filepath.Dir(file), "controller.go")
+	content, err := os.ReadFile(controllerPath)
+	if err != nil {
+		t.Fatalf("failed to read controller.go: %v", err)
+	}
+
+	src := string(content)
+	startIdx := strings.Index(src, "func (c *Controller) UpdateWorkerPool(")
+	if startIdx == -1 {
+		t.Fatal("UpdateWorkerPool method not found")
+	}
+	endIdx := strings.Index(src[startIdx+1:], "\nfunc ")
+	var methodBody string
+	if endIdx == -1 {
+		methodBody = src[startIdx:]
+	} else {
+		methodBody = src[startIdx : startIdx+1+endIdx]
+	}
+
+	if strings.Contains(methodBody, "INSTANCE_SPLIT_ALLOCATION_TYPE_LATEST") {
+		t.Error("UpdateWorkerPool must NOT use LATEST — use explicit revision via selectActiveRevision")
+	}
+	if !strings.Contains(methodBody, "selectActiveRevision(") {
+		t.Error("UpdateWorkerPool must call selectActiveRevision to pick active revision by traffic")
+	}
+	if !strings.Contains(methodBody, "isTrafficAlreadyMatching(") {
+		t.Error("UpdateWorkerPool must call isTrafficAlreadyMatching for idempotent behavior")
+	}
+}
+
 // TestUpdateWorkerPool_GetWorkerPoolBeforeUpdate verifies that controller.go
 // calls GetWorkerPool before UpdateWorkerPool.
 func TestUpdateWorkerPool_GetWorkerPoolBeforeUpdate(t *testing.T) {
