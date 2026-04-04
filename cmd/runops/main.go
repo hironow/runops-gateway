@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"fmt"
 	"os"
 
 	"github.com/hironow/runops-gateway/internal/adapter/input/cli"
@@ -12,7 +14,12 @@ import (
 )
 
 func main() {
-	gcpCtrl := gcpadapter.NewController()
+	gcpCtrl, err := gcpadapter.NewController(context.Background())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to create GCP controller: %v\n", err)
+		os.Exit(1)
+	}
+	defer gcpCtrl.Close()
 
 	notifier := slacknotifier.NewResponseURLNotifier()
 	authChecker := auth.NewEnvAuthChecker()

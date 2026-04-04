@@ -12,11 +12,44 @@ import (
 )
 
 // Controller implements port.GCPController using GCP client libraries.
-type Controller struct{}
+// Clients are created once and reused across calls.
+type Controller struct {
+	services    *run.ServicesClient
+	jobs        *run.JobsClient
+	workerPools *run.WorkerPoolsClient
+}
 
-// NewController creates a new GCP Controller.
-func NewController() *Controller {
-	return &Controller{}
+// NewController creates a new GCP Controller with persistent gRPC clients.
+func NewController(ctx context.Context) (*Controller, error) {
+	svc, err := run.NewServicesClient(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("gcp: create services client: %w", err)
+	}
+	jobs, err := run.NewJobsClient(ctx)
+	if err != nil {
+		svc.Close()
+		return nil, fmt.Errorf("gcp: create jobs client: %w", err)
+	}
+	wp, err := run.NewWorkerPoolsClient(ctx)
+	if err != nil {
+		svc.Close()
+		jobs.Close()
+		return nil, fmt.Errorf("gcp: create worker pools client: %w", err)
+	}
+	return &Controller{services: svc, jobs: jobs, workerPools: wp}, nil
+}
+
+// Close releases all underlying gRPC connections.
+func (c *Controller) Close() {
+	if c.services != nil {
+		c.services.Close()
+	}
+	if c.jobs != nil {
+		c.jobs.Close()
+	}
+	if c.workerPools != nil {
+		c.workerPools.Close()
+	}
 }
 
 // ShiftTraffic updates traffic allocation for a Cloud Run Service revision.
@@ -24,37 +57,26 @@ func (c *Controller) ShiftTraffic(ctx context.Context, project, location, servic
 	slog.InfoContext(ctx, "gcp: shifting traffic",
 		"project", project, "location", location, "service", serviceName, "revision", revision, "percent", percent)
 
-	client, err := run.NewServicesClient(ctx)
-	if err != nil {
-		return fmt.Errorf("gcp: create services client: %w", err)
-	}
-	defer client.Close()
-
 	servicePath := fmt.Sprintf("projects/%s/locations/%s/services/%s",
 		project, location, serviceName)
 
-	// GET the current service to preserve template and other fields.
 	// Cloud Run API v2 requires template in UpdateServiceRequest.
-	svc, err := client.GetService(ctx, &runpb.GetServiceRequest{Name: servicePath})
+	svc, err := c.services.GetService(ctx, &runpb.GetServiceRequest{Name: servicePath})
 	if err != nil {
 		return fmt.Errorf("gcp: get service: %w", err)
 	}
 
-	// Build traffic entries for idempotency check and active revision selection.
 	entries := make([]trafficEntry, len(svc.Traffic))
 	for i, t := range svc.Traffic {
 		entries[i] = trafficEntry{revision: t.Revision, percent: t.Percent}
 	}
 
-	// Idempotency: skip update if traffic already matches desired state.
 	if isTrafficAlreadyMatching(entries, revision, percent) {
 		slog.InfoContext(ctx, "gcp: traffic already at desired state, skipping update",
 			"service", serviceName, "revision", revision, "percent", percent)
 		return nil
 	}
 
-	// Find the currently active revision (the one serving the most traffic)
-	// to assign remaining traffic during canary.
 	activeRevision := selectActiveRevision(entries, revision)
 	if activeRevision == "" {
 		activeRevision = svc.GetLatestReadyRevision()
@@ -76,7 +98,7 @@ func (c *Controller) ShiftTraffic(ctx context.Context, project, location, servic
 	}
 	svc.Traffic = traffic
 
-	op, err := client.UpdateService(ctx, &runpb.UpdateServiceRequest{Service: svc})
+	op, err := c.services.UpdateService(ctx, &runpb.UpdateServiceRequest{Service: svc})
 	if err != nil {
 		return fmt.Errorf("gcp: update service: %w", err)
 	}
@@ -93,12 +115,6 @@ func (c *Controller) ShiftTraffic(ctx context.Context, project, location, servic
 func (c *Controller) ExecuteJob(ctx context.Context, project, location, jobName string, args []string) error {
 	slog.InfoContext(ctx, "gcp: executing job", "project", project, "location", location, "job", jobName, "args", args)
 
-	client, err := run.NewJobsClient(ctx)
-	if err != nil {
-		return fmt.Errorf("gcp: create jobs client: %w", err)
-	}
-	defer client.Close()
-
 	jobPath := fmt.Sprintf("projects/%s/locations/%s/jobs/%s",
 		project, location, jobName)
 
@@ -111,7 +127,7 @@ func (c *Controller) ExecuteJob(ctx context.Context, project, location, jobName 
 		},
 	}
 
-	op, err := client.RunJob(ctx, req)
+	op, err := c.jobs.RunJob(ctx, req)
 	if err != nil {
 		return fmt.Errorf("gcp: run job: %w", err)
 	}
@@ -123,42 +139,30 @@ func (c *Controller) ExecuteJob(ctx context.Context, project, location, jobName 
 	return nil
 }
 
-// UpdateWorkerPool shifts instance allocation for a Cloud Run Worker Pool revision to the given percent.
+// UpdateWorkerPool shifts instance allocation for a Cloud Run Worker Pool revision.
 func (c *Controller) UpdateWorkerPool(ctx context.Context, project, location, poolName, revision string, percent int32) error {
 	slog.InfoContext(ctx, "gcp: updating worker pool",
 		"project", project, "location", location, "pool", poolName, "revision", revision, "percent", percent)
 
-	client, err := run.NewWorkerPoolsClient(ctx)
-	if err != nil {
-		return fmt.Errorf("gcp: create worker pools client: %w", err)
-	}
-	defer client.Close()
-
 	poolPath := fmt.Sprintf("projects/%s/locations/%s/workerPools/%s",
 		project, location, poolName)
 
-	// GET the current worker pool to preserve template and other fields.
-	pool, err := client.GetWorkerPool(ctx, &runpb.GetWorkerPoolRequest{Name: poolPath})
+	pool, err := c.workerPools.GetWorkerPool(ctx, &runpb.GetWorkerPoolRequest{Name: poolPath})
 	if err != nil {
 		return fmt.Errorf("gcp: get worker pool: %w", err)
 	}
 
-	// Build entries for idempotency check and active revision selection.
 	entries := make([]trafficEntry, len(pool.InstanceSplits))
 	for i, s := range pool.InstanceSplits {
 		entries[i] = trafficEntry{revision: s.Revision, percent: s.Percent}
 	}
 
-	// Idempotency: skip update if instance split already matches desired state.
 	if isTrafficAlreadyMatching(entries, revision, percent) {
 		slog.InfoContext(ctx, "gcp: worker pool already at desired state, skipping update",
 			"pool", poolName, "revision", revision, "percent", percent)
 		return nil
 	}
 
-	// Find the active revision (highest traffic, excluding target) — same pattern as ShiftTraffic.
-	// Using explicit revision names instead of LATEST prevents the bug where
-	// target == latest ready revision makes both splits point to the same revision.
 	activeRevision := selectActiveRevision(entries, revision)
 	if activeRevision == "" {
 		activeRevision = pool.GetLatestCreatedRevision()
@@ -180,7 +184,7 @@ func (c *Controller) UpdateWorkerPool(ctx context.Context, project, location, po
 	}
 	pool.InstanceSplits = splits
 
-	op, err := client.UpdateWorkerPool(ctx, &runpb.UpdateWorkerPoolRequest{WorkerPool: pool})
+	op, err := c.workerPools.UpdateWorkerPool(ctx, &runpb.UpdateWorkerPoolRequest{WorkerPool: pool})
 	if err != nil {
 		return fmt.Errorf("gcp: update worker pool: %w", err)
 	}
@@ -211,7 +215,6 @@ func (c *Controller) TriggerBackup(ctx context.Context, project, instanceName st
 		return fmt.Errorf("gcp: insert backup run: %w", err)
 	}
 
-	// Poll until done (Cloud SQL uses its own Operation type, not LRO)
 	for {
 		status, err := svc.Operations.Get(project, op.Name).Context(ctx).Do()
 		if err != nil {

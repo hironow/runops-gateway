@@ -11,71 +11,64 @@ import (
 // Compile-time check: Controller must satisfy port.GCPController.
 var _ port.GCPController = (*gcp.Controller)(nil)
 
-func TestNewController(t *testing.T) {
-	// given / when
-	ctrl := gcp.NewController()
+// newTestController creates a Controller for testing.
+// In CI without GCP credentials, NewController may fail — tests below handle both cases.
+func newTestController(t *testing.T) *gcp.Controller {
+	t.Helper()
+	ctrl, err := gcp.NewController(context.Background())
+	if err != nil {
+		t.Skipf("skipping: cannot create GCP controller (no credentials?): %v", err)
+	}
+	t.Cleanup(ctrl.Close)
+	return ctrl
+}
 
-	// then
+func TestNewController(t *testing.T) {
+	ctrl := newTestController(t)
 	if ctrl == nil {
 		t.Fatal("expected non-nil controller")
 	}
 }
 
 func TestShiftTraffic_CancelledContext(t *testing.T) {
-	// given
-	ctrl := gcp.NewController()
+	ctrl := newTestController(t)
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // pre-cancel
+	cancel()
 
-	// when
 	err := ctrl.ShiftTraffic(ctx, "test-project", "asia-northeast1", "my-service", "my-revision", 10)
-
-	// then — should fail (either context error or GCP auth error in test env)
 	if err == nil {
 		t.Error("expected error with cancelled context")
 	}
 }
 
 func TestExecuteJob_CancelledContext(t *testing.T) {
-	// given
-	ctrl := gcp.NewController()
+	ctrl := newTestController(t)
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // pre-cancel
+	cancel()
 
-	// when
 	err := ctrl.ExecuteJob(ctx, "test-project", "asia-northeast1", "my-job", []string{"--migrate"})
-
-	// then — should fail (either context error or GCP auth error in test env)
 	if err == nil {
 		t.Error("expected error with cancelled context")
 	}
 }
 
 func TestTriggerBackup_CancelledContext(t *testing.T) {
-	// given
-	ctrl := gcp.NewController()
+	ctrl := newTestController(t)
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // pre-cancel
+	cancel()
 
-	// when
 	err := ctrl.TriggerBackup(ctx, "test-project", "my-instance")
-
-	// then — should fail (either context error or GCP auth error in test env)
 	if err == nil {
 		t.Error("expected error with cancelled context")
 	}
 }
 
 func TestUpdateWorkerPool_CancelledContext(t *testing.T) {
-	// given
-	ctrl := gcp.NewController()
+	ctrl := newTestController(t)
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // pre-cancel
+	cancel()
 
-	// when
 	err := ctrl.UpdateWorkerPool(ctx, "test-project", "asia-northeast1", "my-pool", "my-revision", 20)
-
-	// then — should fail (either context error or GCP auth error in test env)
 	if err == nil {
 		t.Error("expected error with cancelled context")
 	}

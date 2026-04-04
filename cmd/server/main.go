@@ -28,7 +28,12 @@ func main() {
 	}
 
 	// Wire adapters
-	gcpCtrl := gcpadapter.NewController()
+	gcpCtrl, err := gcpadapter.NewController(context.Background())
+	if err != nil {
+		slog.Error("failed to create GCP controller", "error", err)
+		os.Exit(1)
+	}
+	defer gcpCtrl.Close()
 
 	notifier := slacknotifier.NewResponseURLNotifier()
 	authChecker := auth.NewEnvAuthChecker()

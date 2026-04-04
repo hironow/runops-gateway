@@ -78,11 +78,11 @@ func TestNotifyTargetSlackMode(t *testing.T) {
 	// given
 	target := port.NotifyTarget{
 		ResponseURL: "https://hooks.slack.com/actions/xxx",
-		Mode:        "slack",
+		Mode:        port.ModeSlack,
 	}
 
 	// when / then
-	if target.Mode != "slack" {
+	if target.Mode != port.ModeSlack {
 		t.Errorf("Mode = %q, want %q", target.Mode, "slack")
 	}
 	if target.ResponseURL == "" {
@@ -94,11 +94,11 @@ func TestNotifyTargetStdoutMode(t *testing.T) {
 	// given
 	target := port.NotifyTarget{
 		ResponseURL: "",
-		Mode:        "stdout",
+		Mode:        port.ModeStdout,
 	}
 
 	// when / then
-	if target.Mode != "stdout" {
+	if target.Mode != port.ModeStdout {
 		t.Errorf("Mode = %q, want %q", target.Mode, "stdout")
 	}
 	if target.ResponseURL != "" {

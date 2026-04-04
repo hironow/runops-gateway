@@ -27,12 +27,17 @@ func NewRunOpsService(gcp port.GCPController, notifier port.Notifier, auth port.
 	return &RunOpsService{gcp: gcp, notifier: notifier, auth: auth, store: store}
 }
 
+func targetFrom(req domain.ApprovalRequest) port.NotifyTarget {
+	mode := port.ModeSlack
+	if req.Source == "cli" {
+		mode = port.ModeStdout
+	}
+	return port.NotifyTarget{ResponseURL: req.ResponseURL, Mode: mode}
+}
+
 // ApproveAction executes the approved operation described by req.
 func (s *RunOpsService) ApproveAction(ctx context.Context, req domain.ApprovalRequest) error {
-	target := port.NotifyTarget{
-		ResponseURL: req.ResponseURL,
-		Mode:        modeFrom(req.Source),
-	}
+	target := targetFrom(req)
 
 	key := port.OperationKey(req)
 	if !s.store.TryLock(key) {
@@ -69,22 +74,21 @@ func (s *RunOpsService) ApproveAction(ctx context.Context, req domain.ApprovalRe
 
 // DenyAction notifies the relevant parties that the operation was denied.
 func (s *RunOpsService) DenyAction(ctx context.Context, req domain.ApprovalRequest) error {
-	target := port.NotifyTarget{
-		ResponseURL: req.ResponseURL,
-		Mode:        modeFrom(req.Source),
-	}
-
+	target := targetFrom(req)
 	if err := s.notifier.ReplaceMessage(ctx, target, fmt.Sprintf(":x: 操作が拒否されました。リソース: *%s*", req.ResourceNames)); err != nil {
 		return fmt.Errorf("usecase: deny notification failed: %w", err)
 	}
 	return nil
 }
 
-// approveService handles traffic shifting for Cloud Run services.
-// ResourceNames/Targets may be comma-separated lists; all resources are shifted
-// atomically with compensating rollback (to 0%) if any individual shift fails.
-func (s *RunOpsService) approveService(ctx context.Context, req domain.ApprovalRequest, target port.NotifyTarget) error {
-	if err := s.notifier.UpdateMessage(ctx, target, "⏳ トラフィック切り替え中..."); err != nil {
+// shiftFn is a function that shifts traffic/instances for a single resource.
+type shiftFn func(ctx context.Context, project, location, name, target string, percent int32) error
+
+// approveShift is the shared logic for approveService and approveWorkerPool.
+// It parses the action, iterates over CSV resources, applies the shift function,
+// handles compensating rollback on failure, and offers continuation buttons.
+func (s *RunOpsService) approveShift(ctx context.Context, req domain.ApprovalRequest, target port.NotifyTarget, shift shiftFn, progressMsg, summaryFmt string) error {
+	if err := s.notifier.UpdateMessage(ctx, target, progressMsg); err != nil {
 		slog.Error("UpdateMessage failed", "err", err)
 	}
 
@@ -106,9 +110,9 @@ func (s *RunOpsService) approveService(ctx context.Context, req domain.ApprovalR
 
 	for i, name := range names {
 		rev := csvAt(targets, i)
-		if err := s.gcp.ShiftTraffic(ctx, req.Project, req.Location, name, rev, percent); err != nil {
+		if err := shift(ctx, req.Project, req.Location, name, rev, percent); err != nil {
 			rollbackMsg := s.compensateRollback(ctx, done, func(d shifted) error {
-				return s.gcp.ShiftTraffic(ctx, d.project, d.location, d.name, d.target, 0)
+				return shift(ctx, d.project, d.location, d.name, d.target, 0)
 			})
 			s.offerRetry(ctx, target, req, fmt.Sprintf("❌ エラーが発生しました: %v\n%s", err, rollbackMsg))
 			return err
@@ -116,40 +120,31 @@ func (s *RunOpsService) approveService(ctx context.Context, req domain.ApprovalR
 		done = append(done, shifted{req.Project, req.Location, name, rev})
 	}
 
-	summary := fmt.Sprintf("✅ トラフィック切り替え完了。サービス: *%s* → %d%%", req.ResourceNames, percent)
-	var nextReq *domain.ApprovalRequest
-	var stopReq *domain.ApprovalRequest
+	summary := fmt.Sprintf(summaryFmt, req.ResourceNames, percent)
+	var nextReq, stopReq *domain.ApprovalRequest
 	if act.Name != "rollback" {
 		nextPercent := domain.NextCanaryPercent(percent)
 		if nextPercent > 0 {
-			nextReq = &domain.ApprovalRequest{
-				Project:       req.Project,
-				Location:      req.Location,
-				ResourceType:  req.ResourceType,
-				ResourceNames: req.ResourceNames,
-				Targets:       req.Targets,
-				Action:        fmt.Sprintf("canary_%d", nextPercent),
-				Source:        req.Source,
-				IssuedAt:      time.Now().Unix(),
-				ResponseURL:   req.ResponseURL,
-			}
-			stopReq = &domain.ApprovalRequest{
-				Project:       req.Project,
-				Location:      req.Location,
-				ResourceType:  req.ResourceType,
-				ResourceNames: req.ResourceNames,
-				Targets:       req.Targets,
-				Action:        "rollback",
-				Source:        req.Source,
-				IssuedAt:      time.Now().Unix(),
-				ResponseURL:   req.ResponseURL,
-			}
+			nextReq = cloneRequest(req, fmt.Sprintf("canary_%d", nextPercent))
+			stopReq = cloneRequest(req, "rollback")
 		}
 	}
 	if err := s.notifier.OfferContinuation(ctx, target, summary, nextReq, stopReq); err != nil {
 		slog.Error("OfferContinuation failed", "err", err)
 	}
 	return nil
+}
+
+func (s *RunOpsService) approveService(ctx context.Context, req domain.ApprovalRequest, target port.NotifyTarget) error {
+	return s.approveShift(ctx, req, target, s.gcp.ShiftTraffic,
+		"⏳ トラフィック切り替え中...",
+		"✅ トラフィック切り替え完了。サービス: *%s* → %d%%")
+}
+
+func (s *RunOpsService) approveWorkerPool(ctx context.Context, req domain.ApprovalRequest, target port.NotifyTarget) error {
+	return s.approveShift(ctx, req, target, s.gcp.UpdateWorkerPool,
+		"⏳ インスタンス割り当て切り替え中...",
+		"✅ インスタンス割り当て切り替え完了。プール: *%s* → %d%%")
 }
 
 // approveJob handles DB backup and Cloud Run job execution.
@@ -174,32 +169,18 @@ func (s *RunOpsService) approveJob(ctx context.Context, req domain.ApprovalReque
 
 	summary := fmt.Sprintf("✅ マイグレーション完了。ジョブ: *%s*", req.ResourceNames)
 
-	// If next_* fields are set, offer the canary button with migration_done=true.
 	if req.NextServiceNames != "" {
-		nextReq := &domain.ApprovalRequest{
-			Project:       req.Project,
-			Location:      req.Location,
-			ResourceType:  domain.ResourceTypeService,
-			ResourceNames: req.NextServiceNames,
-			Targets:       req.NextRevisions,
-			Action:        req.NextAction,
-			Source:        req.Source,
-			IssuedAt:      time.Now().Unix(),
-			ResponseURL:   req.ResponseURL,
-			MigrationDone: true,
-		}
-		// Deny button for the canary step (migration_done=true, no confirm needed)
-		denyReq := &domain.ApprovalRequest{
-			Project:       req.Project,
-			Location:      req.Location,
-			ResourceType:  domain.ResourceTypeService,
-			ResourceNames: req.NextServiceNames,
-			Targets:       req.NextRevisions,
-			Action:        req.NextAction,
-			Source:        req.Source,
-			IssuedAt:      time.Now().Unix(),
-			ResponseURL:   req.ResponseURL,
-		}
+		nextReq := cloneRequest(req, req.NextAction)
+		nextReq.ResourceType = domain.ResourceTypeService
+		nextReq.ResourceNames = req.NextServiceNames
+		nextReq.Targets = req.NextRevisions
+		nextReq.MigrationDone = true
+
+		denyReq := cloneRequest(req, req.NextAction)
+		denyReq.ResourceType = domain.ResourceTypeService
+		denyReq.ResourceNames = req.NextServiceNames
+		denyReq.Targets = req.NextRevisions
+
 		if err := s.notifier.OfferContinuation(ctx, target, summary, nextReq, denyReq); err != nil {
 			slog.Error("OfferContinuation failed", "err", err)
 		}
@@ -212,84 +193,7 @@ func (s *RunOpsService) approveJob(ctx context.Context, req domain.ApprovalReque
 	return nil
 }
 
-// approveWorkerPool handles instance allocation shifting for worker pools.
-// Applies the same all-or-nothing CSV iteration and compensating rollback as approveService.
-func (s *RunOpsService) approveWorkerPool(ctx context.Context, req domain.ApprovalRequest, target port.NotifyTarget) error {
-	if err := s.notifier.UpdateMessage(ctx, target, "⏳ インスタンス割り当て切り替え中..."); err != nil {
-		slog.Error("UpdateMessage failed", "err", err)
-	}
-
-	act, err := domain.ParseAction(req.Action)
-	if err != nil {
-		_ = s.notifier.UpdateMessage(ctx, target, "❌ 無効なアクション: "+req.Action)
-		return err
-	}
-	percent := act.Percent
-	if act.Name == "rollback" {
-		percent = 0
-	} else if percent == 0 {
-		percent = 10
-	}
-
-	names := splitCSV(req.ResourceNames)
-	targets := splitCSV(req.Targets)
-	done := make([]shifted, 0, len(names))
-
-	for i, name := range names {
-		rev := csvAt(targets, i)
-		if err := s.gcp.UpdateWorkerPool(ctx, req.Project, req.Location, name, rev, percent); err != nil {
-			rollbackMsg := s.compensateRollback(ctx, done, func(d shifted) error {
-				return s.gcp.UpdateWorkerPool(ctx, d.project, d.location, d.name, d.target, 0)
-			})
-			s.offerRetry(ctx, target, req, fmt.Sprintf("❌ エラーが発生しました: %v\n%s", err, rollbackMsg))
-			return err
-		}
-		done = append(done, shifted{req.Project, req.Location, name, rev})
-	}
-
-	summary := fmt.Sprintf("✅ インスタンス割り当て切り替え完了。プール: *%s* → %d%%", req.ResourceNames, percent)
-	var nextReq *domain.ApprovalRequest
-	var stopReq *domain.ApprovalRequest
-	if act.Name != "rollback" {
-		nextPercent := domain.NextCanaryPercent(percent)
-		if nextPercent > 0 {
-			nextReq = &domain.ApprovalRequest{
-				Project:       req.Project,
-				Location:      req.Location,
-				ResourceType:  req.ResourceType,
-				ResourceNames: req.ResourceNames,
-				Targets:       req.Targets,
-				Action:        fmt.Sprintf("canary_%d", nextPercent),
-				Source:        req.Source,
-				IssuedAt:      time.Now().Unix(),
-				ResponseURL:   req.ResponseURL,
-			}
-			stopReq = &domain.ApprovalRequest{
-				Project:       req.Project,
-				Location:      req.Location,
-				ResourceType:  req.ResourceType,
-				ResourceNames: req.ResourceNames,
-				Targets:       req.Targets,
-				Action:        "rollback",
-				Source:        req.Source,
-				IssuedAt:      time.Now().Unix(),
-				ResponseURL:   req.ResponseURL,
-			}
-		}
-	}
-	if err := s.notifier.OfferContinuation(ctx, target, summary, nextReq, stopReq); err != nil {
-		slog.Error("OfferContinuation failed", "err", err)
-	}
-	return nil
-}
-
-// modeFrom converts a source identifier to a notification mode string.
-func modeFrom(source string) string {
-	if source == "cli" {
-		return "stdout"
-	}
-	return "slack"
-}
+// --- helpers ---
 
 // splitCSV splits a comma-separated string into trimmed, non-empty elements.
 func splitCSV(s string) []string {
@@ -303,7 +207,6 @@ func splitCSV(s string) []string {
 	return result
 }
 
-// csvAt returns the element at index i in a slice, or "" if out of bounds.
 func csvAt(ss []string, i int) string {
 	if i < len(ss) {
 		return ss[i]
@@ -311,11 +214,8 @@ func csvAt(ss []string, i int) string {
 	return ""
 }
 
-// shifted records a successfully applied resource change for compensating rollback.
 type shifted struct{ project, location, name, target string }
 
-// compensateRollback attempts to undo all successfully applied changes.
-// Returns a human-readable message indicating whether rollback succeeded or failed.
 func (s *RunOpsService) compensateRollback(ctx context.Context, done []shifted, rollbackFn func(shifted) error) string {
 	if len(done) == 0 {
 		return "ロールバック不要（変更なし）"
@@ -333,26 +233,17 @@ func (s *RunOpsService) compensateRollback(ctx context.Context, done []shifted, 
 	return "ロールバック済み"
 }
 
-// offerRetry replaces the Slack message with an error summary and a retry button.
-// The retry button carries the same ApprovalRequest with a fresh IssuedAt timestamp.
+// cloneRequest creates a copy of req with a new action and fresh IssuedAt.
+func cloneRequest(req domain.ApprovalRequest, action string) *domain.ApprovalRequest {
+	r := req
+	r.Action = action
+	r.IssuedAt = time.Now().Unix()
+	return &r
+}
+
 func (s *RunOpsService) offerRetry(ctx context.Context, target port.NotifyTarget, req domain.ApprovalRequest, errMsg string) {
-	retryReq := &domain.ApprovalRequest{
-		Project:          req.Project,
-		Location:         req.Location,
-		ResourceType:     req.ResourceType,
-		ResourceNames:    req.ResourceNames,
-		Targets:          req.Targets,
-		Action:           req.Action,
-		Source:           req.Source,
-		IssuedAt:         time.Now().Unix(),
-		ResponseURL:      req.ResponseURL,
-		MigrationDone:    req.MigrationDone,
-		NextServiceNames: req.NextServiceNames,
-		NextRevisions:    req.NextRevisions,
-		NextAction:       req.NextAction,
-	}
+	retryReq := cloneRequest(req, req.Action)
 	if err := s.notifier.OfferContinuation(ctx, target, errMsg, retryReq, nil); err != nil {
 		slog.Error("OfferContinuation (retry) failed", "err", err)
 	}
 }
-

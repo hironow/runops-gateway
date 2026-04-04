@@ -31,19 +31,22 @@ type GCPController interface {
 	UpdateWorkerPool(ctx context.Context, project, location, poolName, revision string, percent int32) error
 }
 
+// NotifyMode identifies the delivery channel for notifications.
+type NotifyMode string
+
+const (
+	ModeSlack  NotifyMode = "slack"
+	ModeStdout NotifyMode = "stdout"
+)
+
 // NotifyTarget describes where and how a notification should be delivered.
-// It supports both Slack and stdout (CLI) modes without importing Slack-specific types.
 type NotifyTarget struct {
-	// ResponseURL is the Slack response_url used for async message updates.
-	// Empty when Mode is "stdout".
 	ResponseURL string
-	// Mode is the delivery channel: "slack" or "stdout".
-	Mode string
+	Mode        NotifyMode
 }
 
 // Notifier is a secondary port for sending user-facing notifications.
 type Notifier interface {
-	// UpdateMessage replaces an existing Slack message (or prints to stdout) with text.
 	UpdateMessage(ctx context.Context, target NotifyTarget, text string) error
 	// ReplaceMessage replaces an existing message with a mrkdwn section block.
 	ReplaceMessage(ctx context.Context, target NotifyTarget, text string) error

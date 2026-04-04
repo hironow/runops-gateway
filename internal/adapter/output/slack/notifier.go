@@ -25,7 +25,7 @@ func NewResponseURLNotifier() *ResponseURLNotifier {
 
 // UpdateMessage replaces the original Slack message with a text update.
 func (n *ResponseURLNotifier) UpdateMessage(ctx context.Context, target port.NotifyTarget, text string) error {
-	if target.Mode == "stdout" {
+	if target.Mode == port.ModeStdout {
 		slog.InfoContext(ctx, "[stdout notifier] update", "text", text)
 		return nil
 	}
@@ -34,7 +34,7 @@ func (n *ResponseURLNotifier) UpdateMessage(ctx context.Context, target port.Not
 
 // ReplaceMessage replaces the original Slack message with a mrkdwn section block.
 func (n *ResponseURLNotifier) ReplaceMessage(ctx context.Context, target port.NotifyTarget, text string) error {
-	if target.Mode == "stdout" {
+	if target.Mode == port.ModeStdout {
 		slog.InfoContext(ctx, "[stdout notifier] replace", "text", text)
 		return nil
 	}
@@ -43,7 +43,7 @@ func (n *ResponseURLNotifier) ReplaceMessage(ctx context.Context, target port.No
 
 // SendEphemeral sends a message visible only to the specified user.
 func (n *ResponseURLNotifier) SendEphemeral(ctx context.Context, target port.NotifyTarget, userID, text string) error {
-	if target.Mode == "stdout" {
+	if target.Mode == port.ModeStdout {
 		slog.WarnContext(ctx, "[stdout notifier] ephemeral", "user", userID, "text", text)
 		return nil
 	}
@@ -54,7 +54,7 @@ func (n *ResponseURLNotifier) SendEphemeral(ctx context.Context, target port.Not
 // If any button value would exceed Slack's 2,000-char limit the buttons cannot be used, so an
 // explicit error message is posted instead to prevent silent failure.
 func (n *ResponseURLNotifier) OfferContinuation(ctx context.Context, target port.NotifyTarget, summary string, nextReq *domain.ApprovalRequest, stopReq *domain.ApprovalRequest) error {
-	if target.Mode == "stdout" {
+	if target.Mode == port.ModeStdout {
 		slog.InfoContext(ctx, "[stdout notifier] continuation", "summary", summary)
 		if nextReq != nil {
 			slog.InfoContext(ctx, "[stdout notifier] next step available", "action", nextReq.Action)

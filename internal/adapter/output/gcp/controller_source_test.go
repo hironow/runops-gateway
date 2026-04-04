@@ -8,15 +8,10 @@ import (
 	"testing"
 )
 
-// TestShiftTraffic_GetServiceBeforeUpdate verifies that controller.go
-// calls GetService before UpdateService in ShiftTraffic.
-//
-// Cloud Run API v2 requires the template field in UpdateServiceRequest.
-// Without fetching the current service first, the update fails with
-// "required field not present". This test prevents regressions by
-// scanning the source code for the correct call order.
-func TestShiftTraffic_GetServiceBeforeUpdate(t *testing.T) {
-	_, file, _, ok := runtime.Caller(0)
+// extractMethodBody reads controller.go and extracts the body of the named method.
+func extractMethodBody(t *testing.T, methodSignature string) string {
+	t.Helper()
+	_, file, _, ok := runtime.Caller(1)
 	if !ok {
 		t.Fatal("runtime.Caller failed")
 	}
@@ -25,148 +20,71 @@ func TestShiftTraffic_GetServiceBeforeUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to read controller.go: %v", err)
 	}
-
 	src := string(content)
-
-	// Extract the ShiftTraffic method body
-	startIdx := strings.Index(src, "func (c *Controller) ShiftTraffic(")
+	startIdx := strings.Index(src, methodSignature)
 	if startIdx == -1 {
-		t.Fatal("ShiftTraffic method not found in controller.go")
+		t.Fatalf("method %q not found in controller.go", methodSignature)
 	}
-
-	// Find the next method boundary
 	endIdx := strings.Index(src[startIdx+1:], "\nfunc ")
-	var methodBody string
 	if endIdx == -1 {
-		methodBody = src[startIdx:]
-	} else {
-		methodBody = src[startIdx : startIdx+1+endIdx]
+		return src[startIdx:]
 	}
+	return src[startIdx : startIdx+1+endIdx]
+}
 
-	getIdx := strings.Index(methodBody, "client.GetService(")
-	updateIdx := strings.Index(methodBody, "client.UpdateService(")
+func TestShiftTraffic_GetServiceBeforeUpdate(t *testing.T) {
+	body := extractMethodBody(t, "func (c *Controller) ShiftTraffic(")
 
+	getIdx := strings.Index(body, ".GetService(")
+	updateIdx := strings.Index(body, ".UpdateService(")
 	if getIdx == -1 {
-		t.Error("ShiftTraffic must call client.GetService to fetch current service state before updating")
+		t.Error("ShiftTraffic must call client.GetService")
 	}
 	if updateIdx == -1 {
 		t.Error("ShiftTraffic must call client.UpdateService")
 	}
 	if getIdx != -1 && updateIdx != -1 && getIdx >= updateIdx {
-		t.Error("ShiftTraffic must call GetService BEFORE UpdateService (Cloud Run API v2 requires template field)")
+		t.Error("ShiftTraffic must call GetService BEFORE UpdateService")
 	}
 }
 
-// TestShiftTraffic_UsesIdempotencyCheck verifies that ShiftTraffic calls
-// isTrafficAlreadyMatching before UpdateService to enable idempotent behavior.
 func TestShiftTraffic_UsesIdempotencyCheck(t *testing.T) {
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
-	}
-	controllerPath := filepath.Join(filepath.Dir(file), "controller.go")
-	content, err := os.ReadFile(controllerPath)
-	if err != nil {
-		t.Fatalf("failed to read controller.go: %v", err)
-	}
+	body := extractMethodBody(t, "func (c *Controller) ShiftTraffic(")
 
-	src := string(content)
-	startIdx := strings.Index(src, "func (c *Controller) ShiftTraffic(")
-	if startIdx == -1 {
-		t.Fatal("ShiftTraffic method not found")
-	}
-	endIdx := strings.Index(src[startIdx+1:], "\nfunc ")
-	var methodBody string
-	if endIdx == -1 {
-		methodBody = src[startIdx:]
-	} else {
-		methodBody = src[startIdx : startIdx+1+endIdx]
-	}
-
-	if !strings.Contains(methodBody, "isTrafficAlreadyMatching(") {
+	if !strings.Contains(body, "isTrafficAlreadyMatching(") {
 		t.Error("ShiftTraffic must call isTrafficAlreadyMatching for idempotent behavior")
 	}
-	if !strings.Contains(methodBody, "selectActiveRevision(") {
+	if !strings.Contains(body, "selectActiveRevision(") {
 		t.Error("ShiftTraffic must call selectActiveRevision to pick highest-traffic revision")
 	}
 }
 
-// TestUpdateWorkerPool_UsesExplicitRevisions verifies that UpdateWorkerPool uses
-// selectActiveRevision instead of LATEST to prevent the bug where target == latest
-// ready revision makes both splits point to the same revision.
-func TestUpdateWorkerPool_UsesExplicitRevisions(t *testing.T) {
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
-	}
-	controllerPath := filepath.Join(filepath.Dir(file), "controller.go")
-	content, err := os.ReadFile(controllerPath)
-	if err != nil {
-		t.Fatalf("failed to read controller.go: %v", err)
-	}
-
-	src := string(content)
-	startIdx := strings.Index(src, "func (c *Controller) UpdateWorkerPool(")
-	if startIdx == -1 {
-		t.Fatal("UpdateWorkerPool method not found")
-	}
-	endIdx := strings.Index(src[startIdx+1:], "\nfunc ")
-	var methodBody string
-	if endIdx == -1 {
-		methodBody = src[startIdx:]
-	} else {
-		methodBody = src[startIdx : startIdx+1+endIdx]
-	}
-
-	if strings.Contains(methodBody, "INSTANCE_SPLIT_ALLOCATION_TYPE_LATEST") {
-		t.Error("UpdateWorkerPool must NOT use LATEST — use explicit revision via selectActiveRevision")
-	}
-	if !strings.Contains(methodBody, "selectActiveRevision(") {
-		t.Error("UpdateWorkerPool must call selectActiveRevision to pick active revision by traffic")
-	}
-	if !strings.Contains(methodBody, "isTrafficAlreadyMatching(") {
-		t.Error("UpdateWorkerPool must call isTrafficAlreadyMatching for idempotent behavior")
-	}
-}
-
-// TestUpdateWorkerPool_GetWorkerPoolBeforeUpdate verifies that controller.go
-// calls GetWorkerPool before UpdateWorkerPool.
 func TestUpdateWorkerPool_GetWorkerPoolBeforeUpdate(t *testing.T) {
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
-	}
-	controllerPath := filepath.Join(filepath.Dir(file), "controller.go")
-	content, err := os.ReadFile(controllerPath)
-	if err != nil {
-		t.Fatalf("failed to read controller.go: %v", err)
-	}
+	body := extractMethodBody(t, "func (c *Controller) UpdateWorkerPool(")
 
-	src := string(content)
-
-	startIdx := strings.Index(src, "func (c *Controller) UpdateWorkerPool(")
-	if startIdx == -1 {
-		t.Fatal("UpdateWorkerPool method not found in controller.go")
-	}
-
-	endIdx := strings.Index(src[startIdx+1:], "\nfunc ")
-	var methodBody string
-	if endIdx == -1 {
-		methodBody = src[startIdx:]
-	} else {
-		methodBody = src[startIdx : startIdx+1+endIdx]
-	}
-
-	getIdx := strings.Index(methodBody, "client.GetWorkerPool(")
-	updateIdx := strings.Index(methodBody, "client.UpdateWorkerPool(")
-
+	getIdx := strings.Index(body, ".GetWorkerPool(")
+	updateIdx := strings.Index(body, ".UpdateWorkerPool(")
 	if getIdx == -1 {
-		t.Error("UpdateWorkerPool must call client.GetWorkerPool to fetch current state before updating")
+		t.Error("UpdateWorkerPool must call client.GetWorkerPool")
 	}
 	if updateIdx == -1 {
 		t.Error("UpdateWorkerPool must call client.UpdateWorkerPool")
 	}
 	if getIdx != -1 && updateIdx != -1 && getIdx >= updateIdx {
-		t.Error("UpdateWorkerPool must call GetWorkerPool BEFORE UpdateWorkerPool (Cloud Run API v2 requires template field)")
+		t.Error("UpdateWorkerPool must call GetWorkerPool BEFORE UpdateWorkerPool")
+	}
+}
+
+func TestUpdateWorkerPool_UsesExplicitRevisions(t *testing.T) {
+	body := extractMethodBody(t, "func (c *Controller) UpdateWorkerPool(")
+
+	if strings.Contains(body, "INSTANCE_SPLIT_ALLOCATION_TYPE_LATEST") {
+		t.Error("UpdateWorkerPool must NOT use LATEST — use explicit revision via selectActiveRevision")
+	}
+	if !strings.Contains(body, "selectActiveRevision(") {
+		t.Error("UpdateWorkerPool must call selectActiveRevision to pick active revision by traffic")
+	}
+	if !strings.Contains(body, "isTrafficAlreadyMatching(") {
+		t.Error("UpdateWorkerPool must call isTrafficAlreadyMatching for idempotent behavior")
 	}
 }
