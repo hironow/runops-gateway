@@ -96,25 +96,29 @@ func (m *mockGCP) UpdateWorkerPool(_ context.Context, project, location, name, t
 
 type mockNotifier struct {
 	updateMessageCalled      bool
+	updateMessageText        string
 	updateMessageErr         error
 	replaceMessageCalled     bool
-	replaceMessageBlocks     any
+	replaceMessageText     string
 	replaceErr               error
 	sendEphemeralCalled      bool
 	sendEphemeralText        string
 	offerContinuationCalled  bool
+	offerContinuationSummary string
 	offerContinuationNextReq *domain.ApprovalRequest
+	offerContinuationStopReq *domain.ApprovalRequest
 	offerContinuationErr     error
 }
 
-func (m *mockNotifier) UpdateMessage(_ context.Context, _ port.NotifyTarget, _ string) error {
+func (m *mockNotifier) UpdateMessage(_ context.Context, _ port.NotifyTarget, text string) error {
 	m.updateMessageCalled = true
+	m.updateMessageText = text
 	return m.updateMessageErr
 }
 
-func (m *mockNotifier) ReplaceMessage(_ context.Context, _ port.NotifyTarget, blocks any) error {
+func (m *mockNotifier) ReplaceMessage(_ context.Context, _ port.NotifyTarget, text string) error {
 	m.replaceMessageCalled = true
-	m.replaceMessageBlocks = blocks
+	m.replaceMessageText = text
 	return m.replaceErr
 }
 
@@ -124,9 +128,11 @@ func (m *mockNotifier) SendEphemeral(_ context.Context, _ port.NotifyTarget, _ s
 	return nil
 }
 
-func (m *mockNotifier) OfferContinuation(_ context.Context, _ port.NotifyTarget, _ string, nextReq *domain.ApprovalRequest, _ *domain.ApprovalRequest) error {
+func (m *mockNotifier) OfferContinuation(_ context.Context, _ port.NotifyTarget, summary string, nextReq *domain.ApprovalRequest, stopReq *domain.ApprovalRequest) error {
 	m.offerContinuationCalled = true
+	m.offerContinuationSummary = summary
 	m.offerContinuationNextReq = nextReq
+	m.offerContinuationStopReq = stopReq
 	return m.offerContinuationErr
 }
 
@@ -263,13 +269,8 @@ func TestApproveAction_Job_Success(t *testing.T) {
 	if !notifier.replaceMessageCalled {
 		t.Error("expected ReplaceMessage to be called")
 	}
-	// blocks must be a slice (not a nested map with replace_original)
-	blocks, ok := notifier.replaceMessageBlocks.([]map[string]any)
-	if !ok {
-		t.Fatalf("expected blocks to be []map[string]any, got %T", notifier.replaceMessageBlocks)
-	}
-	if len(blocks) == 0 {
-		t.Fatal("expected non-empty blocks array")
+	if notifier.replaceMessageText == "" {
+		t.Fatal("expected non-empty ReplaceMessage text")
 	}
 }
 
@@ -427,16 +428,8 @@ func TestDenyAction_Success(t *testing.T) {
 	if !notifier.replaceMessageCalled {
 		t.Error("expected ReplaceMessage to be called")
 	}
-	// blocks must be a slice (not a map with nested replace_original/blocks)
-	blocks, ok := notifier.replaceMessageBlocks.([]map[string]any)
-	if !ok {
-		t.Fatalf("expected blocks to be []map[string]any, got %T", notifier.replaceMessageBlocks)
-	}
-	if len(blocks) == 0 {
-		t.Fatal("expected non-empty blocks array")
-	}
-	if blocks[0]["type"] != "section" {
-		t.Errorf("expected first block type to be section, got %v", blocks[0]["type"])
+	if notifier.replaceMessageText == "" {
+		t.Fatal("expected non-empty ReplaceMessage text")
 	}
 }
 
@@ -945,9 +938,8 @@ func TestDenyAction_UnauthorizedUser_StillSucceeds(t *testing.T) {
 	if !notifier.replaceMessageCalled {
 		t.Error("expected ReplaceMessage to be called")
 	}
-	// blocks must be a slice (not a nested map with replace_original)
-	if _, ok := notifier.replaceMessageBlocks.([]map[string]any); !ok {
-		t.Fatalf("expected blocks to be []map[string]any, got %T", notifier.replaceMessageBlocks)
+	if notifier.replaceMessageText == "" {
+		t.Fatal("expected non-empty ReplaceMessage text")
 	}
 	if notifier.sendEphemeralCalled {
 		t.Error("expected SendEphemeral NOT to be called in DenyAction")
@@ -980,5 +972,169 @@ func TestApproveAction_MultiService_NextReqPreservesBundle(t *testing.T) {
 	}
 	if notifier.offerContinuationNextReq.Action != "canary_30" {
 		t.Errorf("nextReq.Action = %q, want canary_30", notifier.offerContinuationNextReq.Action)
+	}
+}
+
+// --- OfferContinuation failure tests ---
+
+func TestApproveAction_Service_OfferContinuationFails_StillReturnsNil(t *testing.T) {
+	// given — OfferContinuation fails (e.g. Slack returns 404)
+	// ApproveAction should still return nil because the GCP operation itself succeeded.
+	gcp := newMockGCP()
+	notifier := &mockNotifier{offerContinuationErr: errors.New("slack notifier: unexpected status 404")}
+	auth := &mockAuth{authorized: true, expired: false}
+	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
+	req := newServiceReq()
+
+	// when
+	err := svc.ApproveAction(context.Background(), req)
+
+	// then — no error returned (GCP succeeded, notification is best-effort)
+	if err != nil {
+		t.Fatalf("expected nil error (GCP succeeded), got %v", err)
+	}
+	if !gcp.shiftTrafficCalled {
+		t.Error("expected ShiftTraffic to be called")
+	}
+	if !notifier.offerContinuationCalled {
+		t.Error("expected OfferContinuation to be called (even though it fails)")
+	}
+}
+
+func TestApproveAction_Service_OfferContinuation_IncludesStopReq(t *testing.T) {
+	// given — canary_10 should offer both next (canary_30) and stop (rollback)
+	gcp := newMockGCP()
+	notifier := &mockNotifier{}
+	auth := &mockAuth{authorized: true, expired: false}
+	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
+	req := newServiceReq()
+	req.Action = "canary_10"
+
+	// when
+	err := svc.ApproveAction(context.Background(), req)
+
+	// then
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if notifier.offerContinuationNextReq == nil {
+		t.Fatal("expected nextReq to be non-nil for canary_10")
+	}
+	if notifier.offerContinuationNextReq.Action != "canary_30" {
+		t.Errorf("nextReq.Action = %q, want canary_30", notifier.offerContinuationNextReq.Action)
+	}
+	if notifier.offerContinuationStopReq == nil {
+		t.Fatal("expected stopReq to be non-nil for canary_10")
+	}
+	if notifier.offerContinuationStopReq.Action != "rollback" {
+		t.Errorf("stopReq.Action = %q, want rollback", notifier.offerContinuationStopReq.Action)
+	}
+}
+
+func TestApproveAction_Service_Canary100_NoNextStep(t *testing.T) {
+	// given — canary_100 is the final step, no next/stop buttons
+	gcp := newMockGCP()
+	notifier := &mockNotifier{}
+	auth := &mockAuth{authorized: true, expired: false}
+	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
+	req := newServiceReq()
+	req.Action = "canary_100"
+
+	// when
+	err := svc.ApproveAction(context.Background(), req)
+
+	// then
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if notifier.offerContinuationNextReq != nil {
+		t.Error("expected nextReq to be nil for canary_100 (final step)")
+	}
+	if notifier.offerContinuationStopReq != nil {
+		t.Error("expected stopReq to be nil for canary_100 (final step)")
+	}
+}
+
+func TestApproveAction_Service_ShiftFails_OfferRetryButton(t *testing.T) {
+	// given — ShiftTraffic fails, should call OfferContinuation with error message + retry button
+	gcp := newMockGCP()
+	gcp.shiftErrOnIdx = 0
+	gcp.shiftTrafficErr = errors.New("permission denied")
+	notifier := &mockNotifier{}
+	auth := &mockAuth{authorized: true, expired: false}
+	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
+	req := newServiceReq()
+
+	// when
+	err := svc.ApproveAction(context.Background(), req)
+
+	// then — returns error
+	if err == nil {
+		t.Fatal("expected error from ShiftTraffic failure")
+	}
+	// OfferContinuation is called (via offerRetry) with retry button
+	if !notifier.offerContinuationCalled {
+		t.Error("expected OfferContinuation to be called for retry button")
+	}
+	// The summary should contain the error message
+	if notifier.offerContinuationSummary == "" {
+		t.Error("expected non-empty error summary in OfferContinuation")
+	}
+	// nextReq (retry button) should preserve the original action
+	if notifier.offerContinuationNextReq == nil {
+		t.Fatal("expected retry button (nextReq) to be non-nil")
+	}
+	if notifier.offerContinuationNextReq.Action != req.Action {
+		t.Errorf("retry button action = %q, want %q", notifier.offerContinuationNextReq.Action, req.Action)
+	}
+	if notifier.offerContinuationNextReq.Project != req.Project {
+		t.Errorf("retry button project = %q, want %q", notifier.offerContinuationNextReq.Project, req.Project)
+	}
+}
+
+func TestApproveAction_Job_BackupFails_OfferRetryButton(t *testing.T) {
+	// given — TriggerBackup fails
+	gcp := newMockGCP()
+	gcp.triggerBackupErr = errors.New("backup failed")
+	notifier := &mockNotifier{}
+	auth := &mockAuth{authorized: true, expired: false}
+	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
+	req := newJobReq()
+
+	// when
+	err := svc.ApproveAction(context.Background(), req)
+
+	// then
+	if err == nil {
+		t.Fatal("expected error from TriggerBackup failure")
+	}
+	if !notifier.offerContinuationCalled {
+		t.Error("expected OfferContinuation (retry) to be called")
+	}
+	if notifier.offerContinuationNextReq == nil {
+		t.Fatal("expected retry button to be offered")
+	}
+	if notifier.offerContinuationNextReq.Action != req.Action {
+		t.Errorf("retry action = %q, want %q", notifier.offerContinuationNextReq.Action, req.Action)
+	}
+}
+
+func TestApproveAction_WorkerPool_OfferContinuationFails_StillReturnsNil(t *testing.T) {
+	// given — GCP succeeds but OfferContinuation fails
+	gcp := newMockGCP()
+	notifier := &mockNotifier{offerContinuationErr: errors.New("slack 404")}
+	auth := &mockAuth{authorized: true, expired: false}
+	svc := NewRunOpsService(gcp, notifier, auth, state.NewMemoryStore())
+	req := newWorkerPoolReq()
+
+	// when
+	err := svc.ApproveAction(context.Background(), req)
+
+	// then — no error (GCP succeeded)
+	if err != nil {
+		t.Fatalf("expected nil error (GCP succeeded), got %v", err)
+	}
+	if !gcp.updateWorkerPoolCalled {
+		t.Error("expected UpdateWorkerPool to be called")
 	}
 }

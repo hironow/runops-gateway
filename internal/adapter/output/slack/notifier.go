@@ -29,24 +29,16 @@ func (n *ResponseURLNotifier) UpdateMessage(ctx context.Context, target port.Not
 		slog.InfoContext(ctx, "[stdout notifier] update", "text", text)
 		return nil
 	}
-	payload := map[string]any{
-		"replace_original": true,
-		"text":             text,
-	}
-	return n.post(ctx, target.ResponseURL, payload)
+	return n.post(ctx, target.ResponseURL, TextPayload(text))
 }
 
-// ReplaceMessage replaces the original Slack message with rich block content.
-func (n *ResponseURLNotifier) ReplaceMessage(ctx context.Context, target port.NotifyTarget, blocks any) error {
+// ReplaceMessage replaces the original Slack message with a mrkdwn section block.
+func (n *ResponseURLNotifier) ReplaceMessage(ctx context.Context, target port.NotifyTarget, text string) error {
 	if target.Mode == "stdout" {
-		slog.InfoContext(ctx, "[stdout notifier] replace", "blocks", fmt.Sprintf("%v", blocks))
+		slog.InfoContext(ctx, "[stdout notifier] replace", "text", text)
 		return nil
 	}
-	payload := map[string]any{
-		"replace_original": true,
-		"blocks":           blocks,
-	}
-	return n.post(ctx, target.ResponseURL, payload)
+	return n.post(ctx, target.ResponseURL, ReplacePayload(SectionBlock(text)))
 }
 
 // SendEphemeral sends a message visible only to the specified user.
@@ -55,12 +47,7 @@ func (n *ResponseURLNotifier) SendEphemeral(ctx context.Context, target port.Not
 		slog.WarnContext(ctx, "[stdout notifier] ephemeral", "user", userID, "text", text)
 		return nil
 	}
-	payload := map[string]any{
-		"response_type":    "ephemeral",
-		"replace_original": false,
-		"text":             fmt.Sprintf("<@%s> %s", userID, text),
-	}
-	return n.post(ctx, target.ResponseURL, payload)
+	return n.post(ctx, target.ResponseURL, EphemeralPayload(fmt.Sprintf("<@%s> %s", userID, text)))
 }
 
 // OfferContinuation replaces the message with a completion summary and optional next/stop buttons.
@@ -75,14 +62,8 @@ func (n *ResponseURLNotifier) OfferContinuation(ctx context.Context, target port
 		return nil
 	}
 
-	// Pre-validate button value lengths before building the message.
-	// A value that exceeds the Slack limit causes the button to be non-functional
-	// (silently broken), so we surface an explicit error to the operator instead.
 	if errMsg, over := buttonValueError(nextReq, stopReq); over {
-		return n.post(ctx, target.ResponseURL, map[string]any{
-			"replace_original": true,
-			"text":             errMsg,
-		})
+		return n.post(ctx, target.ResponseURL, TextPayload(errMsg))
 	}
 
 	payload := BuildProgressMessage(summary, nextReq, stopReq)
@@ -91,7 +72,6 @@ func (n *ResponseURLNotifier) OfferContinuation(ctx context.Context, target port
 
 // buttonValueError checks whether any of the provided requests would produce a button
 // value that exceeds Slack's 2,000-character limit.
-// Returns the user-facing error message and true when the limit would be exceeded.
 func buttonValueError(reqs ...*domain.ApprovalRequest) (string, bool) {
 	for _, req := range reqs {
 		if req == nil {
@@ -110,7 +90,7 @@ func buttonValueError(reqs ...*domain.ApprovalRequest) (string, bool) {
 	return "", false
 }
 
-func (n *ResponseURLNotifier) post(ctx context.Context, url string, payload any) error {
+func (n *ResponseURLNotifier) post(ctx context.Context, url string, payload SlackPayload) error {
 	if url == "" {
 		return fmt.Errorf("slack notifier: response_url is empty")
 	}
@@ -133,7 +113,6 @@ func (n *ResponseURLNotifier) post(ctx context.Context, url string, payload any)
 		slog.Error("slack notifier: error response", "status", resp.StatusCode, "body", string(respBody))
 		return fmt.Errorf("slack notifier: unexpected status %d: %s", resp.StatusCode, string(respBody))
 	}
-	// Slack returns 200 but may include error text (e.g. "invalid_blocks")
 	if len(respBody) > 0 {
 		respStr := string(respBody)
 		if respStr != "ok" && respStr != "" {

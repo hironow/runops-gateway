@@ -52,7 +52,7 @@ func (s *stubNotifier) UpdateMessage(_ context.Context, _ port.NotifyTarget, _ s
 	return nil
 }
 
-func (s *stubNotifier) ReplaceMessage(_ context.Context, _ port.NotifyTarget, _ any) error {
+func (s *stubNotifier) ReplaceMessage(_ context.Context, _ port.NotifyTarget, _ string) error {
 	return nil
 }
 

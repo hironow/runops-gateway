@@ -45,8 +45,8 @@ type NotifyTarget struct {
 type Notifier interface {
 	// UpdateMessage replaces an existing Slack message (or prints to stdout) with text.
 	UpdateMessage(ctx context.Context, target NotifyTarget, text string) error
-	// ReplaceMessage replaces an existing message with rich block content.
-	ReplaceMessage(ctx context.Context, target NotifyTarget, blocks any) error
+	// ReplaceMessage replaces an existing message with a mrkdwn section block.
+	ReplaceMessage(ctx context.Context, target NotifyTarget, text string) error
 	// SendEphemeral sends a message visible only to userID.
 	SendEphemeral(ctx context.Context, target NotifyTarget, userID, text string) error
 	// OfferContinuation replaces the message with a completion summary and,
