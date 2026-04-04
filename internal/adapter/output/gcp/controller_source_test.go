@@ -56,3 +56,45 @@ func TestShiftTraffic_GetServiceBeforeUpdate(t *testing.T) {
 		t.Error("ShiftTraffic must call GetService BEFORE UpdateService (Cloud Run API v2 requires template field)")
 	}
 }
+
+// TestUpdateWorkerPool_GetWorkerPoolBeforeUpdate verifies that controller.go
+// calls GetWorkerPool before UpdateWorkerPool.
+func TestUpdateWorkerPool_GetWorkerPoolBeforeUpdate(t *testing.T) {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	controllerPath := filepath.Join(filepath.Dir(file), "controller.go")
+	content, err := os.ReadFile(controllerPath)
+	if err != nil {
+		t.Fatalf("failed to read controller.go: %v", err)
+	}
+
+	src := string(content)
+
+	startIdx := strings.Index(src, "func (c *Controller) UpdateWorkerPool(")
+	if startIdx == -1 {
+		t.Fatal("UpdateWorkerPool method not found in controller.go")
+	}
+
+	endIdx := strings.Index(src[startIdx+1:], "\nfunc ")
+	var methodBody string
+	if endIdx == -1 {
+		methodBody = src[startIdx:]
+	} else {
+		methodBody = src[startIdx : startIdx+1+endIdx]
+	}
+
+	getIdx := strings.Index(methodBody, "client.GetWorkerPool(")
+	updateIdx := strings.Index(methodBody, "client.UpdateWorkerPool(")
+
+	if getIdx == -1 {
+		t.Error("UpdateWorkerPool must call client.GetWorkerPool to fetch current state before updating")
+	}
+	if updateIdx == -1 {
+		t.Error("UpdateWorkerPool must call client.UpdateWorkerPool")
+	}
+	if getIdx != -1 && updateIdx != -1 && getIdx >= updateIdx {
+		t.Error("UpdateWorkerPool must call GetWorkerPool BEFORE UpdateWorkerPool (Cloud Run API v2 requires template field)")
+	}
+}

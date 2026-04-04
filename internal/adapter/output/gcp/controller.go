@@ -114,24 +114,26 @@ func (c *Controller) UpdateWorkerPool(ctx context.Context, project, location, po
 	poolPath := fmt.Sprintf("projects/%s/locations/%s/workerPools/%s",
 		project, location, poolName)
 
-	req := &runpb.UpdateWorkerPoolRequest{
-		WorkerPool: &runpb.WorkerPool{
-			Name: poolPath,
-			InstanceSplits: []*runpb.InstanceSplit{
-				{
-					Type:     runpb.InstanceSplitAllocationType_INSTANCE_SPLIT_ALLOCATION_TYPE_REVISION,
-					Revision: revision,
-					Percent:  percent,
-				},
-				{
-					Type:    runpb.InstanceSplitAllocationType_INSTANCE_SPLIT_ALLOCATION_TYPE_LATEST,
-					Percent: 100 - percent,
-				},
-			},
+	// GET the current worker pool to preserve template and other fields.
+	// Cloud Run API v2 requires template in UpdateWorkerPoolRequest.
+	pool, err := client.GetWorkerPool(ctx, &runpb.GetWorkerPoolRequest{Name: poolPath})
+	if err != nil {
+		return fmt.Errorf("gcp: get worker pool: %w", err)
+	}
+
+	pool.InstanceSplits = []*runpb.InstanceSplit{
+		{
+			Type:     runpb.InstanceSplitAllocationType_INSTANCE_SPLIT_ALLOCATION_TYPE_REVISION,
+			Revision: revision,
+			Percent:  percent,
+		},
+		{
+			Type:    runpb.InstanceSplitAllocationType_INSTANCE_SPLIT_ALLOCATION_TYPE_LATEST,
+			Percent: 100 - percent,
 		},
 	}
 
-	op, err := client.UpdateWorkerPool(ctx, req)
+	op, err := client.UpdateWorkerPool(ctx, &runpb.UpdateWorkerPoolRequest{WorkerPool: pool})
 	if err != nil {
 		return fmt.Errorf("gcp: update worker pool: %w", err)
 	}
