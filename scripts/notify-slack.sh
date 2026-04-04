@@ -147,14 +147,14 @@ PAYLOAD=$(jq -n \
             type: "button",
             text: {type: "plain_text", emoji: true, text: "1. DB Migration \u2192 Canary"},
             style: "danger",
-            action_id: "approve",
+            action_id: "approve_job",
             value: $job_val
           },
           {
             type: "button",
             text: {type: "plain_text", emoji: true, text: "2. Canary (skip migration)"},
             style: "primary",
-            action_id: "approve",
+            action_id: "approve_service",
             value: $srv_val,
             confirm: {
               title: {type: "plain_text", text: "\u7d9a\u884c\u3057\u307e\u3059\u304b\uff1f"},

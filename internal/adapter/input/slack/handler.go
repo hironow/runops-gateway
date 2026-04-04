@@ -116,14 +116,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		NextAction:       av.NextAction,
 	}
 	// 4. Dispatch asynchronously (avoid Slack 3-second timeout)
-	switch action.ActionID {
-	case "approve":
+	switch {
+	case strings.HasPrefix(action.ActionID, "approve"):
 		go func() {
 			if err := h.useCase.ApproveAction(context.Background(), req); err != nil {
 				slog.Error("ApproveAction failed", "error", err)
 			}
 		}()
-	case "deny":
+	case action.ActionID == "deny":
 		go func() {
 			if err := h.useCase.DenyAction(context.Background(), req); err != nil {
 				slog.Error("DenyAction failed", "error", err)
