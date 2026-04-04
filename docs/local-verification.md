@@ -17,12 +17,12 @@
 
 ```bash
 export SLACK_SIGNING_SECRET=test-secret        # パターン A は任意の値でよい
-export GOOGLE_CLOUD_PROJECT=dummy-project      # パターン A は dummy でよい
 export ALLOWED_SLACK_USERS=UTEST123            # 承認を許可する Slack ユーザー ID
 ```
 
-`NewController` は起動時にネットワーク接続しないため、`GOOGLE_CLOUD_PROJECT` が
-実在しないプロジェクトでもサーバーは正常に起動する。
+サーバーは `SLACK_SIGNING_SECRET` のみで起動できる。
+GCP プロジェクト ID とリージョンはサーバーの環境変数ではなく、
+Slack ボタンの値（`ApprovalRequest.Project` / `ApprovalRequest.Location`）から取得される。
 GCP への実操作（`ShiftTraffic` 等）が走ったときに初めて認証エラーになる。
 
 ### 起動コマンド
@@ -52,7 +52,7 @@ GCP も Slack も不要。署名検証・ペイロード解析・ルーティン
 
 ```bash
 # 別ターミナルでサーバーを起動
-SLACK_SIGNING_SECRET=test-secret GOOGLE_CLOUD_PROJECT=dummy just run
+SLACK_SIGNING_SECRET=test-secret just run
 
 # シナリオ実行
 just test-runn
@@ -132,25 +132,28 @@ just test-scripts
 
 ```bash
 gcloud auth application-default login
-export GOOGLE_CLOUD_PROJECT=your-real-project
 export ALLOWED_SLACK_USERS=your-email@example.com
 ```
 
 ### B-1. CLI で GCP 操作を直接確認（Slack 不要）
 
 `--no-slack` を指定すると Slack 通知なしで GCP のみ操作する。
+`--project` と `--location` で対象プロジェクトとリージョンを指定する。
 
 ```bash
 go run ./cmd/runops approve service YOUR_SERVICE_NAME \
+  --project=YOUR_PROJECT --location=asia-northeast1 \
   --action=canary_10 \
   --target=YOUR_REVISION_NAME \
   --no-slack
 
 go run ./cmd/runops approve job YOUR_MIGRATION_JOB \
+  --project=YOUR_PROJECT --location=asia-northeast1 \
   --action=migrate_apply \
   --no-slack
 
 go run ./cmd/runops deny service YOUR_SERVICE_NAME \
+  --project=YOUR_PROJECT --location=asia-northeast1 \
   --no-slack
 ```
 
@@ -158,6 +161,7 @@ Cloud Run コンソール または以下で結果を確認:
 
 ```bash
 gcloud run services describe YOUR_SERVICE_NAME \
+  --project=YOUR_PROJECT \
   --region=asia-northeast1 \
   --format="value(status.traffic)"
 ```
@@ -186,9 +190,7 @@ https://your-hostname.tailnet-name.ts.net/ ✓
 
 ```bash
 export SLACK_SIGNING_SECRET=your-real-signing-secret
-export GOOGLE_CLOUD_PROJECT=your-real-project
 export ALLOWED_SLACK_USERS=YOUR_SLACK_USER_ID   # Slack の自分の ID (U0XXXXXX)
-export CLOUD_RUN_LOCATION=asia-northeast1
 
 just run
 ```
@@ -243,12 +245,6 @@ go run ./cmd/runops approve service YOUR_SERVICE_NAME \
 
 ```bash
 export SLACK_SIGNING_SECRET=test-secret
-```
-
-### `GOOGLE_CLOUD_PROJECT is required` で起動しない
-
-```bash
-export GOOGLE_CLOUD_PROJECT=dummy   # パターン A は dummy でよい
 ```
 
 ### runn シナリオが `signature mismatch` で失敗する

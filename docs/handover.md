@@ -5,6 +5,8 @@
 ## 実装済み内容
 
 全 16 Issue を TDD で実装完了。その後、ADR 0008〜0011 に基づく追加機能を実装。
+クロスプロジェクト対応により、GCP Controller は固定の Config（ProjectID/Location）を持たず、
+各操作が Slack ボタン値または CLI フラグから project/location を受け取る設計に変更済み。
 `just test && just build && just lint` がすべて通る状態。
 
 ### コミット履歴（主要なもの）
@@ -182,20 +184,24 @@ git push origin main
 ### CLI での緊急操作（Slack ダウン時）
 
 ```bash
-export GOOGLE_CLOUD_PROJECT=your-project
 export ALLOWED_SLACK_USERS=your-email@example.com
 
 # カナリアリリース (10%)
 runops approve service frontend-service \
+  --project=your-project --location=asia-northeast1 \
   --action=canary_10 --target=REVISION_NAME --no-slack
 
 # 複数サービス同時カナリア
 runops approve service "frontend-service,backend-service" \
+  --project=your-project --location=asia-northeast1 \
   --action=canary_10 --target="frontend-v2,backend-v2" --no-slack
 
 # DB マイグレーション
-runops approve job db-migrate-job --action=migrate_apply --no-slack
+runops approve job db-migrate-job \
+  --project=your-project --location=asia-northeast1 \
+  --action=migrate_apply --no-slack
 
 # 拒否
-runops deny service frontend-service --no-slack
+runops deny service frontend-service \
+  --project=your-project --location=asia-northeast1 --no-slack
 ```
