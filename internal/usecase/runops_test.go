@@ -14,15 +14,31 @@ import (
 // --- mock implementations ---
 
 type shiftCall struct {
-	name    string
-	target  string
-	percent int32
+	project  string
+	location string
+	name     string
+	target   string
+	percent  int32
 }
 
 type workerPoolCall struct {
-	name    string
-	target  string
-	percent int32
+	project  string
+	location string
+	name     string
+	target   string
+	percent  int32
+}
+
+type executeJobCall struct {
+	project  string
+	location string
+	jobName  string
+	args     []string
+}
+
+type triggerBackupCall struct {
+	project      string
+	instanceName string
 }
 
 type mockGCP struct {
@@ -33,8 +49,10 @@ type mockGCP struct {
 	shiftTrafficErr         error
 	executeJobCalled        bool
 	executeJobErr           error
+	executeJobCalls         []executeJobCall
 	triggerBackupCalled     bool
 	triggerBackupErr        error
+	triggerBackupCalls      []triggerBackupCall
 	updateWorkerPoolCalled  bool
 	updateWorkerPoolErr     error
 	workerPoolCalls         []workerPoolCall // all recorded UpdateWorkerPool calls in order
@@ -43,9 +61,9 @@ type mockGCP struct {
 
 func newMockGCP() *mockGCP { return &mockGCP{shiftErrOnIdx: -1, workerPoolErrOnIdx: -1} }
 
-func (m *mockGCP) ShiftTraffic(_ context.Context, name, target string, percent int32) error {
+func (m *mockGCP) ShiftTraffic(_ context.Context, project, location, name, target string, percent int32) error {
 	idx := len(m.shiftCalls)
-	m.shiftCalls = append(m.shiftCalls, shiftCall{name, target, percent})
+	m.shiftCalls = append(m.shiftCalls, shiftCall{project, location, name, target, percent})
 	m.shiftTrafficCalled = true
 	m.shiftTrafficPercent = percent
 	if m.shiftErrOnIdx >= 0 && idx == m.shiftErrOnIdx {
@@ -54,19 +72,21 @@ func (m *mockGCP) ShiftTraffic(_ context.Context, name, target string, percent i
 	return nil
 }
 
-func (m *mockGCP) ExecuteJob(_ context.Context, _ string, _ []string) error {
+func (m *mockGCP) ExecuteJob(_ context.Context, project, location, jobName string, args []string) error {
 	m.executeJobCalled = true
+	m.executeJobCalls = append(m.executeJobCalls, executeJobCall{project, location, jobName, args})
 	return m.executeJobErr
 }
 
-func (m *mockGCP) TriggerBackup(_ context.Context, _ string) error {
+func (m *mockGCP) TriggerBackup(_ context.Context, project, instanceName string) error {
 	m.triggerBackupCalled = true
+	m.triggerBackupCalls = append(m.triggerBackupCalls, triggerBackupCall{project, instanceName})
 	return m.triggerBackupErr
 }
 
-func (m *mockGCP) UpdateWorkerPool(_ context.Context, name, target string, percent int32) error {
+func (m *mockGCP) UpdateWorkerPool(_ context.Context, project, location, name, target string, percent int32) error {
 	idx := len(m.workerPoolCalls)
-	m.workerPoolCalls = append(m.workerPoolCalls, workerPoolCall{name, target, percent})
+	m.workerPoolCalls = append(m.workerPoolCalls, workerPoolCall{project, location, name, target, percent})
 	m.updateWorkerPoolCalled = true
 	if m.workerPoolErrOnIdx >= 0 && idx == m.workerPoolErrOnIdx {
 		return m.updateWorkerPoolErr
@@ -127,6 +147,8 @@ func (m *mockStore) Release(_ string)      { m.locked = false }
 
 func newServiceReq() domain.ApprovalRequest {
 	return domain.ApprovalRequest{
+		Project:       "test-project",
+		Location:      "asia-northeast1",
 		ResourceType:  domain.ResourceTypeService,
 		ResourceNames: "frontend-service",
 		Targets:       "frontend-service-v2",
@@ -140,6 +162,8 @@ func newServiceReq() domain.ApprovalRequest {
 
 func newJobReq() domain.ApprovalRequest {
 	return domain.ApprovalRequest{
+		Project:       "test-project",
+		Location:      "asia-northeast1",
 		ResourceType:  domain.ResourceTypeJob,
 		ResourceNames: "migration-job",
 		Targets:       "",
@@ -153,6 +177,8 @@ func newJobReq() domain.ApprovalRequest {
 
 func newWorkerPoolReq() domain.ApprovalRequest {
 	return domain.ApprovalRequest{
+		Project:       "test-project",
+		Location:      "asia-northeast1",
 		ResourceType:  domain.ResourceTypeWorkerPool,
 		ResourceNames: "batch-pool",
 		Targets:       "batch-pool-v2",
@@ -184,6 +210,15 @@ func TestApproveAction_Service_Success(t *testing.T) {
 	if !gcp.shiftTrafficCalled {
 		t.Error("expected ShiftTraffic to be called")
 	}
+	if len(gcp.shiftCalls) == 0 {
+		t.Fatal("expected at least one ShiftTraffic call")
+	}
+	if gcp.shiftCalls[0].project != "test-project" {
+		t.Errorf("expected project=test-project, got %q", gcp.shiftCalls[0].project)
+	}
+	if gcp.shiftCalls[0].location != "asia-northeast1" {
+		t.Errorf("expected location=asia-northeast1, got %q", gcp.shiftCalls[0].location)
+	}
 	if !notifier.offerContinuationCalled {
 		t.Error("expected OfferContinuation to be called")
 	}
@@ -207,8 +242,23 @@ func TestApproveAction_Job_Success(t *testing.T) {
 	if !gcp.triggerBackupCalled {
 		t.Error("expected TriggerBackup to be called")
 	}
+	if len(gcp.triggerBackupCalls) == 0 {
+		t.Fatal("expected at least one TriggerBackup call")
+	}
+	if gcp.triggerBackupCalls[0].project != "test-project" {
+		t.Errorf("expected TriggerBackup project=test-project, got %q", gcp.triggerBackupCalls[0].project)
+	}
 	if !gcp.executeJobCalled {
 		t.Error("expected ExecuteJob to be called")
+	}
+	if len(gcp.executeJobCalls) == 0 {
+		t.Fatal("expected at least one ExecuteJob call")
+	}
+	if gcp.executeJobCalls[0].project != "test-project" {
+		t.Errorf("expected ExecuteJob project=test-project, got %q", gcp.executeJobCalls[0].project)
+	}
+	if gcp.executeJobCalls[0].location != "asia-northeast1" {
+		t.Errorf("expected ExecuteJob location=asia-northeast1, got %q", gcp.executeJobCalls[0].location)
 	}
 	if !notifier.replaceMessageCalled {
 		t.Error("expected ReplaceMessage to be called")
@@ -240,6 +290,15 @@ func TestApproveAction_WorkerPool_Success(t *testing.T) {
 	}
 	if !gcp.updateWorkerPoolCalled {
 		t.Error("expected UpdateWorkerPool to be called")
+	}
+	if len(gcp.workerPoolCalls) == 0 {
+		t.Fatal("expected at least one UpdateWorkerPool call")
+	}
+	if gcp.workerPoolCalls[0].project != "test-project" {
+		t.Errorf("expected project=test-project, got %q", gcp.workerPoolCalls[0].project)
+	}
+	if gcp.workerPoolCalls[0].location != "asia-northeast1" {
+		t.Errorf("expected location=asia-northeast1, got %q", gcp.workerPoolCalls[0].location)
 	}
 	if gcp.shiftTrafficCalled {
 		t.Error("expected ShiftTraffic NOT to be called for worker pool")
@@ -537,6 +596,12 @@ func TestApproveAction_Service_CanaryProgressionOffersNextStep(t *testing.T) {
 	}
 	if notifier.offerContinuationNextReq.Action != "canary_30" {
 		t.Errorf("expected next action canary_30, got %s", notifier.offerContinuationNextReq.Action)
+	}
+	if notifier.offerContinuationNextReq.Project != "test-project" {
+		t.Errorf("expected nextReq.Project=test-project, got %q", notifier.offerContinuationNextReq.Project)
+	}
+	if notifier.offerContinuationNextReq.Location != "asia-northeast1" {
+		t.Errorf("expected nextReq.Location=asia-northeast1, got %q", notifier.offerContinuationNextReq.Location)
 	}
 }
 
