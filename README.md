@@ -415,22 +415,26 @@ gcloud builds submit --config=cloudbuild.yaml \
 Slack が使えない場合は `runops` CLI で直接操作できます:
 
 ```bash
-export GOOGLE_CLOUD_PROJECT=your-project
 export ALLOWED_SLACK_USERS=your-email@example.com
 
 # カナリアリリース (10%)
 runops approve service your-service \
+  --project=your-project --location=asia-northeast1 \
   --action=canary_10 --target=YOUR_REVISION_NAME --no-slack
 
 # 複数サービス同時カナリア
 runops approve service "frontend-service,backend-service" \
+  --project=your-project --location=asia-northeast1 \
   --action=canary_10 --target="frontend-v2,backend-v2" --no-slack
 
 # DB マイグレーション
-runops approve job db-migrate-job --action=migrate_apply --no-slack
+runops approve job db-migrate-job \
+  --project=your-project --location=asia-northeast1 \
+  --action=migrate_apply --no-slack
 
 # 拒否 (デプロイ中断)
-runops deny service your-service --no-slack
+runops deny service your-service \
+  --project=your-project --location=asia-northeast1 --no-slack
 ```
 
 `--no-slack` を指定すると Slack 通知なしで stdout へ出力します。
@@ -493,8 +497,6 @@ runops-gateway/
 | 変数 | 必須 | デフォルト | 説明 |
 |---|---|---|---|
 | `SLACK_SIGNING_SECRET` | ✓ | — | Slack App の Signing Secret |
-| `GOOGLE_CLOUD_PROJECT` | ✓ | — | GCP プロジェクト ID |
-| `CLOUD_RUN_LOCATION` | — | `asia-northeast1` | Cloud Run のリージョン |
 | `PORT` | — | `8080` | HTTP ポート |
 | `ALLOWED_SLACK_USERS` | — | `""` (全拒否) | 承認許可ユーザーの Slack ID (カンマ区切り) |
 | `BUTTON_EXPIRY_SECONDS` | — | `7200` | ボタン有効期限（秒） |
@@ -503,8 +505,9 @@ runops-gateway/
 
 | 変数 | 必須 | 説明 |
 |---|---|---|
-| `GOOGLE_CLOUD_PROJECT` | ✓ | GCP プロジェクト ID |
 | `ALLOWED_SLACK_USERS` | — | 承認許可ユーザー (CLI ではメールアドレスを使用) |
+
+プロジェクト ID とリージョンは `--project` / `--location` フラグで指定します。
 
 ## 開発
 
