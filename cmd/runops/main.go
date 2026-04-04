@@ -1,8 +1,6 @@
 package main
 
 import (
-	"fmt"
-	"log/slog"
 	"os"
 
 	"github.com/hironow/runops-gateway/internal/adapter/input/cli"
@@ -14,24 +12,7 @@ import (
 )
 
 func main() {
-	projectID := os.Getenv("GOOGLE_CLOUD_PROJECT")
-	if projectID == "" {
-		fmt.Fprintln(os.Stderr, "error: GOOGLE_CLOUD_PROJECT environment variable is required")
-		os.Exit(1)
-	}
-	location := os.Getenv("CLOUD_RUN_LOCATION")
-	if location == "" {
-		location = "asia-northeast1"
-	}
-
-	gcpCtrl, err := gcpadapter.NewController(gcpadapter.Config{
-		ProjectID: projectID,
-		Location:  location,
-	})
-	if err != nil {
-		slog.Error("failed to create GCP controller", "error", err)
-		os.Exit(1)
-	}
+	gcpCtrl := gcpadapter.NewController()
 
 	notifier := slacknotifier.NewResponseURLNotifier()
 	authChecker := auth.NewEnvAuthChecker()
