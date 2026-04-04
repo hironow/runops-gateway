@@ -118,7 +118,7 @@ func (n *ResponseURLNotifier) post(ctx context.Context, url string, payload Slac
 	}
 	if len(respBody) > 0 {
 		respStr := string(respBody)
-		if respStr != "ok" && respStr != "" {
+		if respStr != "ok" && respStr != `{"ok":true}` && respStr != "" {
 			slog.Warn("slack notifier: non-ok response body", "body", respStr)
 		}
 	}
