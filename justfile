@@ -64,3 +64,8 @@ check: fmt lint lint-md test
 # Usage: just init-app ../my-app my-project my-service,my-other-service my-migrate-job [asia-northeast1] [my-artifact-repo] [gateway-project]
 init-app target app_project service_names migration_job region="asia-northeast1" artifact_repo="" gateway_project="":
     {{justfile_directory()}}/scripts/init-app.sh "{{target}}" "{{app_project}}" "{{service_names}}" "{{migration_job}}" "{{region}}" "{{artifact_repo}}" "{{gateway_project}}"
+
+# Verify IAM, AR, secrets, and Cloud Run configuration for a managed app.
+# Usage: just check-app my-project my-service,my-other-service my-migrate-job [asia-northeast1] [my-artifact-repo] [gateway-project]
+check-app app_project service_names migration_job region="asia-northeast1" artifact_repo="" gateway_project="":
+    {{justfile_directory()}}/scripts/check-app.sh "{{app_project}}" "{{service_names}}" "{{migration_job}}" "{{region}}" "{{artifact_repo}}" "{{gateway_project}}"
