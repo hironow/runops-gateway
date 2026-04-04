@@ -12,7 +12,7 @@ import (
 )
 
 func newApproveCmd(useCase port.RunOpsUseCase) *cobra.Command {
-	var action, target, approver string
+	var project, location, action, target, approver string
 	var noSlack bool
 
 	cmd := &cobra.Command{
@@ -31,14 +31,16 @@ func newApproveCmd(useCase port.RunOpsUseCase) *cobra.Command {
 			}
 
 			req := domain.ApprovalRequest{
-				ResourceType: domain.ResourceType(resourceType),
+				Project:       project,
+				Location:      location,
+				ResourceType:  domain.ResourceType(resourceType),
 				ResourceNames: resourceName,
 				Targets:       target,
-				Action:       action,
-				ApproverID:   approver,
-				Source:       "cli",
-				IssuedAt:     0,  // CLI mode: no expiry
-				ResponseURL:  "", // CLI mode: no Slack response URL
+				Action:        action,
+				ApproverID:    approver,
+				Source:        "cli",
+				IssuedAt:      0,  // CLI mode: no expiry
+				ResponseURL:   "", // CLI mode: no Slack response URL
 			}
 
 			if err := useCase.ApproveAction(context.Background(), req); err != nil {
@@ -49,11 +51,15 @@ func newApproveCmd(useCase port.RunOpsUseCase) *cobra.Command {
 		},
 	}
 
+	cmd.Flags().StringVar(&project, "project", "", "GCP project ID of the target resource (required)")
+	cmd.Flags().StringVar(&location, "location", "", "GCP region of the target resource (required)")
 	cmd.Flags().StringVar(&action, "action", "", "Action to perform (e.g. canary_10, migrate_apply)")
 	cmd.Flags().StringVar(&target, "target", "", "Revision name (for Cloud Run Service)")
 	cmd.Flags().StringVar(&approver, "approver", "", "Approver ID or email (defaults to git config user.email)")
 	cmd.Flags().BoolVar(&noSlack, "no-slack", false, "Disable Slack notifications (required when Slack is down)")
 	// noSlack flag is passed via Source="cli" which triggers StdoutNotifier in wiring
+	_ = cmd.MarkFlagRequired("project")
+	_ = cmd.MarkFlagRequired("location")
 
 	return cmd
 }
