@@ -153,120 +153,17 @@ gcloud run deploy runops-gateway \
 このセクションは **runops-gateway を使って自分のアプリをデプロイする** ための作業です。
 runops-gateway 自体のセットアップは完了している前提です。
 
-### 2-0. 権限設定（セキュリティ）
+### 2-0. プロジェクト構成と権限設定
 
-runops-gateway と管理対象アプリは **別々の GCP プロジェクト** に存在することを前提としています。
+runops-gateway は以下の3つの構成をサポートしています。構成に応じたセットアップガイドを参照してください。
 
-```
-GATEWAY_PROJECT  : runops-gateway が稼働するプロジェクト (例: my-infra-project)
-APP_PROJECT      : 管理対象アプリが稼働するプロジェクト (例: my-app-project)
-```
+| 構成 | ガイド | 概要 |
+|---|---|---|
+| 同一プロジェクト | [guide-single-project.md](docs/guide-single-project.md) | gateway と管理対象アプリが同じ GCP プロジェクト |
+| 2プロジェクト | [guide-two-projects.md](docs/guide-two-projects.md) | gateway と管理対象アプリが別プロジェクト（1:1） |
+| マルチプロジェクト | [guide-multi-project.md](docs/guide-multi-project.md) | gateway 1つ + 管理対象アプリ複数（1:N） |
 
-```
-+-----------------------------------------------+    +----------------------------------------------------------+
-|  GATEWAY_PROJECT                              |    |  APP_PROJECT                                             |
-|                                               |    |                                                          |
-|  +------------------------+                   |    |  +------------------+  +---------------+  +-----------+  |
-|  | runops-gateway         |                   |    |  | Cloud Run Service|  | Cloud Run     |  | Cloud Run |  |
-|  | (Cloud Run)            |                   |    |  | (your-service)   |  | Worker Pool   |  | Jobs      |  |
-|  |                        |  roles/           |    |  +------------------+  +---------------+  +-----------+  |
-|  |  SA: slack-chatops-sa  |--run.developer--> |    |         ^                    ^                  ^        |
-|  +------------------------+  (cross-project)  |    |         |                    |                  |        |
-|                               ----------------+----+-> grant in APP_PROJECT (all 3 resources)--------+        |
-|  +------------------------+                   |    |                                                          |
-|  | Secret Manager         |                   |    |  +------------------+                                    |
-|  | slack-webhook-url      |                   |    |  | Cloud SQL        |                                    |
-|  +------------------------+                   |    |  +------------------+                                    |
-|          ^                                    |    |         ^                                                |
-|          | roles/secretmanager.secretAccessor |    |         | roles/cloudsql.admin                           |
-|          | (cross-project)                    |    |         | (grant in APP_PROJECT)                         |
-|          |                                    |    |         |                                                |
-|          +------------------------------------+----+----+    |                                                |
-|                                               |    |    |    |                                                |
-|                                               |    |  +------+-------------------+                            |
-|                                               |    |  | CI/CD SA                 |                            |
-|                                               |    |  | (Cloud Build default SA) |                            |
-|                                               |    |  +--------------------------+                            |
-+-----------------------------------------------+    +----------------------------------------------------------+
-
-
-Legend:
-
-- GATEWAY_PROJECT: runops-gateway が稼働する GCP プロジェクト
-- APP_PROJECT: 管理対象アプリが稼働する GCP プロジェクト
-- slack-chatops-sa: runops-gateway の Cloud Run ランタイムサービスアカウント
-- roles/run.developer: Cloud Run Service / Worker Pool / Jobs の操作権限（APP_PROJECT 側のリソースに付与）
-- roles/cloudsql.admin: Cloud SQL バックアップ権限（APP_PROJECT 側に付与）
-- roles/secretmanager.secretAccessor: Webhook URL 読み取り権限（GATEWAY_PROJECT 側のシークレットに付与）
-- CI/CD SA: 管理対象アプリの CI/CD サービスアカウント（notify-slack.sh 実行主体）
-```
-
-runops-gateway の Cloud Run ランタイム SA (`slack-chatops-sa@GATEWAY_PROJECT`) がクロスプロジェクトで管理対象アプリのリソースを操作するために、以下の権限を **APP_PROJECT 側で** 付与します。
-
-#### runops-gateway SA に付与する権限（APP_PROJECT 側での作業）
-
-```bash
-GATEWAY_PROJECT=your-runops-gateway-project-id
-CHATOPS_SA="slack-chatops-sa@${GATEWAY_PROJECT}.iam.gserviceaccount.com"
-
-YOUR_SERVICE_NAME=your-service-name
-YOUR_WORKER_POOL_NAME=your-worker-pool-name
-YOUR_JOB_NAME=your-job-name
-APP_PROJECT=your-app-project-id
-
-# Cloud Run Service のトラフィック切り替え権限
-gcloud run services add-iam-policy-binding ${YOUR_SERVICE_NAME} \
-  --project=${APP_PROJECT} \
-  --region=asia-northeast1 \
-  --member="serviceAccount:${CHATOPS_SA}" \
-  --role="roles/run.developer"
-
-# Cloud Run Worker Pool のトラフィック切り替え権限 (Worker Pool を使う場合)
-gcloud run worker-pools add-iam-policy-binding ${YOUR_WORKER_POOL_NAME} \
-  --project=${APP_PROJECT} \
-  --region=asia-northeast1 \
-  --member="serviceAccount:${CHATOPS_SA}" \
-  --role="roles/run.developer"
-
-# Cloud Run Jobs のマイグレーション実行権限
-gcloud run jobs add-iam-policy-binding ${YOUR_JOB_NAME} \
-  --project=${APP_PROJECT} \
-  --region=asia-northeast1 \
-  --member="serviceAccount:${CHATOPS_SA}" \
-  --role="roles/run.developer"
-
-# Cloud SQL バックアップ権限 (バックアップあり構成の場合)
-gcloud projects add-iam-policy-binding ${APP_PROJECT} \
-  --member="serviceAccount:${CHATOPS_SA}" \
-  --role="roles/cloudsql.admin"
-```
-
-> **注意**: `roles/cloudsql.admin` は runops-gateway の tofu では GATEWAY_PROJECT レベルにのみ付与されています。管理対象アプリが別プロジェクトの場合は APP_PROJECT 側でも付与が必要です。
-
-#### 管理対象アプリの CI/CD SA に付与する権限（GATEWAY_PROJECT 側での作業）
-
-`notify-slack.sh` が GATEWAY_PROJECT の Secret Manager から Slack Webhook URL を読み取るために必要です。
-
-```bash
-# Cloud Build のデフォルト SA の場合
-APP_PROJECT_NUMBER=$(gcloud projects describe ${APP_PROJECT} --format="value(projectNumber)")
-gcloud secrets add-iam-policy-binding slack-webhook-url \
-  --project=${GATEWAY_PROJECT} \
-  --member="serviceAccount:${APP_PROJECT_NUMBER}@cloudbuild.gserviceaccount.com" \
-  --role="roles/secretmanager.secretAccessor"
-```
-
-#### runops-gateway がアクセスしないもの
-
-セキュリティの透明性のため、runops-gateway が **アクセスしない** リソースを明示します:
-
-| リソース | 理由 |
-|---|---|
-| 管理対象アプリのソースコード・Artifact Registry | イメージのビルド・管理は APP_PROJECT 側の CI/CD が担当 |
-| 管理対象アプリの Secret Manager シークレット | runops-gateway は GCP API のみを操作し、アプリ設定には触れない |
-| Cloud SQL のデータ | バックアップのトリガーのみ（`cloudsql.admin`）。データの読み書きは行わない |
-
----
+各ガイドに IAM 設定、`just init-app` の実行例、Cloud Build トリガーの設定方法が記載されています。
 
 ### 2-1. 初回設定（アプリごとに1回）
 
@@ -276,14 +173,14 @@ gcloud secrets add-iam-policy-binding slack-webhook-url \
 サービス名・ジョブ名・リージョンは引数で指定し、`cloudbuild.yaml` の substitutions が自動的に置換されます。
 
 ```bash
-# 基本
-just init-app /path/to/your-app your-service your-migrate-job
+# 基本（同一プロジェクト）
+just init-app /path/to/your-app your-project your-service your-migrate-job
+
+# クロスプロジェクト（gateway と別プロジェクト）
+just init-app /path/to/your-app app-project your-service your-migrate-job asia-northeast1 "" gateway-project
 
 # 複数サービス
-just init-app /path/to/your-app "frontend,backend" db-migrate
-
-# リージョン・Artifact Registry リポジトリ名も指定
-just init-app /path/to/your-app your-service your-migrate-job us-central1 my-repo
+just init-app /path/to/your-app your-project "frontend,backend" db-migrate
 ```
 
 生成されるファイル:
@@ -544,7 +441,11 @@ just test-runn
 
 ## ドキュメント
 
+- [`docs/guide-single-project.md`](docs/guide-single-project.md) — 同一プロジェクト構成のセットアップガイド
+- [`docs/guide-two-projects.md`](docs/guide-two-projects.md) — 2プロジェクト構成のセットアップガイド
+- [`docs/guide-multi-project.md`](docs/guide-multi-project.md) — マルチプロジェクト構成のセットアップガイド
 - [`docs/local-verification.md`](docs/local-verification.md) — ローカル動作確認ガイド（GCP なし / Tailscale Funnel E2E）
 - [`docs/intent.md`](docs/intent.md) — 設計意図・アーキテクチャ詳細
+- [`docs/slack-setup.md`](docs/slack-setup.md) — Slack App セットアップガイド
 - [`docs/adr/`](docs/adr/) — Architecture Decision Records (0001–0011)
 - [`docs/handover.md`](docs/handover.md) — 実装状況・テストカバレッジ・今後の課題
