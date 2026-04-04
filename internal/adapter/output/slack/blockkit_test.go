@@ -501,6 +501,33 @@ func TestBuildProgressMessage_StopReqNonRollback_UsesDenyActionID(t *testing.T) 
 	}
 }
 
+func TestBuildProgressMessage_ActionIDsAreUnique(t *testing.T) {
+	// Slack rejects actions blocks with duplicate action_ids.
+	nextReq := &domain.ApprovalRequest{
+		Project: "p", Location: "l", ResourceType: domain.ResourceTypeService,
+		ResourceNames: "svc", Targets: "v2", Action: "canary_30", IssuedAt: 1700000000,
+	}
+	stopReq := &domain.ApprovalRequest{
+		Project: "p", Location: "l", ResourceType: domain.ResourceTypeService,
+		ResourceNames: "svc", Targets: "v2", Action: "rollback", IssuedAt: 1700000000,
+	}
+
+	msg := BuildProgressMessage("✅ 10%", nextReq, stopReq)
+
+	for _, block := range msg.Blocks {
+		if block.Type != BlockTypeActions {
+			continue
+		}
+		seen := map[string]bool{}
+		for _, el := range block.Elements {
+			if seen[el.ActionID] {
+				t.Errorf("duplicate action_id %q in actions block — Slack will reject this", el.ActionID)
+			}
+			seen[el.ActionID] = true
+		}
+	}
+}
+
 func TestCanaryBtnLabel_ZeroPercent_DefaultLabel(t *testing.T) {
 	req := &domain.ApprovalRequest{Action: "canary_0"}
 	if label := canaryBtnLabel(req); label != "✅ Canary" {

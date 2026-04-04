@@ -143,7 +143,7 @@ func BuildProgressMessage(summary string, nextReq *domain.ApprovalRequest, stopR
 
 		buttons := []Button{nextBtn}
 		if stopReq != nil {
-			stopActionID := "approve"
+			stopActionID := "approve_rollback"
 			stopLabel := "🛑 停止・ロールバック"
 			if stopReq.Action != "rollback" {
 				stopActionID = "deny"
