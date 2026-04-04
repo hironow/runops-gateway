@@ -132,12 +132,7 @@ PAYLOAD=$(jq -n \
         type: "section",
         text: {
           type: "mrkdwn",
-          text: ("*Revision(s):* `" + $revisions + "`\n*Build:* " + $build_info)
-        },
-        accessory: {
-          type: "image",
-          image_url: "https://placehold.co/75x75/FF0000/FFFFFF?text=PROD",
-          alt_text: "PROD environment"
+          text: (":rotating_light: *PROD*\n*Revision(s):* `" + $revisions + "`\n*Build:* " + $build_info)
         }
       },
       {
