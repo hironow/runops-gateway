@@ -44,7 +44,7 @@ App Home > Features > Interactivity & Shortcuts → ON
 **Request URL** に runops-gateway のエンドポイントを設定する:
 
 ```
-https://<CLOUD_RUN_URL>/slack/actions
+https://<CLOUD_RUN_URL>/slack/interactive
 ```
 
 Cloud Run URL は以下で取得できる:
@@ -124,7 +124,7 @@ App Home > Settings > Install App → Install to Workspace
 |  via Incoming Webhook URL --+-------+-> (HMAC verification)         |
 |                             |       |  - slack-webhook-url          |
 |  User clicks button         |       |    (Incoming Webhook URL)     |
-|  POST /slack/actions     ---+-------+->                             |
+|  POST /slack/interactive     ---+-------+->                             |
 |  (with response_url)        |       |  runops-gateway (Cloud Run)   |
 |                             |       |  1. Verify Signature          |
 |  Slack receives update   <--+-------+--  2. AuthZ (user allow-list) |
@@ -138,7 +138,7 @@ Legend:
 - Incoming Webhook URL: Slack App の通知送信先 URL（hooks.slack.com）
 - response_url: ボタン付きメッセージの更新用 URL（Slack がペイロードに含めて送信）
 - Signing Secret: リクエストの正当性を検証するための共有秘密鍵
-- /slack/actions: runops-gateway のインタラクション受信エンドポイント
+- /slack/interactive: runops-gateway のインタラクション受信エンドポイント
 
 ---
 
