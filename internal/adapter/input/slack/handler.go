@@ -21,6 +21,8 @@ import (
 // current canonical form. Singular fields are retained for backward compatibility
 // with legacy button payloads already posted in Slack.
 type actionValue struct {
+	Project          string `json:"project"`
+	Location         string `json:"location"`
 	ResourceType     string `json:"resource_type"`
 	ResourceNames    string `json:"resource_names"`
 	ResourceName     string `json:"resource_name"`     // legacy: singular form
@@ -101,7 +103,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
+	if av.Project == "" || av.Location == "" {
+		slog.Warn("missing project or location in button value", "project", av.Project, "location", av.Location)
+		w.WriteHeader(http.StatusOK)
+		return
+	}
 	req := domain.ApprovalRequest{
+		Project:          av.Project,
+		Location:         av.Location,
 		ResourceType:     domain.ResourceType(av.ResourceType),
 		ResourceNames:    firstNonEmpty(av.ResourceNames, av.ResourceName),
 		Targets:          firstNonEmpty(av.Targets, av.Target),
