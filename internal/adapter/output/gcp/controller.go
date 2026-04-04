@@ -11,37 +11,18 @@ import (
 	"google.golang.org/api/sqladmin/v1"
 )
 
-// Config holds GCP project and location settings.
-type Config struct {
-	ProjectID string // GOOGLE_CLOUD_PROJECT
-	Location  string // CLOUD_RUN_LOCATION (e.g. "asia-northeast1")
-}
-
 // Controller implements port.GCPController using GCP client libraries.
-type Controller struct {
-	cfg Config
-}
+type Controller struct{}
 
-// NewController creates a new GCP Controller. Returns error if config is invalid.
-func NewController(cfg Config) (*Controller, error) {
-	if cfg.ProjectID == "" {
-		return nil, fmt.Errorf("gcp: ProjectID is required")
-	}
-	if cfg.Location == "" {
-		cfg.Location = "asia-northeast1"
-	}
-	return &Controller{cfg: cfg}, nil
-}
-
-// Location returns the configured GCP location.
-func (c *Controller) Location() string {
-	return c.cfg.Location
+// NewController creates a new GCP Controller.
+func NewController() *Controller {
+	return &Controller{}
 }
 
 // ShiftTraffic updates traffic allocation for a Cloud Run Service revision.
-func (c *Controller) ShiftTraffic(ctx context.Context, serviceName, revision string, percent int32) error {
+func (c *Controller) ShiftTraffic(ctx context.Context, project, location, serviceName, revision string, percent int32) error {
 	slog.InfoContext(ctx, "gcp: shifting traffic",
-		"service", serviceName, "revision", revision, "percent", percent)
+		"project", project, "location", location, "service", serviceName, "revision", revision, "percent", percent)
 
 	client, err := run.NewServicesClient(ctx)
 	if err != nil {
@@ -50,7 +31,7 @@ func (c *Controller) ShiftTraffic(ctx context.Context, serviceName, revision str
 	defer client.Close()
 
 	servicePath := fmt.Sprintf("projects/%s/locations/%s/services/%s",
-		c.cfg.ProjectID, c.cfg.Location, serviceName)
+		project, location, serviceName)
 
 	req := &runpb.UpdateServiceRequest{
 		Service: &runpb.Service{
@@ -84,8 +65,8 @@ func (c *Controller) ShiftTraffic(ctx context.Context, serviceName, revision str
 }
 
 // ExecuteJob runs a Cloud Run Job with optional argument overrides.
-func (c *Controller) ExecuteJob(ctx context.Context, jobName string, args []string) error {
-	slog.InfoContext(ctx, "gcp: executing job", "job", jobName, "args", args)
+func (c *Controller) ExecuteJob(ctx context.Context, project, location, jobName string, args []string) error {
+	slog.InfoContext(ctx, "gcp: executing job", "project", project, "location", location, "job", jobName, "args", args)
 
 	client, err := run.NewJobsClient(ctx)
 	if err != nil {
@@ -94,7 +75,7 @@ func (c *Controller) ExecuteJob(ctx context.Context, jobName string, args []stri
 	defer client.Close()
 
 	jobPath := fmt.Sprintf("projects/%s/locations/%s/jobs/%s",
-		c.cfg.ProjectID, c.cfg.Location, jobName)
+		project, location, jobName)
 
 	req := &runpb.RunJobRequest{
 		Name: jobPath,
@@ -118,9 +99,9 @@ func (c *Controller) ExecuteJob(ctx context.Context, jobName string, args []stri
 }
 
 // UpdateWorkerPool shifts instance allocation for a Cloud Run Worker Pool revision to the given percent.
-func (c *Controller) UpdateWorkerPool(ctx context.Context, poolName, revision string, percent int32) error {
+func (c *Controller) UpdateWorkerPool(ctx context.Context, project, location, poolName, revision string, percent int32) error {
 	slog.InfoContext(ctx, "gcp: updating worker pool",
-		"pool", poolName, "revision", revision, "percent", percent)
+		"project", project, "location", location, "pool", poolName, "revision", revision, "percent", percent)
 
 	client, err := run.NewWorkerPoolsClient(ctx)
 	if err != nil {
@@ -129,7 +110,7 @@ func (c *Controller) UpdateWorkerPool(ctx context.Context, poolName, revision st
 	defer client.Close()
 
 	poolPath := fmt.Sprintf("projects/%s/locations/%s/workerPools/%s",
-		c.cfg.ProjectID, c.cfg.Location, poolName)
+		project, location, poolName)
 
 	req := &runpb.UpdateWorkerPoolRequest{
 		WorkerPool: &runpb.WorkerPool{
@@ -162,8 +143,8 @@ func (c *Controller) UpdateWorkerPool(ctx context.Context, poolName, revision st
 }
 
 // TriggerBackup initiates an on-demand Cloud SQL backup and waits for completion.
-func (c *Controller) TriggerBackup(ctx context.Context, instanceName string) error {
-	slog.InfoContext(ctx, "gcp: triggering cloud sql backup", "instance", instanceName)
+func (c *Controller) TriggerBackup(ctx context.Context, project, instanceName string) error {
+	slog.InfoContext(ctx, "gcp: triggering cloud sql backup", "project", project, "instance", instanceName)
 
 	svc, err := sqladmin.NewService(ctx)
 	if err != nil {
@@ -174,14 +155,14 @@ func (c *Controller) TriggerBackup(ctx context.Context, instanceName string) err
 		Description: "Triggered by runops-gateway before migration",
 	}
 
-	op, err := svc.BackupRuns.Insert(c.cfg.ProjectID, instanceName, backupRun).Context(ctx).Do()
+	op, err := svc.BackupRuns.Insert(project, instanceName, backupRun).Context(ctx).Do()
 	if err != nil {
 		return fmt.Errorf("gcp: insert backup run: %w", err)
 	}
 
 	// Poll until done (Cloud SQL uses its own Operation type, not LRO)
 	for {
-		status, err := svc.Operations.Get(c.cfg.ProjectID, op.Name).Context(ctx).Do()
+		status, err := svc.Operations.Get(project, op.Name).Context(ctx).Do()
 		if err != nil {
 			return fmt.Errorf("gcp: get backup operation: %w", err)
 		}
