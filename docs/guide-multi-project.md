@@ -56,6 +56,7 @@ Legend / 凡例:
 - APP_PROJECT_A / B: 管理対象アプリがそれぞれ稼働する GCP プロジェクト（N 個）
 - slack-chatops-sa: runops-gateway のランタイム SA（全 APP_PROJECT のリソースを操作）
 - roles/run.developer: Cloud Run Service / Jobs / Worker Pool の操作権限（各 APP_PROJECT で個別に付与）
+- roles/artifactregistry.reader: Artifact Registry の読み取り権限（トラフィック切り替え時のイメージ pull に必要、各 APP_PROJECT で付与）
 - secretAccessor: 各 APP_PROJECT の Cloud Build SA に GATEWAY_PROJECT のシークレット読み取り権限を付与
 - Secret Mgr: slack-signing-secret と slack-webhook-url を管理
 ```
@@ -130,6 +131,13 @@ gcloud iam service-accounts add-iam-policy-binding \
   --project=${APP_PROJECT} \
   --member="serviceAccount:${CHATOPS_SA}" \
   --role="roles/iam.serviceAccountUser"
+
+# Artifact Registry の読み取り権限（トラフィック切り替え時にイメージを pull するため）
+gcloud artifacts repositories add-iam-policy-binding YOUR_AR_REPO \
+  --project=${APP_PROJECT} \
+  --location=asia-northeast1 \
+  --member="serviceAccount:${CHATOPS_SA}" \
+  --role="roles/artifactregistry.reader"
 ```
 
 **APP_PROJECT の Cloud Build SA に GATEWAY_PROJECT のシークレット読み取り権限を付与（GATEWAY_PROJECT 側で実行）:**

@@ -116,6 +116,18 @@ gcloud iam service-accounts add-iam-policy-binding \
 
 > **Note**: カスタムランタイム SA を使用している場合は、そのカスタム SA に対して同じ binding を付与すること。
 
+<!-- -->
+
+> **Note**: シングルプロジェクト構成では、chatops SA は通常 Artifact Registry への読み取り権限を持っている。ただし、Artifact Registry に制限的な IAM ポリシーを設定している場合は、`roles/artifactregistry.reader` の付与が必要:
+>
+> ```bash
+> gcloud artifacts repositories add-iam-policy-binding YOUR_AR_REPO \
+>   --project=YOUR_PROJECT \
+>   --location=asia-northeast1 \
+>   --member="serviceAccount:${CHATOPS_SA}" \
+>   --role="roles/artifactregistry.reader"
+> ```
+
 追加の Cloud Run Service / Jobs に対して `run.developer` が必要な場合は手動で付与する:
 
 ```bash
