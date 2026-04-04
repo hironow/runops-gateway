@@ -10,7 +10,7 @@ import (
 )
 
 func newDenyCmd(useCase port.RunOpsUseCase) *cobra.Command {
-	var approver string
+	var project, location, approver string
 	var noSlack bool
 
 	cmd := &cobra.Command{
@@ -22,6 +22,8 @@ func newDenyCmd(useCase port.RunOpsUseCase) *cobra.Command {
 				approver = gitUserEmail()
 			}
 			req := domain.ApprovalRequest{
+				Project:       project,
+				Location:      location,
 				ResourceType:  domain.ResourceType(args[0]),
 				ResourceNames: args[1],
 				ApproverID:    approver,
@@ -37,7 +39,11 @@ func newDenyCmd(useCase port.RunOpsUseCase) *cobra.Command {
 		},
 	}
 
+	cmd.Flags().StringVar(&project, "project", "", "GCP project ID of the target resource (required)")
+	cmd.Flags().StringVar(&location, "location", "", "GCP region of the target resource (required)")
 	cmd.Flags().StringVar(&approver, "approver", "", "Approver ID or email")
 	cmd.Flags().BoolVar(&noSlack, "no-slack", false, "Disable Slack notifications")
+	_ = cmd.MarkFlagRequired("project")
+	_ = cmd.MarkFlagRequired("location")
 	return cmd
 }

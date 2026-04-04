@@ -42,6 +42,7 @@ func TestApproveCmd_Success(t *testing.T) {
 
 	// when
 	root.SetArgs([]string{"approve", "service", "frontend-service",
+		"--project=test-project", "--location=asia-northeast1",
 		"--action=canary_10", "--target=v001", "--approver=U123"})
 	err := root.Execute()
 
@@ -67,7 +68,8 @@ func TestApproveCmd_MissingAction(t *testing.T) {
 	root.SetErr(&bytes.Buffer{})
 
 	// when
-	root.SetArgs([]string{"approve", "service", "frontend-service", "--approver=U123"})
+	root.SetArgs([]string{"approve", "service", "frontend-service",
+		"--project=test-project", "--location=asia-northeast1", "--approver=U123"})
 	err := root.Execute()
 
 	// then
@@ -104,6 +106,7 @@ func TestApproveCmd_UseCaseError(t *testing.T) {
 
 	// when
 	root.SetArgs([]string{"approve", "service", "frontend-service",
+		"--project=test-project", "--location=asia-northeast1",
 		"--action=canary_10", "--approver=U123"})
 	err := root.Execute()
 
@@ -122,12 +125,19 @@ func TestApproveCmd_CLIMode(t *testing.T) {
 
 	// when
 	root.SetArgs([]string{"approve", "service", "frontend-service",
+		"--project=test-project", "--location=asia-northeast1",
 		"--action=canary_10", "--approver=U123"})
 	err := root.Execute()
 
 	// then
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if mock.lastReq.Project != "test-project" {
+		t.Errorf("expected Project=%q, got %q", "test-project", mock.lastReq.Project)
+	}
+	if mock.lastReq.Location != "asia-northeast1" {
+		t.Errorf("expected Location=%q, got %q", "asia-northeast1", mock.lastReq.Location)
 	}
 	if mock.lastReq.Source != "cli" {
 		t.Errorf("expected Source=%q, got %q", "cli", mock.lastReq.Source)
@@ -146,7 +156,8 @@ func TestDenyCmd_Success(t *testing.T) {
 	root.SetOut(buf)
 
 	// when
-	root.SetArgs([]string{"deny", "service", "frontend-service", "--approver=U123"})
+	root.SetArgs([]string{"deny", "service", "frontend-service",
+		"--project=test-project", "--location=asia-northeast1", "--approver=U123"})
 	err := root.Execute()
 
 	// then

@@ -87,6 +87,8 @@ func TestHandler_ValidApprove(t *testing.T) {
 	handler := NewHandler(mock, secret)
 
 	av := actionValue{
+		Project:       "test-project",
+		Location:      "asia-northeast1",
 		ResourceType:  "service",
 		ResourceNames: "frontend",
 		Targets:       "v2",
@@ -124,6 +126,12 @@ func TestHandler_ValidApprove(t *testing.T) {
 		if req.ResourceNames != "frontend" {
 			t.Errorf("expected resource frontend, got %s", req.ResourceNames)
 		}
+		if req.Project != "test-project" {
+			t.Errorf("expected project test-project, got %s", req.Project)
+		}
+		if req.Location != "asia-northeast1" {
+			t.Errorf("expected location asia-northeast1, got %s", req.Location)
+		}
 	case <-time.After(time.Second):
 		t.Fatal("timeout waiting for ApproveAction")
 	}
@@ -136,6 +144,8 @@ func TestHandler_ValidDeny(t *testing.T) {
 	handler := NewHandler(mock, secret)
 
 	av := actionValue{
+		Project:       "test-project",
+		Location:      "asia-northeast1",
 		ResourceType:  "service",
 		ResourceNames: "backend",
 		Targets:       "v1",
@@ -207,7 +217,7 @@ func TestHandler_UnknownActionID(t *testing.T) {
 	mock := newMockUseCase()
 	handler := NewHandler(mock, secret)
 
-	av := actionValue{ResourceType: "service", ResourceNames: "svc", IssuedAt: time.Now().Unix()}
+	av := actionValue{Project: "test-project", Location: "asia-northeast1", ResourceType: "service", ResourceNames: "svc", IssuedAt: time.Now().Unix()}
 	avBytes, _ := json.Marshal(av)
 
 	payload := interactivePayload{}
@@ -272,7 +282,7 @@ func TestHandler_MultipleActions_OnlyFirstProcessed(t *testing.T) {
 	mock := newMockUseCase()
 	handler := NewHandler(mock, secret)
 
-	av := actionValue{ResourceType: "service", ResourceNames: "svc", IssuedAt: time.Now().Unix()}
+	av := actionValue{Project: "test-project", Location: "asia-northeast1", ResourceType: "service", ResourceNames: "svc", IssuedAt: time.Now().Unix()}
 	avBytes, _ := json.Marshal(av)
 
 	payload := interactivePayload{}
@@ -325,6 +335,8 @@ func gzipBase64(t *testing.T, s string) string {
 func TestParseActionValue_PlainJSON_ParsedCorrectly(t *testing.T) {
 	// given
 	av := actionValue{
+		Project:       "test-project",
+		Location:      "asia-northeast1",
 		ResourceType:  "service",
 		ResourceNames: "frontend,backend",
 		Targets:       "rev-001,rev-002",
@@ -351,6 +363,8 @@ func TestParseActionValue_PlainJSON_ParsedCorrectly(t *testing.T) {
 func TestParseActionValue_GzPrefixed_DecompressedCorrectly(t *testing.T) {
 	// given — manually compress a known action value
 	original := actionValue{
+		Project:       "test-project",
+		Location:      "asia-northeast1",
 		ResourceType:  "service",
 		ResourceNames: "frontend,backend",
 		Targets:       "rev-001,rev-002",
@@ -382,6 +396,8 @@ func TestHandler_CompressedButtonValue_Dispatched(t *testing.T) {
 	handler := NewHandler(mock, secret)
 
 	av := actionValue{
+		Project:       "test-project",
+		Location:      "asia-northeast1",
 		ResourceType:  "service",
 		ResourceNames: "frontend,backend",
 		Targets:       "rev-001,rev-002",
@@ -470,6 +486,50 @@ func TestParseActionValue_CorruptGzip_ReturnsError(t *testing.T) {
 	// then
 	if err == nil {
 		t.Fatal("expected error for corrupt gzip, got nil")
+	}
+}
+
+func TestHandler_MissingProjectOrLocation_RejectsGracefully(t *testing.T) {
+	// given — action value has no project/location; handler must return 200 without dispatching
+	secret := "test-secret"
+	mock := newMockUseCase()
+	handler := NewHandler(mock, secret)
+
+	av := actionValue{
+		ResourceType:  "service",
+		ResourceNames: "frontend",
+		Targets:       "v2",
+		Action:        "canary_10",
+		IssuedAt:      time.Now().Unix(),
+		// Project and Location intentionally empty
+	}
+	avBytes, _ := json.Marshal(av)
+
+	payload := interactivePayload{}
+	payload.User.ID = "U123"
+	payload.ResponseURL = "https://hooks.slack.com/response"
+	payload.Actions = []struct {
+		ActionID string `json:"action_id"`
+		Value    string `json:"value"`
+	}{
+		{ActionID: "approve", Value: string(avBytes)},
+	}
+	payloadBytes, _ := json.Marshal(payload)
+
+	req := buildValidRequest(t, secret, string(payloadBytes))
+	rr := httptest.NewRecorder()
+
+	// when
+	handler.ServeHTTP(rr, req)
+
+	// then — 200 OK but ApproveAction must NOT be called
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rr.Code)
+	}
+	select {
+	case <-mock.approveCh:
+		t.Error("expected ApproveAction NOT to be called when project/location are missing")
+	default:
 	}
 }
 

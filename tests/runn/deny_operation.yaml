@@ -9,8 +9,8 @@ vars:
   # Signing secret must match SLACK_SIGNING_SECRET env var of the running server.
   # Signature is pre-computed for timestamp=1700000000 with secret=test-secret.
   timestamp: "1700000000"
-  signature: "v0=e0c1ace2411b61ed46d17d50290abd93f62102f2549bd443d443f741d65172d1"
-  body: "payload=%7B%22actions%22%3A%5B%7B%22action_id%22%3A%22deny%22%2C%22value%22%3A%22%7B%5C%22action%5C%22%3A%5C%22canary_10%5C%22%2C%5C%22issued_at%5C%22%3A0%2C%5C%22resource_name%5C%22%3A%5C%22frontend%5C%22%2C%5C%22resource_type%5C%22%3A%5C%22service%5C%22%2C%5C%22target%5C%22%3A%5C%22v001%5C%22%7D%22%7D%5D%2C%22response_url%22%3A%22http%3A%2F%2Flocalhost%2Fcallback%22%2C%22type%22%3A%22block_actions%22%2C%22user%22%3A%7B%22id%22%3A%22UTEST456%22%7D%7D"
+  signature: "v0=f534d3e6c26d9469dd793f161195caf4662a47cfeccd45fd48c2156865bfc1d1"
+  body: "payload=%7B%22actions%22%3A%5B%7B%22action_id%22%3A%22deny%22%2C%22value%22%3A%22%7B%5C%22action%5C%22%3A%5C%22canary_10%5C%22%2C%5C%22issued_at%5C%22%3A0%2C%5C%22resource_name%5C%22%3A%5C%22frontend%5C%22%2C%5C%22resource_type%5C%22%3A%5C%22service%5C%22%2C%5C%22target%5C%22%3A%5C%22v001%5C%22%2C%5C%22project%5C%22%3A%5C%22test-project%5C%22%2C%5C%22location%5C%22%3A%5C%22asia-northeast1%5C%22%7D%22%7D%5D%2C%22response_url%22%3A%22http%3A%2F%2Flocalhost%2Fcallback%22%2C%22type%22%3A%22block_actions%22%2C%22user%22%3A%7B%22id%22%3A%22UTEST456%22%7D%7D"
 steps:
   - desc: "Agent denies the canary operation on frontend service"
     req:

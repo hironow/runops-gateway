@@ -18,12 +18,11 @@
 | 変数名 | 必須 | 説明 |
 |---|---|---|
 | `SLACK_SIGNING_SECRET` | ✅ | Slack 署名検証用シークレット |
-| `ALLOWED_SLACK_USERS` | ✅ | 許可ユーザー ID（カンマ区切り） |
-| `GOOGLE_CLOUD_PROJECT` | ✅ | GCP プロジェクト ID |
-| `CLOUD_RUN_LOCATION` | ✅ | Cloud Run リージョン（例: `asia-northeast1`） |
-| `SLACK_BOT_TOKEN` | 任意 | CLI 実行時の Slack API 用 |
+| `ALLOWED_SLACK_USERS` | — | 許可ユーザー ID（カンマ区切り） |
 | `BUTTON_EXPIRY_SECONDS` | 任意 | ボタン有効期限（デフォルト 7200） |
 | `PORT` | 任意 | リッスンポート（デフォルト 8080） |
+
+> GCP プロジェクト ID とリージョンはサーバーの環境変数ではなく、Slack ボタン値から取得される（クロスプロジェクト対応）。
 
 ## Definition of Done (DoD)
 

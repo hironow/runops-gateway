@@ -103,15 +103,15 @@ func (s *RunOpsService) approveService(ctx context.Context, req domain.ApprovalR
 
 	names := splitCSV(req.ResourceNames)
 	targets := splitCSV(req.Targets)
-	type shifted struct{ name, target string }
+	type shifted struct{ project, location, name, target string }
 	done := make([]shifted, 0, len(names))
 
 	for i, name := range names {
 		rev := csvAt(targets, i)
-		if err := s.gcp.ShiftTraffic(ctx, name, rev, percent); err != nil {
+		if err := s.gcp.ShiftTraffic(ctx, req.Project, req.Location, name, rev, percent); err != nil {
 			// Compensating rollback: restore all already-shifted resources to 0%.
 			for _, d := range done {
-				if rerr := s.gcp.ShiftTraffic(ctx, d.name, d.target, 0); rerr != nil {
+				if rerr := s.gcp.ShiftTraffic(ctx, d.project, d.location, d.name, d.target, 0); rerr != nil {
 					slog.Error("compensating rollback failed", "resource", d.name, "err", rerr)
 				}
 			}
@@ -120,7 +120,7 @@ func (s *RunOpsService) approveService(ctx context.Context, req domain.ApprovalR
 			}
 			return err
 		}
-		done = append(done, shifted{name, rev})
+		done = append(done, shifted{req.Project, req.Location, name, rev})
 	}
 
 	summary := fmt.Sprintf("✅ トラフィック切り替え完了。サービス: *%s* → %d%%", req.ResourceNames, percent)
@@ -130,6 +130,8 @@ func (s *RunOpsService) approveService(ctx context.Context, req domain.ApprovalR
 		nextPercent := domain.NextCanaryPercent(percent)
 		if nextPercent > 0 {
 			nextReq = &domain.ApprovalRequest{
+				Project:       req.Project,
+				Location:      req.Location,
 				ResourceType:  req.ResourceType,
 				ResourceNames: req.ResourceNames,
 				Targets:       req.Targets,
@@ -139,6 +141,8 @@ func (s *RunOpsService) approveService(ctx context.Context, req domain.ApprovalR
 				ResponseURL:   req.ResponseURL,
 			}
 			stopReq = &domain.ApprovalRequest{
+				Project:       req.Project,
+				Location:      req.Location,
 				ResourceType:  req.ResourceType,
 				ResourceNames: req.ResourceNames,
 				Targets:       req.Targets,
@@ -161,7 +165,7 @@ func (s *RunOpsService) approveJob(ctx context.Context, req domain.ApprovalReque
 		slog.Error("UpdateMessage failed", "err", err)
 	}
 
-	if err := s.gcp.TriggerBackup(ctx, req.ResourceNames); err != nil {
+	if err := s.gcp.TriggerBackup(ctx, req.Project, req.ResourceNames); err != nil {
 		if uerr := s.notifier.UpdateMessage(ctx, target, fmt.Sprintf("バックアップエラー: %v", err)); uerr != nil {
 			slog.Error("UpdateMessage failed", "err", uerr)
 		}
@@ -172,7 +176,7 @@ func (s *RunOpsService) approveJob(ctx context.Context, req domain.ApprovalReque
 		slog.Error("UpdateMessage failed", "err", err)
 	}
 
-	if err := s.gcp.ExecuteJob(ctx, req.ResourceNames, []string{"--mode=apply"}); err != nil {
+	if err := s.gcp.ExecuteJob(ctx, req.Project, req.Location, req.ResourceNames, []string{"--mode=apply"}); err != nil {
 		if uerr := s.notifier.UpdateMessage(ctx, target, fmt.Sprintf("マイグレーションエラー: %v", err)); uerr != nil {
 			slog.Error("UpdateMessage failed", "err", uerr)
 		}
@@ -184,6 +188,8 @@ func (s *RunOpsService) approveJob(ctx context.Context, req domain.ApprovalReque
 	// If next_* fields are set, offer the canary button with migration_done=true.
 	if req.NextServiceNames != "" {
 		nextReq := &domain.ApprovalRequest{
+			Project:       req.Project,
+			Location:      req.Location,
 			ResourceType:  domain.ResourceTypeService,
 			ResourceNames: req.NextServiceNames,
 			Targets:       req.NextRevisions,
@@ -195,6 +201,8 @@ func (s *RunOpsService) approveJob(ctx context.Context, req domain.ApprovalReque
 		}
 		// Deny button for the canary step (migration_done=true, no confirm needed)
 		denyReq := &domain.ApprovalRequest{
+			Project:       req.Project,
+			Location:      req.Location,
 			ResourceType:  domain.ResourceTypeService,
 			ResourceNames: req.NextServiceNames,
 			Targets:       req.NextRevisions,
@@ -237,14 +245,14 @@ func (s *RunOpsService) approveWorkerPool(ctx context.Context, req domain.Approv
 
 	names := splitCSV(req.ResourceNames)
 	targets := splitCSV(req.Targets)
-	type shifted struct{ name, target string }
+	type shifted struct{ project, location, name, target string }
 	done := make([]shifted, 0, len(names))
 
 	for i, name := range names {
 		rev := csvAt(targets, i)
-		if err := s.gcp.UpdateWorkerPool(ctx, name, rev, percent); err != nil {
+		if err := s.gcp.UpdateWorkerPool(ctx, req.Project, req.Location, name, rev, percent); err != nil {
 			for _, d := range done {
-				if rerr := s.gcp.UpdateWorkerPool(ctx, d.name, d.target, 0); rerr != nil {
+				if rerr := s.gcp.UpdateWorkerPool(ctx, d.project, d.location, d.name, d.target, 0); rerr != nil {
 					slog.Error("compensating rollback failed", "resource", d.name, "err", rerr)
 				}
 			}
@@ -253,7 +261,7 @@ func (s *RunOpsService) approveWorkerPool(ctx context.Context, req domain.Approv
 			}
 			return err
 		}
-		done = append(done, shifted{name, rev})
+		done = append(done, shifted{req.Project, req.Location, name, rev})
 	}
 
 	summary := fmt.Sprintf("✅ インスタンス割り当て切り替え完了。プール: *%s* → %d%%", req.ResourceNames, percent)
@@ -263,6 +271,8 @@ func (s *RunOpsService) approveWorkerPool(ctx context.Context, req domain.Approv
 		nextPercent := domain.NextCanaryPercent(percent)
 		if nextPercent > 0 {
 			nextReq = &domain.ApprovalRequest{
+				Project:       req.Project,
+				Location:      req.Location,
 				ResourceType:  req.ResourceType,
 				ResourceNames: req.ResourceNames,
 				Targets:       req.Targets,
@@ -272,6 +282,8 @@ func (s *RunOpsService) approveWorkerPool(ctx context.Context, req domain.Approv
 				ResponseURL:   req.ResponseURL,
 			}
 			stopReq = &domain.ApprovalRequest{
+				Project:       req.Project,
+				Location:      req.Location,
 				ResourceType:  req.ResourceType,
 				ResourceNames: req.ResourceNames,
 				Targets:       req.Targets,

@@ -74,6 +74,10 @@ func ParseAction(s string) (Action, error) {
 // all-or-nothing multi-resource deployments. Single-resource requests
 // are represented as a 1-element CSV (e.g. "frontend-service").
 type ApprovalRequest struct {
+	// Project is the GCP project ID of the target resource (e.g. "trade-non").
+	Project string
+	// Location is the GCP region of the target resource (e.g. "asia-northeast1").
+	Location string
 	// ResourceType is the kind of GCP resource to operate on.
 	ResourceType ResourceType
 	// ResourceNames is a comma-separated list of resource names, e.g. "frontend-service,backend-service".

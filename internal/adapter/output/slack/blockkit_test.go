@@ -307,6 +307,8 @@ func TestBuildApprovalMessage_NoRequireConfirm_ApproveButtonHasNoConfirmObject(t
 func TestBuildProgressMessage_WithNextAndStop_ContainsBothButtons(t *testing.T) {
 	// given
 	nextReq := &domain.ApprovalRequest{
+		Project:       "test-project",
+		Location:      "asia-northeast1",
 		ResourceType:  domain.ResourceTypeService,
 		ResourceNames: "frontend-service",
 		Targets:       "v2",
@@ -314,6 +316,8 @@ func TestBuildProgressMessage_WithNextAndStop_ContainsBothButtons(t *testing.T) 
 		IssuedAt:      1700000000,
 	}
 	stopReq := &domain.ApprovalRequest{
+		Project:       "test-project",
+		Location:      "asia-northeast1",
 		ResourceType:  domain.ResourceTypeService,
 		ResourceNames: "frontend-service",
 		Targets:       "v2",
@@ -515,6 +519,8 @@ func TestCompressButtonValue_Roundtrip(t *testing.T) {
 func TestMarshalActionValue_AlwaysGzPrefix(t *testing.T) {
 	// Even a minimal single-service request must produce a gz: compressed value.
 	req := &domain.ApprovalRequest{
+		Project:       "test-project",
+		Location:      "asia-northeast1",
 		ResourceType:  domain.ResourceTypeService,
 		ResourceNames: "frontend-service",
 		Targets:       "frontend-service-00001-abc",
@@ -549,6 +555,8 @@ func TestMarshalActionValue_LargeBundle_RoundtripDecodesCorrectly(t *testing.T) 
 		"very-long-service-name-auth-svc-005-00010-mno",
 	}, ",")
 	req := &domain.ApprovalRequest{
+		Project:       "test-project",
+		Location:      "asia-northeast1",
 		ResourceType:  domain.ResourceTypeService,
 		ResourceNames: names,
 		Targets:       revs,
@@ -584,9 +592,54 @@ func TestMarshalActionValue_LargeBundle_RoundtripDecodesCorrectly(t *testing.T) 
 	}
 }
 
+func TestMarshalActionValue_IncludesProjectAndLocation(t *testing.T) {
+	// given
+	req := &domain.ApprovalRequest{
+		Project:       "my-gcp-project",
+		Location:      "us-central1",
+		ResourceType:  domain.ResourceTypeService,
+		ResourceNames: "frontend-service",
+		Targets:       "v2",
+		Action:        "canary_10",
+		IssuedAt:      1700000000,
+	}
+
+	// when
+	val := marshalActionValue(req)
+
+	// then — decode gz: prefix, base64url decode, gzip decompress, json unmarshal
+	if !strings.HasPrefix(val, "gz:") {
+		t.Fatalf("expected gz: prefix, got %q", val[:min(20, len(val))])
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(val[3:])
+	if err != nil {
+		t.Fatalf("base64 decode: %v", err)
+	}
+	r, err := gzip.NewReader(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatalf("gzip reader: %v", err)
+	}
+	expanded, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("gzip read: %v", err)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(expanded, &out); err != nil {
+		t.Fatalf("JSON unmarshal: %v", err)
+	}
+	if got := out["project"]; got != "my-gcp-project" {
+		t.Errorf("project: got %v, want my-gcp-project", got)
+	}
+	if got := out["location"]; got != "us-central1" {
+		t.Errorf("location: got %v, want us-central1", got)
+	}
+}
+
 func TestBuildProgressMessage_StopReqNonRollback_UsesDenyActionID(t *testing.T) {
 	// given — stopReq with action != "rollback" must produce a deny button (action_id="deny")
 	nextReq := &domain.ApprovalRequest{
+		Project:       "test-project",
+		Location:      "asia-northeast1",
 		ResourceType:  domain.ResourceTypeService,
 		ResourceNames: "frontend-service",
 		Targets:       "v2",
@@ -594,6 +647,8 @@ func TestBuildProgressMessage_StopReqNonRollback_UsesDenyActionID(t *testing.T) 
 		IssuedAt:      1700000000,
 	}
 	stopReq := &domain.ApprovalRequest{
+		Project:       "test-project",
+		Location:      "asia-northeast1",
 		ResourceType:  domain.ResourceTypeService,
 		ResourceNames: "frontend-service",
 		Targets:       "v2",

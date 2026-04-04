@@ -77,7 +77,9 @@ steps:
           "${_MIGRATION_JOB_NAME}" \
           "${BRANCH_NAME}" \
           "${COMMIT_SHA}" \
-          "$$(cat /workspace/revisions.txt)"
+          "$$(cat /workspace/revisions.txt)" \
+          "${PROJECT_ID}" \
+          "${_REGION}"
     waitFor:
       - deploy-services
       - update-migration-job

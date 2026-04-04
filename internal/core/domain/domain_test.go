@@ -35,6 +35,8 @@ func TestApprovalRequestZeroValue(t *testing.T) {
 func TestApprovalRequestFields(t *testing.T) {
 	// given
 	req := domain.ApprovalRequest{
+		Project:       "test-project",
+		Location:      "asia-northeast1",
 		ResourceType:  domain.ResourceTypeService,
 		ResourceNames: "frontend-service",
 		Targets:       "frontend-service-v2",
@@ -63,6 +65,8 @@ func TestApprovalRequestFields(t *testing.T) {
 func TestApprovalRequestCLIMode(t *testing.T) {
 	// given — CLI mode has IssuedAt == 0 and empty ResponseURL
 	req := domain.ApprovalRequest{
+		Project:       "test-project",
+		Location:      "asia-northeast1",
 		ResourceType:  domain.ResourceTypeJob,
 		ResourceNames: "migrate-job",
 		Action:        "migrate_apply",

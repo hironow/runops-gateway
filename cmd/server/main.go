@@ -28,14 +28,7 @@ func main() {
 	}
 
 	// Wire adapters
-	gcpCtrl, err := gcpadapter.NewController(gcpadapter.Config{
-		ProjectID: cfg.projectID,
-		Location:  cfg.location,
-	})
-	if err != nil {
-		slog.Error("failed to create GCP controller", "error", err)
-		os.Exit(1)
-	}
+	gcpCtrl := gcpadapter.NewController()
 
 	notifier := slacknotifier.NewResponseURLNotifier()
 	authChecker := auth.NewEnvAuthChecker()
@@ -81,34 +74,22 @@ func main() {
 
 type config struct {
 	slackSigningSecret string
-	projectID          string
-	location           string
 	port               string
 }
 
 func loadConfig() (config, error) {
 	cfg := config{
 		slackSigningSecret: os.Getenv("SLACK_SIGNING_SECRET"),
-		projectID:          os.Getenv("GOOGLE_CLOUD_PROJECT"),
-		location:           os.Getenv("CLOUD_RUN_LOCATION"),
 		port:               os.Getenv("PORT"),
 	}
 	if cfg.slackSigningSecret == "" {
 		return config{}, fmt.Errorf("SLACK_SIGNING_SECRET is required")
-	}
-	if cfg.projectID == "" {
-		return config{}, fmt.Errorf("GOOGLE_CLOUD_PROJECT is required")
-	}
-	if cfg.location == "" {
-		cfg.location = "asia-northeast1"
 	}
 	if cfg.port == "" {
 		cfg.port = "8080"
 	}
 	// Log config (never log secrets)
 	slog.Info("config loaded",
-		"project_id", cfg.projectID,
-		"location", cfg.location,
 		"port", cfg.port,
 	)
 	return cfg, nil

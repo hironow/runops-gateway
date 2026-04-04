@@ -10,7 +10,7 @@ Cloud Run Service / Jobs と Cloud SQL Admin API を操作する。
 ### ShiftTraffic (Cloud Run Service)
 
 ```go
-func (c *GCPControllerImpl) ShiftTraffic(ctx context.Context, serviceName, revision string, percent int32) error
+func (c *GCPControllerImpl) ShiftTraffic(ctx context.Context, project, location, serviceName, revision string, percent int32) error
 ```
 
 - `cloud.google.com/go/run/apiv2` の `ServicesClient.UpdateService` を使用
@@ -20,7 +20,7 @@ func (c *GCPControllerImpl) ShiftTraffic(ctx context.Context, serviceName, revis
 ### ExecuteJob (Cloud Run Jobs)
 
 ```go
-func (c *GCPControllerImpl) ExecuteJob(ctx context.Context, jobName string, args []string) error
+func (c *GCPControllerImpl) ExecuteJob(ctx context.Context, project, location, jobName string, args []string) error
 ```
 
 - `JobsClient.RunJob` を使用
@@ -30,7 +30,7 @@ func (c *GCPControllerImpl) ExecuteJob(ctx context.Context, jobName string, args
 ### TriggerBackup (Cloud SQL)
 
 ```go
-func (c *GCPControllerImpl) TriggerBackup(ctx context.Context, instanceName string) error
+func (c *GCPControllerImpl) TriggerBackup(ctx context.Context, project, instanceName string) error
 ```
 
 - `google.golang.org/api/sqladmin/v1` の `BackupRuns.Insert` を使用
@@ -39,12 +39,7 @@ func (c *GCPControllerImpl) TriggerBackup(ctx context.Context, instanceName stri
 
 ## 設定
 
-```go
-type GCPControllerConfig struct {
-    ProjectID string // GOOGLE_CLOUD_PROJECT
-    Location  string // CLOUD_RUN_LOCATION (default: "asia-northeast1")
-}
-```
+Controller は固定の設定を持たない。project と location は各操作の引数として受け取る（クロスプロジェクト対応）。
 
 ## Definition of Done (DoD)
 
@@ -53,7 +48,6 @@ type GCPControllerConfig struct {
 - [ ] `TriggerBackup` のユニットテストが存在する
 - [ ] LRO 失敗時（`op.Wait` エラー）でエラーが返るテストが存在する
 - [ ] `context.Context` キャンセル時に処理が中断されるテストが存在する
-- [ ] `GCPControllerConfig` の必須フィールドが空の場合に初期化エラーを返すテスト
 
 ## 非機能要件
 

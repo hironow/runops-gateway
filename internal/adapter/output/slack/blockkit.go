@@ -265,6 +265,8 @@ func canaryBtnLabel(req *domain.ApprovalRequest) string {
 
 // progressActionValue mirrors the handler's actionValue for button serialization.
 type progressActionValue struct {
+	Project          string `json:"project"`
+	Location         string `json:"location"`
 	ResourceType     string `json:"resource_type"`
 	ResourceNames    string `json:"resource_names"`
 	Targets          string `json:"targets"`
@@ -282,6 +284,8 @@ type progressActionValue struct {
 // See ADR 0011 for the rationale behind unconditional compression.
 func marshalActionValue(req *domain.ApprovalRequest) string {
 	v := progressActionValue{
+		Project:          req.Project,
+		Location:         req.Location,
 		ResourceType:     string(req.ResourceType),
 		ResourceNames:    req.ResourceNames,
 		Targets:          req.Targets,

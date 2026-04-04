@@ -2,7 +2,7 @@
 # notify-slack.sh — Build and POST the Slack deploy-approval Block Kit message.
 #
 # Usage:
-#   notify-slack.sh [--dry-run] SERVICE_NAMES MIGRATION_JOB_NAME BRANCH_NAME COMMIT_SHA REVISIONS
+#   notify-slack.sh [--dry-run] SERVICE_NAMES MIGRATION_JOB_NAME BRANCH_NAME COMMIT_SHA REVISIONS PROJECT_ID REGION
 #
 # Arguments:
 #   SERVICE_NAMES       Comma-separated Cloud Run service names
@@ -10,6 +10,8 @@
 #   BRANCH_NAME         Git branch name
 #   COMMIT_SHA          Full Git commit SHA (at least 7 chars)
 #   REVISIONS           Comma-separated revision names (same order as SERVICE_NAMES)
+#   PROJECT_ID          GCP project ID where the managed app runs
+#   REGION              Cloud Run region (e.g. asia-northeast1)
 #
 # Environment:
 #   SLACK_WEBHOOK_URL   Slack Incoming Webhook URL (required unless --dry-run)
@@ -30,8 +32,8 @@ if [[ "${1:-}" == "--dry-run" ]]; then
   shift
 fi
 
-if [[ $# -lt 5 ]]; then
-  echo "Usage: $0 [--dry-run] SERVICE_NAMES MIGRATION_JOB_NAME BRANCH_NAME COMMIT_SHA REVISIONS" >&2
+if [[ $# -lt 7 ]]; then
+  echo "Usage: $0 [--dry-run] SERVICE_NAMES MIGRATION_JOB_NAME BRANCH_NAME COMMIT_SHA REVISIONS PROJECT_ID REGION" >&2
   exit 1
 fi
 
@@ -40,6 +42,8 @@ MIGRATION_JOB_NAME="$2"
 BRANCH_NAME="$3"
 COMMIT_SHA="$4"
 REVISIONS="$5"
+PROJECT_ID="$6"
+REGION="$7"
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -74,6 +78,8 @@ fi
 
 # "1. DB Migration → Canary" button: run the migration job then offer canary step.
 JOB_ACTION=$(jq -n \
+  --arg p    "${PROJECT_ID}" \
+  --arg l    "${REGION}" \
   --arg rt   "job" \
   --arg rn   "${MIGRATION_JOB_NAME}" \
   --arg t    "" \
@@ -82,28 +88,32 @@ JOB_ACTION=$(jq -n \
   --arg nsn  "${SERVICE_NAMES}" \
   --arg nr   "${REVISIONS}" \
   --arg na   "canary_10" \
-  '{resource_type:$rt, resource_names:$rn, targets:$t, action:$a,
+  '{project:$p, location:$l, resource_type:$rt, resource_names:$rn, targets:$t, action:$a,
     issued_at:$ia, migration_done:false,
     next_service_names:$nsn, next_revisions:$nr, next_action:$na}')
 
 # "2. Canary (skip migration)" button: go straight to canary without DB migration.
 SRV_ACTION=$(jq -n \
+  --arg p   "${PROJECT_ID}" \
+  --arg l   "${REGION}" \
   --arg rt  "service" \
   --arg rn  "${SERVICE_NAMES}" \
   --arg t   "${REVISIONS}" \
   --arg a   "canary_10" \
   --argjson ia "${TIMESTAMP}" \
-  '{resource_type:$rt, resource_names:$rn, targets:$t, action:$a,
+  '{project:$p, location:$l, resource_type:$rt, resource_names:$rn, targets:$t, action:$a,
     issued_at:$ia, migration_done:true}')
 
 # "Deny" button: reject the deployment without performing any action.
 DENY_ACTION=$(jq -n \
+  --arg p   "${PROJECT_ID}" \
+  --arg l   "${REGION}" \
   --arg rt  "service" \
   --arg rn  "${SERVICE_NAMES}" \
   --arg t   "${REVISIONS}" \
   --arg a   "canary_10" \
   --argjson ia "${TIMESTAMP}" \
-  '{resource_type:$rt, resource_names:$rn, targets:$t, action:$a, issued_at:$ia}')
+  '{project:$p, location:$l, resource_type:$rt, resource_names:$rn, targets:$t, action:$a, issued_at:$ia}')
 
 # Compress all button values — matches marshalActionValue which always compresses
 # so that the decompression path is exercised on every button click.
