@@ -2,23 +2,26 @@
 # notify-slack.sh — Build and POST the Slack deploy-approval Block Kit message.
 #
 # Usage:
-#   notify-slack.sh [--dry-run] SERVICE_NAMES MIGRATION_JOB_NAME BRANCH_NAME COMMIT_SHA REVISIONS PROJECT_ID REGION
+#   notify-slack.sh [--dry-run] SERVICE_NAMES MIGRATION_JOB_NAME BRANCH_NAME COMMIT_SHA REVISIONS PROJECT_ID REGION [WORKER_POOL_NAMES WORKER_POOL_REVISIONS]
 #
 # Arguments:
-#   SERVICE_NAMES       Comma-separated Cloud Run service names
-#   MIGRATION_JOB_NAME  Cloud Run Job name for DB migration
-#   BRANCH_NAME         Git branch name
-#   COMMIT_SHA          Full Git commit SHA (at least 7 chars)
-#   REVISIONS           Comma-separated revision names (same order as SERVICE_NAMES)
-#   PROJECT_ID          GCP project ID where the managed app runs
-#   REGION              Cloud Run region (e.g. asia-northeast1)
+#   SERVICE_NAMES           Comma-separated Cloud Run service names
+#   MIGRATION_JOB_NAME      Cloud Run Job name for DB migration
+#   BRANCH_NAME             Git branch name
+#   COMMIT_SHA              Full Git commit SHA (at least 7 chars)
+#   REVISIONS               Comma-separated revision names (same order as SERVICE_NAMES)
+#   PROJECT_ID              GCP project ID where the managed app runs
+#   REGION                  Cloud Run region (e.g. asia-northeast1)
+#   WORKER_POOL_NAMES       (optional) Comma-separated Cloud Run worker pool names
+#   WORKER_POOL_REVISIONS   (optional) Comma-separated worker pool revisions
+#                           (same order as WORKER_POOL_NAMES)
 #
 # Environment:
-#   SLACK_WEBHOOK_URL   Slack Incoming Webhook URL (required unless --dry-run)
+#   SLACK_WEBHOOK_URL       Slack Incoming Webhook URL (required unless --dry-run)
 #
 # Flags:
-#   --dry-run           Print the JSON payload to stdout instead of sending to Slack.
-#                       Used in tests to validate payload structure and button values.
+#   --dry-run               Print the JSON payload to stdout instead of sending to Slack.
+#                           Used in tests to validate payload structure and button values.
 
 set -euo pipefail
 
@@ -33,7 +36,7 @@ if [[ "${1:-}" == "--dry-run" ]]; then
 fi
 
 if [[ $# -lt 7 ]]; then
-  echo "Usage: $0 [--dry-run] SERVICE_NAMES MIGRATION_JOB_NAME BRANCH_NAME COMMIT_SHA REVISIONS PROJECT_ID REGION" >&2
+  echo "Usage: $0 [--dry-run] SERVICE_NAMES MIGRATION_JOB_NAME BRANCH_NAME COMMIT_SHA REVISIONS PROJECT_ID REGION [WORKER_POOL_NAMES WORKER_POOL_REVISIONS]" >&2
   exit 1
 fi
 
@@ -44,6 +47,8 @@ COMMIT_SHA="$4"
 REVISIONS="$5"
 PROJECT_ID="$6"
 REGION="$7"
+WORKER_POOL_NAMES="${8:-}"
+WORKER_POOL_REVISIONS="${9:-}"
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -104,6 +109,23 @@ SRV_ACTION=$(jq -n \
   '{project:$p, location:$l, resource_type:$rt, resource_names:$rn, targets:$t, action:$a,
     issued_at:$ia, migration_done:true}')
 
+# "3. Worker Pool Canary" button: promote worker pools independently from services.
+# resource_type=worker-pool dispatches to ApproveAction → approveShift → UpdateWorkerPool.
+# Only emitted when WORKER_POOL_NAMES is non-empty (build may target pool-less envs).
+WP_ACTION=""
+if [[ -n "${WORKER_POOL_NAMES}" ]]; then
+  WP_ACTION=$(jq -n \
+    --arg p   "${PROJECT_ID}" \
+    --arg l   "${REGION}" \
+    --arg rt  "worker-pool" \
+    --arg rn  "${WORKER_POOL_NAMES}" \
+    --arg t   "${WORKER_POOL_REVISIONS}" \
+    --arg a   "canary_10" \
+    --argjson ia "${TIMESTAMP}" \
+    '{project:$p, location:$l, resource_type:$rt, resource_names:$rn, targets:$t, action:$a,
+      issued_at:$ia, migration_done:true}')
+fi
+
 # "Deny" button: reject the deployment without performing any action.
 DENY_ACTION=$(jq -n \
   --arg p   "${PROJECT_ID}" \
@@ -120,6 +142,10 @@ DENY_ACTION=$(jq -n \
 JOB_VALUE="gz:$(compress_gz "$JOB_ACTION")"
 SRV_VALUE="gz:$(compress_gz "$SRV_ACTION")"
 DENY_VALUE="gz:$(compress_gz "$DENY_ACTION")"
+WP_VALUE=""
+if [[ -n "${WP_ACTION}" ]]; then
+  WP_VALUE="gz:$(compress_gz "$WP_ACTION")"
+fi
 
 # ---------------------------------------------------------------------------
 # Build Block Kit payload
@@ -129,8 +155,11 @@ PAYLOAD=$(jq -n \
   --arg svc        "${SVC_DISPLAY}" \
   --arg build_info "${BUILD_INFO}" \
   --arg revisions  "${REVISIONS}" \
+  --arg pool_names "${WORKER_POOL_NAMES}" \
+  --arg pool_revs  "${WORKER_POOL_REVISIONS}" \
   --arg job_val    "$JOB_VALUE" \
   --arg srv_val    "$SRV_VALUE" \
+  --arg wp_val     "$WP_VALUE" \
   --arg deny_val   "$DENY_VALUE" \
   '{
     blocks: [
@@ -142,40 +171,50 @@ PAYLOAD=$(jq -n \
         type: "section",
         text: {
           type: "mrkdwn",
-          text: (":rotating_light: *PROD*\n*Revision(s):* `" + $revisions + "`\n*Build:* " + $build_info)
+          text: (":rotating_light: *PROD*\n*Revision(s):* `" + $revisions + "`\n*Build:* " + $build_info
+            + (if $pool_names != "" then "\n*Worker Pool(s):* `" + $pool_names + "` @ `" + $pool_revs + "`" else "" end))
         }
       },
       {
         type: "actions",
-        elements: [
-          {
-            type: "button",
-            text: {type: "plain_text", emoji: true, text: "1. DB Migration \u2192 Canary"},
-            style: "danger",
-            action_id: "approve_job",
-            value: $job_val
-          },
-          {
-            type: "button",
-            text: {type: "plain_text", emoji: true, text: "2. Canary (skip migration)"},
-            style: "primary",
-            action_id: "approve_service",
-            value: $srv_val,
-            confirm: {
-              title: {type: "plain_text", text: "\u7d9a\u884c\u3057\u307e\u3059\u304b\uff1f"},
-              text: {type: "mrkdwn", text: "DB\u30de\u30a4\u30b0\u30ec\u30fc\u30b7\u30e7\u30f3\u3092\u5b9f\u65bd\u3057\u307e\u3057\u305f\u304b\uff1f\u672a\u5b9f\u65bd\u306e\u5834\u5408\u306f\u5148\u306b\u5b9f\u884c\u3057\u3066\u304f\u3060\u3055\u3044\u3002"},
-              confirm: {type: "plain_text", text: "\u306f\u3044\u3001\u7d9a\u884c\u3057\u307e\u3059"},
-              deny: {type: "plain_text", text: "\u30ad\u30e3\u30f3\u30bb\u30eb"}
+        elements: (
+          [
+            {
+              type: "button",
+              text: {type: "plain_text", emoji: true, text: "1. DB Migration → Canary"},
+              style: "danger",
+              action_id: "approve_job",
+              value: $job_val
+            },
+            {
+              type: "button",
+              text: {type: "plain_text", emoji: true, text: "2. Canary (skip migration)"},
+              style: "primary",
+              action_id: "approve_service",
+              value: $srv_val,
+              confirm: {
+                title: {type: "plain_text", text: "続行しますか？"},
+                text: {type: "mrkdwn", text: "DBマイグレーションを実施しましたか？未実施の場合は先に実行してください。"},
+                confirm: {type: "plain_text", text: "はい、続行します"},
+                deny: {type: "plain_text", text: "キャンセル"}
+              }
             }
-          },
-          {
-            type: "button",
-            text: {type: "plain_text", emoji: true, text: "\ud83d\udecf Deny"},
-            style: "danger",
-            action_id: "deny",
-            value: $deny_val
-          }
-        ]
+          ]
+          + (if $wp_val != "" then [{
+              type: "button",
+              text: {type: "plain_text", emoji: true, text: "3. Worker Pool Canary"},
+              style: "primary",
+              action_id: "approve_worker_pool",
+              value: $wp_val
+            }] else [] end)
+          + [{
+              type: "button",
+              text: {type: "plain_text", emoji: true, text: "🛏 Deny"},
+              style: "danger",
+              action_id: "deny",
+              value: $deny_val
+            }]
+        )
       }
     ]
   }')
