@@ -90,6 +90,12 @@ type ApprovalRequest struct {
 	ApproverID string
 	// IssuedAt is a Unix timestamp used for expiry checks; 0 means no expiry (CLI mode).
 	IssuedAt int64
+	// SqlInstanceName is the Cloud SQL instance name used for the pre-migration
+	// backup. When empty (legacy clients), TriggerBackup falls back to
+	// ResourceNames — which only works when the job happens to be named after
+	// the SQL instance. Set this explicitly to decouple job name from SQL name.
+	// Only meaningful for ResourceType == Job.
+	SqlInstanceName string
 	// MigrationDone signals that DB migration has completed for this deployment.
 	// When true, the canary button is shown without a confirm dialog.
 	MigrationDone bool

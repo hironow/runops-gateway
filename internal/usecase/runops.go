@@ -130,7 +130,13 @@ func (s *RunOpsService) approveJob(ctx context.Context, req domain.ApprovalReque
 		slog.Error("UpdateMessage failed", "err", err)
 	}
 
-	if err := s.gcp.TriggerBackup(ctx, req.Project, req.ResourceNames); err != nil {
+	// Cloud SQL instance name — SqlInstanceName が明示指定されていればそれを、
+	// 未指定なら ResourceNames (= Job 名) を legacy fallback として使う。
+	sqlInstance := req.SqlInstanceName
+	if sqlInstance == "" {
+		sqlInstance = req.ResourceNames
+	}
+	if err := s.gcp.TriggerBackup(ctx, req.Project, sqlInstance); err != nil {
 		s.offerRetry(ctx, target, req, fmt.Sprintf("❌ バックアップエラー: %v", err))
 		return err
 	}
