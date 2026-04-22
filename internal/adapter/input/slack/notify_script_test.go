@@ -265,6 +265,170 @@ func TestNotifyScript_ButtonValuesContainProjectAndLocation(t *testing.T) {
 	}
 }
 
+// TestNotifyScript_WorkerPool_* verify that when WORKER_POOL_NAMES (arg 8) and
+// WORKER_POOL_REVISIONS (arg 9) are supplied, an extra "3. Worker Pool Canary"
+// button is emitted with action_id=approve_worker_pool and resource_type=worker-pool.
+// Without those args, the payload retains its original 3-button shape.
+
+func TestNotifyScript_NoWorkerPool_HasThreeButtons(t *testing.T) {
+	skipIfToolMissing(t, "bash", "gzip", "base64", "jq")
+
+	cmd := exec.Command("bash", notifyScript(t),
+		"--dry-run",
+		"frontend-service",
+		"db-migrate-job",
+		"main",
+		"abc1234567890abcdef",
+		"frontend-service-00001-abc",
+		"test-project",
+		"asia-northeast1",
+	)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("script failed: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(out, &payload); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	got := actionIDs(t, payload)
+	want := []string{"approve_job", "approve_service", "deny"}
+	if !sliceEqual(got, want) {
+		t.Errorf("action_ids = %v, want %v", got, want)
+	}
+}
+
+func TestNotifyScript_WithWorkerPool_HasFourButtons(t *testing.T) {
+	skipIfToolMissing(t, "bash", "gzip", "base64", "jq")
+
+	cmd := exec.Command("bash", notifyScript(t),
+		"--dry-run",
+		"frontend-service",
+		"db-migrate-job",
+		"main",
+		"abc1234567890abcdef",
+		"frontend-service-00001-abc",
+		"test-project",
+		"asia-northeast1",
+		"async-worker,batch-worker",
+		"async-worker-00002-xxx,batch-worker-00002-yyy",
+	)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("script failed: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(out, &payload); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	got := actionIDs(t, payload)
+	want := []string{"approve_job", "approve_service", "approve_worker_pool", "deny"}
+	if !sliceEqual(got, want) {
+		t.Errorf("action_ids = %v, want %v", got, want)
+	}
+}
+
+func TestNotifyScript_WithWorkerPool_ButtonEncodesResourceType(t *testing.T) {
+	skipIfToolMissing(t, "bash", "gzip", "base64", "jq")
+
+	cmd := exec.Command("bash", notifyScript(t),
+		"--dry-run",
+		"frontend-service",
+		"db-migrate-job",
+		"main",
+		"abc1234567890abcdef",
+		"frontend-service-00001-abc",
+		"test-project",
+		"asia-northeast1",
+		"async-worker,batch-worker",
+		"async-worker-00002-xxx,batch-worker-00002-yyy",
+	)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("script failed: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(out, &payload); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+
+	wpVal := buttonValue(t, payload, "approve_worker_pool")
+	if wpVal == "" {
+		t.Fatal("approve_worker_pool button not found")
+	}
+	av, err := parseActionValue(wpVal)
+	if err != nil {
+		t.Fatalf("parseActionValue failed: %v", err)
+	}
+	if string(av.ResourceType) != "worker-pool" {
+		t.Errorf("ResourceType = %q, want %q", av.ResourceType, "worker-pool")
+	}
+	if av.ResourceNames != "async-worker,batch-worker" {
+		t.Errorf("ResourceNames = %q, want %q", av.ResourceNames, "async-worker,batch-worker")
+	}
+	if av.Targets != "async-worker-00002-xxx,batch-worker-00002-yyy" {
+		t.Errorf("Targets = %q, want %q", av.Targets, "async-worker-00002-xxx,batch-worker-00002-yyy")
+	}
+	if av.Action != "canary_10" {
+		t.Errorf("Action = %q, want %q", av.Action, "canary_10")
+	}
+	if !av.MigrationDone {
+		t.Error("MigrationDone = false, want true (worker pool promotion is independent of DB migration)")
+	}
+}
+
+// actionIDs extracts the action_id of every button in the "actions" block.
+func actionIDs(t *testing.T, payload map[string]any) []string {
+	t.Helper()
+	var ids []string
+	for _, b := range payload["blocks"].([]any) {
+		block := b.(map[string]any)
+		if block["type"] != "actions" {
+			continue
+		}
+		for _, e := range block["elements"].([]any) {
+			el := e.(map[string]any)
+			if id, ok := el["action_id"].(string); ok {
+				ids = append(ids, id)
+			}
+		}
+	}
+	return ids
+}
+
+// buttonValue returns the "value" of the button with the given action_id,
+// or "" if not found.
+func buttonValue(t *testing.T, payload map[string]any, actionID string) string {
+	t.Helper()
+	for _, b := range payload["blocks"].([]any) {
+		block := b.(map[string]any)
+		if block["type"] != "actions" {
+			continue
+		}
+		for _, e := range block["elements"].([]any) {
+			el := e.(map[string]any)
+			if el["action_id"] == actionID {
+				if v, ok := el["value"].(string); ok {
+					return v
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func sliceEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func TestNotifyScript_CompressGz_CompatibleWithParseActionValue(t *testing.T) {
 	skipIfToolMissing(t, "bash", "gzip", "base64")
 

@@ -61,6 +61,53 @@ steps:
     waitFor:
       - push-image
 
+  # Step 3b: Update Cloud Run Worker Pools (no-promote = allocate 0 instances to
+  # the new revision). Slack approval (ApproveAction → approveShift →
+  # UpdateWorkerPool) shifts allocation later — same pattern as Cloud Run Service
+  # --no-traffic + ShiftTraffic, but for worker pools.
+  #
+  # _WORKER_POOL_NAMES が空の場合は step 自体 skip (pool を持たない app 向け)。
+  # 新 revision 名は /workspace/pool-revisions.txt に CSV で書き出し、
+  # notify-slack step が Slack button の targets に埋める。
+  - id: update-worker-pools
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        # pool-revisions.txt は notify-slack が必ず cat するので空でも先にファイルを作る。
+        : > /workspace/pool-revisions.txt
+        if [[ -z "${_WORKER_POOL_NAMES}" ]]; then
+          echo "_WORKER_POOL_NAMES is empty, skipping worker pool image update"
+          exit 0
+        fi
+        IFS=',' read -ra POOLS <<< "${_WORKER_POOL_NAMES}"
+        POOL_REVISIONS=""
+        for POOL in "$${POOLS[@]}"; do
+          POOL=$$(echo "$$POOL" | xargs)
+          [[ -z "$$POOL" ]] && continue
+          echo "Updating worker pool $$POOL → ${_IMAGE}:${COMMIT_SHA} (no-promote)"
+          if gcloud beta run worker-pools update "$$POOL" \
+            --image ${_IMAGE}:${COMMIT_SHA} \
+            --region ${_REGION} \
+            --project ${PROJECT_ID} \
+            --no-promote; then
+            REV=$$(gcloud beta run worker-pools describe "$$POOL" \
+              --region ${_REGION} \
+              --project ${PROJECT_ID} \
+              --format="value(status.latestCreatedRevisionName)")
+            echo "Updated $$POOL -> $$REV"
+            POOL_REVISIONS="$${POOL_REVISIONS:+$${POOL_REVISIONS},}$$REV"
+          else
+            echo "Worker pool $$POOL not found, skipping"
+          fi
+        done
+        echo "$$POOL_REVISIONS" > /workspace/pool-revisions.txt
+        echo "All pool revisions: $$(cat /workspace/pool-revisions.txt)"
+    waitFor:
+      - push-image
+
   # Step 4: Send Slack ChatOps notification with approval buttons.
   # Payload logic lives in scripts/notify-slack.sh (tested via Go tests).
   - id: notify-slack
@@ -79,10 +126,13 @@ steps:
           "${COMMIT_SHA}" \
           "$$(cat /workspace/revisions.txt)" \
           "${PROJECT_ID}" \
-          "${_REGION}"
+          "${_REGION}" \
+          "${_WORKER_POOL_NAMES}" \
+          "$$(cat /workspace/pool-revisions.txt)"
     waitFor:
       - deploy-services
       - update-migration-job
+      - update-worker-pools
 
 substitutions:
   _IMAGE: asia-northeast1-docker.pkg.dev/${PROJECT_ID}/runops/runops-gateway
@@ -91,6 +141,9 @@ substitutions:
   # Example multi-service:   _SERVICE_NAMES: frontend-service,backend-service
   _SERVICE_NAMES: frontend-service
   _MIGRATION_JOB_NAME: db-migrate-job
+  # Comma-separated list of Cloud Run worker pool names. Empty → skip (apps
+  # without worker pools). Example: _WORKER_POOL_NAMES: async-worker,batch-worker
+  _WORKER_POOL_NAMES: ""
   _REGION: asia-northeast1
   # GCP project ID where runops-gateway (and its secrets) is hosted.
   # Override this when the managed app is in a different project.
