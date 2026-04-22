@@ -21,8 +21,12 @@ type RunOpsUseCase interface {
 type GCPController interface {
 	// ShiftTraffic adjusts traffic on a Cloud Run service revision to the given percent.
 	ShiftTraffic(ctx context.Context, project, location, serviceName, revision string, percent int32) error
-	// ExecuteJob triggers a Cloud Run job with the provided arguments.
-	ExecuteJob(ctx context.Context, project, location, jobName string, args []string) error
+	// ExecuteJob triggers a Cloud Run job with extra arguments **appended** to
+	// the job's existing Args (not replaced). Implementation must merge
+	// `existingArgs + extraArgs` so entry script paths set in terraform survive
+	// the override (avoids `node --mode=apply` misinterpretation bug).
+	// Passing an empty slice runs the job with its default Args only.
+	ExecuteJob(ctx context.Context, project, location, jobName string, extraArgs []string) error
 	// TriggerBackup initiates a database backup for the specified Cloud SQL instance.
 	TriggerBackup(ctx context.Context, project, instanceName string) error
 	// UpdateWorkerPool shifts instance allocation for a Cloud Run worker pool revision to the given percent.

@@ -111,18 +111,50 @@ func (c *Controller) ShiftTraffic(ctx context.Context, project, location, servic
 	return nil
 }
 
-// ExecuteJob runs a Cloud Run Job with optional argument overrides.
-func (c *Controller) ExecuteJob(ctx context.Context, project, location, jobName string, args []string) error {
-	slog.InfoContext(ctx, "gcp: executing job", "project", project, "location", location, "job", jobName, "args", args)
+// ExecuteJob runs a Cloud Run Job with additional arguments appended to the
+// job's existing Args.
+//
+// Cloud Run RunJobRequest の ContainerOverrides.Args は既存 Args を**完全に
+// 置換**する。そのため `extraArgs` だけを渡すと job spec に書かれた entry
+// script path (例: `packages/bootstrap/dist/migrate.js`) が消えて、
+// `node --mode=apply` のように Node flag として誤解釈される bug が過去に発生
+// した。これを避けるため、本メソッドは:
+//
+//  1. GetJob で現在の Args を取得
+//  2. `existing + extraArgs` で ContainerOverride.Args を構築
+//
+// という "append 意味論" に寄せて API gap を隠蔽する。呼び出し側は「script の
+// 既存 args に何を追加するか」だけを意識すれば良い。
+//
+// extraArgs が空の場合は existing のみ (= job の default 起動) を使用。
+func (c *Controller) ExecuteJob(ctx context.Context, project, location, jobName string, extraArgs []string) error {
+	slog.InfoContext(ctx, "gcp: executing job", "project", project, "location", location, "job", jobName, "extra_args", extraArgs)
 
 	jobPath := fmt.Sprintf("projects/%s/locations/%s/jobs/%s",
 		project, location, jobName)
+
+	// 1. 既存 Args 取得
+	job, err := c.jobs.GetJob(ctx, &runpb.GetJobRequest{Name: jobPath})
+	if err != nil {
+		return fmt.Errorf("gcp: get job for args merge: %w", err)
+	}
+	var existingArgs []string
+	if job.Template != nil && job.Template.Template != nil && len(job.Template.Template.Containers) > 0 {
+		existingArgs = job.Template.Template.Containers[0].Args
+	}
+
+	mergedArgs := make([]string, 0, len(existingArgs)+len(extraArgs))
+	mergedArgs = append(mergedArgs, existingArgs...)
+	mergedArgs = append(mergedArgs, extraArgs...)
+
+	slog.InfoContext(ctx, "gcp: merged job args",
+		"job", jobName, "existing", existingArgs, "extra", extraArgs, "merged", mergedArgs)
 
 	req := &runpb.RunJobRequest{
 		Name: jobPath,
 		Overrides: &runpb.RunJobRequest_Overrides{
 			ContainerOverrides: []*runpb.RunJobRequest_Overrides_ContainerOverride{
-				{Args: args},
+				{Args: mergedArgs},
 			},
 		},
 	}
