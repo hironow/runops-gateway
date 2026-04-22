@@ -12,7 +12,7 @@ import (
 )
 
 func newApproveCmd(useCase port.RunOpsUseCase) *cobra.Command {
-	var project, location, action, target, approver string
+	var project, location, action, target, approver, sqlInstance string
 	var noSlack bool
 
 	cmd := &cobra.Command{
@@ -31,14 +31,15 @@ func newApproveCmd(useCase port.RunOpsUseCase) *cobra.Command {
 			}
 
 			req := domain.ApprovalRequest{
-				Project:       project,
-				Location:      location,
-				ResourceType:  domain.ResourceType(resourceType),
-				ResourceNames: resourceName,
-				Targets:       target,
-				Action:        action,
-				ApproverID:    approver,
-				IssuedAt:      0, // CLI mode: no expiry
+				Project:         project,
+				Location:        location,
+				ResourceType:    domain.ResourceType(resourceType),
+				ResourceNames:   resourceName,
+				Targets:         target,
+				Action:          action,
+				ApproverID:      approver,
+				IssuedAt:        0, // CLI mode: no expiry
+				SqlInstanceName: sqlInstance,
 			}
 			notify := port.NotifyTarget{Mode: port.ModeStdout}
 
@@ -55,6 +56,7 @@ func newApproveCmd(useCase port.RunOpsUseCase) *cobra.Command {
 	cmd.Flags().StringVar(&action, "action", "", "Action to perform (e.g. canary_10, migrate_apply)")
 	cmd.Flags().StringVar(&target, "target", "", "Revision name (for Cloud Run Service)")
 	cmd.Flags().StringVar(&approver, "approver", "", "Approver ID or email (defaults to git config user.email)")
+	cmd.Flags().StringVar(&sqlInstance, "sql-instance", "", "Cloud SQL instance name to back up (for migrate_apply on jobs). Defaults to resource name for backward compat.")
 	cmd.Flags().BoolVar(&noSlack, "no-slack", false, "Disable Slack notifications (required when Slack is down)")
 	// noSlack flag is passed via Source="cli" which triggers StdoutNotifier in wiring
 	_ = cmd.MarkFlagRequired("project")
