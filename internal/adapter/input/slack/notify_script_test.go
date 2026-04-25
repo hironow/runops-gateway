@@ -298,6 +298,38 @@ func TestNotifyScript_NoWorkerPool_HasThreeButtons(t *testing.T) {
 	}
 }
 
+func TestNotifyScript_EmptyMigrationJob_SuppressesMigrationButton(t *testing.T) {
+	// Regression: apps without a Cloud SQL backed migration job (e.g. static
+	// sites like nn-makers) leave _MIGRATION_JOB_NAME empty in cloudbuild.yaml.
+	// Pressing button 1 in that case fires a Cloud SQL backup against an
+	// empty/non-existent instance and 403/404s. The button must not appear.
+	skipIfToolMissing(t, "bash", "gzip", "base64", "jq")
+
+	cmd := exec.Command("bash", notifyScript(t),
+		"--dry-run",
+		"nn-makers",
+		"", // ← MIGRATION_JOB_NAME empty
+		"main",
+		"abc1234567890abcdef",
+		"nn-makers-00001-abc",
+		"test-project",
+		"asia-northeast1",
+	)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("script failed: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(out, &payload); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	got := actionIDs(t, payload)
+	want := []string{"approve_service", "deny"}
+	if !sliceEqual(got, want) {
+		t.Errorf("action_ids = %v, want %v (button 1 must be suppressed when MIGRATION_JOB_NAME empty)", got, want)
+	}
+}
+
 func TestNotifyScript_WithWorkerPool_HasFourButtons(t *testing.T) {
 	skipIfToolMissing(t, "bash", "gzip", "base64", "jq")
 

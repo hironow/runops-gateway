@@ -835,3 +835,168 @@ func TestPost_SendsApplicationJsonContentType(t *testing.T) {
 		t.Errorf("Content-Type=%q, want application/json", contentType)
 	}
 }
+
+func TestRebuildInitialApproval_AllThreeButtons_PostsBlockKitPayload(t *testing.T) {
+	// given — backup just failed; usecase asks notifier to restore the
+	// initial 3-button prompt so the operator can choose a different path.
+	jobReq := &domain.ApprovalRequest{
+		Project: "test-project", Location: "asia-northeast1",
+		ResourceType:  domain.ResourceTypeJob,
+		ResourceNames: "db-migrate-job",
+		Action:        "migrate_apply",
+		IssuedAt:      1700000000,
+	}
+	svcReq := &domain.ApprovalRequest{
+		Project: "test-project", Location: "asia-northeast1",
+		ResourceType:  domain.ResourceTypeService,
+		ResourceNames: "frontend-service",
+		Targets:       "frontend-service-00001-abc",
+		Action:        "canary_10",
+		IssuedAt:      1700000000,
+	}
+	denyReq := &domain.ApprovalRequest{
+		Project: "test-project", Location: "asia-northeast1",
+		ResourceType:  domain.ResourceTypeService,
+		ResourceNames: "frontend-service",
+		Targets:       "frontend-service-00001-abc",
+		Action:        "deny",
+		IssuedAt:      1700000000,
+	}
+
+	var received map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&received)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	n := NewResponseURLNotifier()
+	target := port.NotifyTarget{CallbackURL: srv.URL, Mode: port.ModeSlack}
+
+	// when
+	err := n.RebuildInitialApproval(context.Background(), target, "❌ バックアップエラー: 403", jobReq, svcReq, denyReq)
+
+	// then — Slack receives a block-kit payload with 3 buttons in the
+	// last actions block (header + section + actions).
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if received["replace_original"] != true {
+		t.Error("expected replace_original=true so the existing message is rewritten in-place")
+	}
+	blocks, ok := received["blocks"].([]any)
+	if !ok || len(blocks) < 2 {
+		t.Fatalf("expected at least 2 blocks, got %v", received["blocks"])
+	}
+	actions, ok := blocks[len(blocks)-1].(map[string]any)
+	if !ok || actions["type"] != "actions" {
+		t.Fatalf("last block must be actions, got %v", blocks[len(blocks)-1])
+	}
+	elements, _ := actions["elements"].([]any)
+	if len(elements) != 3 {
+		t.Fatalf("expected 3 buttons, got %d", len(elements))
+	}
+	wantActionIDs := []string{"approve_job", "approve_service", "deny"}
+	for i, want := range wantActionIDs {
+		btn := elements[i].(map[string]any)
+		if btn["action_id"] != want {
+			t.Errorf("button[%d].action_id = %v, want %q", i, btn["action_id"], want)
+		}
+	}
+}
+
+func TestRebuildInitialApproval_NoJobReq_SuppressesMigrationButton(t *testing.T) {
+	// given — apps without a Cloud SQL migration (jobReq nil) should produce
+	// only 2 buttons: Canary skip migration + Deny. Same suppression as
+	// notify-slack.sh applies when MIGRATION_JOB_NAME is empty.
+	svcReq := &domain.ApprovalRequest{
+		Project: "test-project", Location: "asia-northeast1",
+		ResourceType:  domain.ResourceTypeService,
+		ResourceNames: "nn-makers", Targets: "nn-makers-v2",
+		Action: "canary_10", IssuedAt: 1700000000,
+	}
+	denyReq := &domain.ApprovalRequest{
+		Project: "test-project", Location: "asia-northeast1",
+		ResourceType:  domain.ResourceTypeService,
+		ResourceNames: "nn-makers", Action: "deny", IssuedAt: 1700000000,
+	}
+
+	var received map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&received)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	n := NewResponseURLNotifier()
+	target := port.NotifyTarget{CallbackURL: srv.URL, Mode: port.ModeSlack}
+
+	// when
+	err := n.RebuildInitialApproval(context.Background(), target, "err", nil, svcReq, denyReq)
+
+	// then
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	blocks, _ := received["blocks"].([]any)
+	actions, _ := blocks[len(blocks)-1].(map[string]any)
+	elements, _ := actions["elements"].([]any)
+	if len(elements) != 2 {
+		t.Fatalf("expected 2 buttons (no migrate), got %d", len(elements))
+	}
+	for _, e := range elements {
+		btn := e.(map[string]any)
+		if btn["action_id"] == "approve_job" {
+			t.Error("approve_job button must be suppressed when jobReq is nil")
+		}
+	}
+}
+
+func TestRebuildInitialApproval_StdoutMode_DoesNotPostHTTP(t *testing.T) {
+	// given — CLI/stdout mode should never hit response_url.
+	n := NewResponseURLNotifier()
+	target := port.NotifyTarget{CallbackURL: "", Mode: port.ModeStdout}
+
+	// when
+	err := n.RebuildInitialApproval(context.Background(), target, "err", nil, nil, nil)
+
+	// then — no error and no panic.
+	if err != nil {
+		t.Fatalf("stdout mode should not error, got %v", err)
+	}
+}
+
+func TestRebuildInitialApproval_TooLongButtonValue_SendsErrorMessage(t *testing.T) {
+	// given — service request whose payload is too large for Slack's 2000-char
+	// button-value limit. Notifier must fall back to a plain text message
+	// rather than emit an invalid block-kit payload.
+	// Use SHA-256-derived strings (incompressibleNames) so gzip cannot shrink
+	// the value below the limit; strings.Repeat would compress to ~tens of bytes.
+	names, revisions := incompressibleNames(50)
+	svcReq := &domain.ApprovalRequest{
+		Project: "p", Location: "l", ResourceType: domain.ResourceTypeService,
+		ResourceNames: names, Targets: revisions,
+		Action: "canary_10", IssuedAt: 1700000000,
+	}
+
+	var received map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&received)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	n := NewResponseURLNotifier()
+	target := port.NotifyTarget{CallbackURL: srv.URL, Mode: port.ModeSlack}
+
+	// when
+	err := n.RebuildInitialApproval(context.Background(), target, "err", nil, svcReq, nil)
+
+	// then — fallback text payload, no blocks.
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if _, hasBlocks := received["blocks"]; hasBlocks {
+		t.Error("expected fallback TextPayload (no blocks) when button value exceeds limit")
+	}
+}
