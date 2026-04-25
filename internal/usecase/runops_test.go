@@ -1425,3 +1425,75 @@ func TestOfferRetry_Fails_FallbackNotifySent(t *testing.T) {
 		t.Errorf("expected fallback message with 'ログを確認', got: %q", lastMsg)
 	}
 }
+
+func TestApproveAction_Job_BackupFails_RebuildInitialAlsoFails_FallbackNotifySent(t *testing.T) {
+	// given — backup fails AND the rebuild call (Slack response_url) also fails.
+	// Without a fallback, the message would stay stuck on "📦 DBバックアップを取得中..."
+	// indefinitely. We expect a plain UpdateMessage with the original error
+	// so the operator can still act.
+	gcp := newMockGCP()
+	gcp.triggerBackupErr = errors.New("backup 403")
+	notifier := &mockNotifier{rebuildInitialErr: errors.New("slack 503")}
+	auth := &mockAuth{authorized: true, expired: false}
+	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
+	req := newJobReq()
+	req.NextServiceNames = "frontend-service"
+	req.NextRevisions = "frontend-service-v2"
+
+	// when
+	err := svc.ApproveAction(context.Background(), req, testTarget)
+
+	// then
+	if err == nil {
+		t.Fatal("expected error from TriggerBackup failure")
+	}
+	if !notifier.rebuildInitialCalled {
+		t.Error("expected RebuildInitialApproval to be attempted")
+	}
+	// Counts updates: "📦 DBバックアップを取得中..." then the fallback after rebuild fails.
+	// The fallback must be present so operators are not left with a stale "in-progress" UI.
+	foundFallback := false
+	for _, msg := range notifier.updateMessageTexts {
+		if strings.Contains(msg, "Slack メッセージの更新に失敗") {
+			foundFallback = true
+			break
+		}
+	}
+	if !foundFallback {
+		t.Errorf("expected fallback UpdateMessage after rebuild failure, got texts %v", notifier.updateMessageTexts)
+	}
+}
+
+func TestApproveAction_Job_BackupFails_NoNextService_RebuildSkipsServiceButton(t *testing.T) {
+	// given — backup fails AND req.NextServiceNames is empty (degenerate config:
+	// migration job exists but no service to deploy). Defensive: rebuild should
+	// still emit the migration + deny buttons but skip the service button so the
+	// notifier doesn't render a button referencing an empty resource.
+	gcp := newMockGCP()
+	gcp.triggerBackupErr = errors.New("backup failed")
+	notifier := &mockNotifier{}
+	auth := &mockAuth{authorized: true, expired: false}
+	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
+	req := newJobReq()
+	// NextServiceNames intentionally left empty.
+
+	// when
+	err := svc.ApproveAction(context.Background(), req, testTarget)
+
+	// then
+	if err == nil {
+		t.Fatal("expected error from TriggerBackup failure")
+	}
+	if !notifier.rebuildInitialCalled {
+		t.Fatal("expected RebuildInitialApproval to be called")
+	}
+	if notifier.rebuildInitialJobReq == nil {
+		t.Error("expected job button to be present")
+	}
+	if notifier.rebuildInitialSvcReq != nil {
+		t.Error("expected service button to be suppressed when NextServiceNames is empty")
+	}
+	if notifier.rebuildInitialDenyReq == nil {
+		t.Error("expected deny button to always be present")
+	}
+}
