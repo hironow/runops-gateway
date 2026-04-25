@@ -138,6 +138,9 @@ func BuildProgressMessage(summary string, nextReq *domain.ApprovalRequest, stopR
 	if buildInfo := pickBuildInfo(nextReq, stopReq); buildInfo != "" {
 		body += "\n*Build:* " + safeTrunc(buildInfo, 200)
 	}
+	if approver := pickApproverID(nextReq, stopReq); approver != "" {
+		body += "\n*操作:* <@" + safeTrunc(approver, 80) + ">"
+	}
 	blocks := []Block{
 		SectionBlock(safeTrunc(body, maxSectionText)),
 	}
@@ -189,6 +192,9 @@ func BuildInitialApprovalMessage(errMsg string, jobReq, svcReq, denyReq *domain.
 	if buildInfo := pickBuildInfo(jobReq, svcReq, denyReq); buildInfo != "" {
 		body += "\n*Build:* " + safeTrunc(buildInfo, 200)
 	}
+	if approver := pickApproverID(jobReq, svcReq, denyReq); approver != "" {
+		body += "\n*操作:* <@" + safeTrunc(approver, 80) + ">"
+	}
 
 	buttons := []Button{}
 	if jobReq != nil {
@@ -239,6 +245,18 @@ func pickBuildInfo(reqs ...*domain.ApprovalRequest) string {
 	for _, r := range reqs {
 		if r != nil && r.BuildInfo != "" {
 			return r.BuildInfo
+		}
+	}
+	return ""
+}
+
+// pickApproverID returns the first non-empty ApproverID across the given requests.
+// cloneRequest preserves ApproverID across button transitions, so any non-nil
+// request reflects who pressed the button leading to the current message.
+func pickApproverID(reqs ...*domain.ApprovalRequest) string {
+	for _, r := range reqs {
+		if r != nil && r.ApproverID != "" {
+			return r.ApproverID
 		}
 	}
 	return ""

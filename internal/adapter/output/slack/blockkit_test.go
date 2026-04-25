@@ -788,3 +788,55 @@ func TestMarshalActionValue_RoundTripsBuildInfo(t *testing.T) {
 		t.Errorf("expected build_info in JSON, got: %s", plain)
 	}
 }
+
+func TestBuildInitialApprovalMessage_IncludesApprover(t *testing.T) {
+	jobReq := &domain.ApprovalRequest{
+		Project: "p", Location: "l", ResourceType: domain.ResourceTypeJob,
+		ResourceNames: "migrate-job", Action: "migrate_apply",
+		ApproverID: "U07ABCXYZ",
+	}
+	svcReq := &domain.ApprovalRequest{
+		Project: "p", Location: "l", ResourceType: domain.ResourceTypeService,
+		ResourceNames: "frontend", Targets: "frontend-v2", Action: "canary_10",
+		ApproverID: "U07ABCXYZ",
+	}
+
+	msg := BuildInitialApprovalMessage("❌ backup error", jobReq, svcReq, nil)
+
+	body := msg.Blocks[1].Text.Text
+	if !strings.Contains(body, "<@U07ABCXYZ>") {
+		t.Errorf("expected approver mention in body, got: %q", body)
+	}
+	if !strings.Contains(body, "*操作:*") {
+		t.Errorf("expected '*操作:*' label, got: %q", body)
+	}
+}
+
+func TestBuildInitialApprovalMessage_NoApprover_OmitsApproverLine(t *testing.T) {
+	svcReq := &domain.ApprovalRequest{
+		Project: "p", Location: "l", ResourceType: domain.ResourceTypeService,
+		ResourceNames: "frontend", Targets: "frontend-v2", Action: "canary_10",
+	}
+
+	msg := BuildInitialApprovalMessage("err", nil, svcReq, nil)
+
+	body := msg.Blocks[1].Text.Text
+	if strings.Contains(body, "*操作:*") {
+		t.Errorf("expected no operator line when ApproverID empty, got: %q", body)
+	}
+}
+
+func TestBuildProgressMessage_IncludesApprover(t *testing.T) {
+	nextReq := &domain.ApprovalRequest{
+		ResourceType:  domain.ResourceTypeService,
+		ResourceNames: "frontend", Targets: "frontend-v2",
+		Action: "canary_30", ApproverID: "U07ABCXYZ",
+	}
+
+	msg := BuildProgressMessage("✅ 10%完了", nextReq, nil)
+
+	body := msg.Blocks[0].Text.Text
+	if !strings.Contains(body, "<@U07ABCXYZ>") {
+		t.Errorf("expected approver mention in progress body, got: %q", body)
+	}
+}
