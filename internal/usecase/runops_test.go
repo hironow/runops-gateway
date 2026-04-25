@@ -46,8 +46,8 @@ type mockGCP struct {
 	shiftCalls             []shiftCall // all recorded ShiftTraffic calls in order
 	shiftTrafficCalled     bool
 	shiftTrafficPercent    int32
-	shiftErrOnIdx          int            // if >= 0, return shiftTrafficErr on this call index
-	shiftErrOnIndices      map[int]error  // multiple indices with specific errors (takes priority over shiftErrOnIdx)
+	shiftErrOnIdx          int           // if >= 0, return shiftTrafficErr on this call index
+	shiftErrOnIndices      map[int]error // multiple indices with specific errors (takes priority over shiftErrOnIdx)
 	shiftTrafficErr        error
 	executeJobCalled       bool
 	executeJobErr          error
@@ -105,7 +105,7 @@ type mockNotifier struct {
 	updateMessageTexts       []string
 	updateMessageErr         error
 	replaceMessageCalled     bool
-	replaceMessageText     string
+	replaceMessageText       string
 	replaceErr               error
 	sendEphemeralCalled      bool
 	sendEphemeralText        string
@@ -114,6 +114,12 @@ type mockNotifier struct {
 	offerContinuationNextReq *domain.ApprovalRequest
 	offerContinuationStopReq *domain.ApprovalRequest
 	offerContinuationErr     error
+	rebuildInitialCalled     bool
+	rebuildInitialErrMsg     string
+	rebuildInitialJobReq     *domain.ApprovalRequest
+	rebuildInitialSvcReq     *domain.ApprovalRequest
+	rebuildInitialDenyReq    *domain.ApprovalRequest
+	rebuildInitialErr        error
 }
 
 func (m *mockNotifier) UpdateMessage(_ context.Context, _ port.NotifyTarget, text string) error {
@@ -141,6 +147,15 @@ func (m *mockNotifier) OfferContinuation(_ context.Context, _ port.NotifyTarget,
 	m.offerContinuationNextReq = nextReq
 	m.offerContinuationStopReq = stopReq
 	return m.offerContinuationErr
+}
+
+func (m *mockNotifier) RebuildInitialApproval(_ context.Context, _ port.NotifyTarget, errMsg string, jobReq, svcReq, denyReq *domain.ApprovalRequest) error {
+	m.rebuildInitialCalled = true
+	m.rebuildInitialErrMsg = errMsg
+	m.rebuildInitialJobReq = jobReq
+	m.rebuildInitialSvcReq = svcReq
+	m.rebuildInitialDenyReq = denyReq
+	return m.rebuildInitialErr
 }
 
 type mockAuth struct {
@@ -1095,14 +1110,20 @@ func TestApproveAction_Service_ShiftFails_OfferRetryButton(t *testing.T) {
 	}
 }
 
-func TestApproveAction_Job_BackupFails_OfferRetryButton(t *testing.T) {
-	// given — TriggerBackup fails
+func TestApproveAction_Job_BackupFails_RebuildsInitialApproval(t *testing.T) {
+	// given — TriggerBackup fails. The user pressed "1. DB Migration → Canary"
+	// but backup is non-recoverable (e.g. 403). Instead of offering a retry
+	// (which would just re-trigger the same backup), the message must rebuild
+	// the original 3-button prompt so the operator can pick "Canary skip
+	// migration" or "Deny" instead.
 	gcp := newMockGCP()
-	gcp.triggerBackupErr = errors.New("backup failed")
+	gcp.triggerBackupErr = errors.New("backup failed: 403")
 	notifier := &mockNotifier{}
 	auth := &mockAuth{authorized: true, expired: false}
 	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
 	req := newJobReq()
+	req.NextServiceNames = "frontend-service"
+	req.NextRevisions = "frontend-service-v2"
 
 	// when
 	err := svc.ApproveAction(context.Background(), req, testTarget)
@@ -1111,14 +1132,94 @@ func TestApproveAction_Job_BackupFails_OfferRetryButton(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error from TriggerBackup failure")
 	}
-	if !notifier.offerContinuationCalled {
-		t.Error("expected OfferContinuation (retry) to be called")
+	if notifier.offerContinuationCalled {
+		t.Error("expected retry button (OfferContinuation) NOT to be used after non-recoverable backup error")
 	}
-	if notifier.offerContinuationNextReq == nil {
-		t.Fatal("expected retry button to be offered")
+	if !notifier.rebuildInitialCalled {
+		t.Fatal("expected RebuildInitialApproval to be called so user returns to initial 3-button state")
 	}
-	if notifier.offerContinuationNextReq.Action != req.Action {
-		t.Errorf("retry action = %q, want %q", notifier.offerContinuationNextReq.Action, req.Action)
+	if notifier.rebuildInitialErrMsg == "" {
+		t.Error("expected non-empty error message in rebuild")
+	}
+	if notifier.rebuildInitialJobReq == nil {
+		t.Fatal("expected job button to be rebuilt (button 1)")
+	}
+	if notifier.rebuildInitialJobReq.Action != "migrate_apply" {
+		t.Errorf("job button action = %q, want migrate_apply", notifier.rebuildInitialJobReq.Action)
+	}
+	if notifier.rebuildInitialSvcReq == nil {
+		t.Fatal("expected service button to be rebuilt (button 2 — canary skip migration)")
+	}
+	if notifier.rebuildInitialSvcReq.Action != "canary_10" {
+		t.Errorf("service button action = %q, want canary_10", notifier.rebuildInitialSvcReq.Action)
+	}
+	if notifier.rebuildInitialSvcReq.ResourceNames != "frontend-service" {
+		t.Errorf("service button ResourceNames = %q, want frontend-service", notifier.rebuildInitialSvcReq.ResourceNames)
+	}
+	if notifier.rebuildInitialSvcReq.Targets != "frontend-service-v2" {
+		t.Errorf("service button Targets = %q, want frontend-service-v2", notifier.rebuildInitialSvcReq.Targets)
+	}
+	if notifier.rebuildInitialDenyReq == nil {
+		t.Fatal("expected deny button to be rebuilt (button 3)")
+	}
+	if notifier.rebuildInitialDenyReq.Action != "deny" {
+		t.Errorf("deny button action = %q, want deny", notifier.rebuildInitialDenyReq.Action)
+	}
+}
+
+func TestApproveAction_Job_EmptyResourceNames_RejectsEarly(t *testing.T) {
+	// given — Misconfigured deploy: cloudbuild's _MIGRATION_JOB_NAME is empty,
+	// but somehow a migrate_apply request still arrived. We must not submit a
+	// Cloud SQL backup against an empty instance name.
+	gcp := newMockGCP()
+	notifier := &mockNotifier{}
+	auth := &mockAuth{authorized: true, expired: false}
+	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
+	req := newJobReq()
+	req.ResourceNames = ""
+
+	// when
+	err := svc.ApproveAction(context.Background(), req, testTarget)
+
+	// then
+	if err == nil {
+		t.Fatal("expected error for empty ResourceNames in migrate_apply request")
+	}
+	if gcp.triggerBackupCalled {
+		t.Error("TriggerBackup must NOT be called when ResourceNames is empty (would 403 against empty instance)")
+	}
+	if gcp.executeJobCalled {
+		t.Error("ExecuteJob must NOT be called when ResourceNames is empty")
+	}
+	if !notifier.rebuildInitialCalled {
+		t.Error("expected RebuildInitialApproval to surface the misconfiguration to the operator")
+	}
+}
+
+func TestApproveAction_Job_MigrationFails_RebuildsInitialApproval(t *testing.T) {
+	// given — Backup succeeds, ExecuteJob fails. Same UX: rebuild the prompt
+	// so the operator can choose a different path (skip migration, deny, etc.).
+	gcp := newMockGCP()
+	gcp.executeJobErr = errors.New("migration script crashed")
+	notifier := &mockNotifier{}
+	auth := &mockAuth{authorized: true, expired: false}
+	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
+	req := newJobReq()
+	req.NextServiceNames = "frontend-service"
+	req.NextRevisions = "frontend-service-v2"
+
+	// when
+	err := svc.ApproveAction(context.Background(), req, testTarget)
+
+	// then
+	if err == nil {
+		t.Fatal("expected error from ExecuteJob failure")
+	}
+	if !notifier.rebuildInitialCalled {
+		t.Fatal("expected RebuildInitialApproval after migration failure")
+	}
+	if notifier.offerContinuationCalled {
+		t.Error("expected retry button NOT to be used after migration failure")
 	}
 }
 

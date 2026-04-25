@@ -70,6 +70,23 @@ func (n *ResponseURLNotifier) OfferContinuation(ctx context.Context, target port
 	return n.post(ctx, target.CallbackURL, payload)
 }
 
+// RebuildInitialApproval rewrites the Slack message back to the initial 3-button approval state.
+// Called after recoverable errors so the operator can pick a different action (e.g. "Canary skip
+// migration" after a backup failure) instead of blindly retrying the failing one.
+func (n *ResponseURLNotifier) RebuildInitialApproval(ctx context.Context, target port.NotifyTarget, errMsg string, jobReq, svcReq, denyReq *domain.ApprovalRequest) error {
+	if target.Mode == port.ModeStdout {
+		slog.InfoContext(ctx, "[stdout notifier] rebuild initial approval", "err", errMsg)
+		return nil
+	}
+
+	if msg, over := buttonValueError(jobReq, svcReq, denyReq); over {
+		return n.post(ctx, target.CallbackURL, TextPayload(msg))
+	}
+
+	payload := BuildInitialApprovalMessage(errMsg, jobReq, svcReq, denyReq)
+	return n.post(ctx, target.CallbackURL, payload)
+}
+
 // buttonValueError checks whether any of the provided requests would produce a button
 // value that exceeds Slack's 2,000-character limit.
 func buttonValueError(reqs ...*domain.ApprovalRequest) (string, bool) {

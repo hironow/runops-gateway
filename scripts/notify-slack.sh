@@ -82,20 +82,27 @@ if [[ "${#SVC_DISPLAY}" -gt 135 ]]; then
 fi
 
 # "1. DB Migration → Canary" button: run the migration job then offer canary step.
-JOB_ACTION=$(jq -n \
-  --arg p    "${PROJECT_ID}" \
-  --arg l    "${REGION}" \
-  --arg rt   "job" \
-  --arg rn   "${MIGRATION_JOB_NAME}" \
-  --arg t    "" \
-  --arg a    "migrate_apply" \
-  --argjson ia "${TIMESTAMP}" \
-  --arg nsn  "${SERVICE_NAMES}" \
-  --arg nr   "${REVISIONS}" \
-  --arg na   "canary_10" \
-  '{project:$p, location:$l, resource_type:$rt, resource_names:$rn, targets:$t, action:$a,
-    issued_at:$ia, migration_done:false,
-    next_service_names:$nsn, next_revisions:$nr, next_action:$na}')
+# Only emitted when MIGRATION_JOB_NAME is non-empty. Apps without a migration job
+# (e.g. static sites, no Cloud SQL) leave this empty so the button is suppressed —
+# pressing it would otherwise trigger a Cloud SQL backup against a non-existent
+# instance and fail with a confusing 403/404.
+JOB_ACTION=""
+if [[ -n "${MIGRATION_JOB_NAME}" ]]; then
+  JOB_ACTION=$(jq -n \
+    --arg p    "${PROJECT_ID}" \
+    --arg l    "${REGION}" \
+    --arg rt   "job" \
+    --arg rn   "${MIGRATION_JOB_NAME}" \
+    --arg t    "" \
+    --arg a    "migrate_apply" \
+    --argjson ia "${TIMESTAMP}" \
+    --arg nsn  "${SERVICE_NAMES}" \
+    --arg nr   "${REVISIONS}" \
+    --arg na   "canary_10" \
+    '{project:$p, location:$l, resource_type:$rt, resource_names:$rn, targets:$t, action:$a,
+      issued_at:$ia, migration_done:false,
+      next_service_names:$nsn, next_revisions:$nr, next_action:$na}')
+fi
 
 # "2. Canary (skip migration)" button: go straight to canary without DB migration.
 SRV_ACTION=$(jq -n \
@@ -139,9 +146,12 @@ DENY_ACTION=$(jq -n \
 
 # Compress all button values — matches marshalActionValue which always compresses
 # so that the decompression path is exercised on every button click.
-JOB_VALUE="gz:$(compress_gz "$JOB_ACTION")"
 SRV_VALUE="gz:$(compress_gz "$SRV_ACTION")"
 DENY_VALUE="gz:$(compress_gz "$DENY_ACTION")"
+JOB_VALUE=""
+if [[ -n "${JOB_ACTION}" ]]; then
+  JOB_VALUE="gz:$(compress_gz "$JOB_ACTION")"
+fi
 WP_VALUE=""
 if [[ -n "${WP_ACTION}" ]]; then
   WP_VALUE="gz:$(compress_gz "$WP_ACTION")"
@@ -178,14 +188,14 @@ PAYLOAD=$(jq -n \
       {
         type: "actions",
         elements: (
-          [
-            {
+          (if $job_val != "" then [{
               type: "button",
               text: {type: "plain_text", emoji: true, text: "1. DB Migration → Canary"},
               style: "danger",
               action_id: "approve_job",
               value: $job_val
-            },
+            }] else [] end)
+          + [
             {
               type: "button",
               text: {type: "plain_text", emoji: true, text: "2. Canary (skip migration)"},

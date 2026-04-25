@@ -158,12 +158,71 @@ func BuildProgressMessage(summary string, nextReq *domain.ApprovalRequest, stopR
 }
 
 // canaryBtnLabel returns a human-readable label for the next canary step button.
+// migrate_apply lacks a percent component, so we render a migration-specific label
+// instead of the misleading "✅ Canary" that the percent==0 branch used to produce.
 func canaryBtnLabel(req *domain.ApprovalRequest) string {
+	if req.Action == "migrate_apply" {
+		return "🔄 マイグレーション再試行"
+	}
 	act, err := domain.ParseAction(req.Action)
 	if err != nil || act.Percent == 0 {
 		return "✅ Canary"
 	}
 	return fmt.Sprintf("✅ %d%% に昇格", act.Percent)
+}
+
+// BuildInitialApprovalMessage reconstructs the 3-button approval prompt that
+// notify-slack.sh emits on first deploy, prefixed by an error explanation.
+// Buttons whose request is nil are suppressed (e.g. jobReq == nil for apps
+// without a migration job — the same suppression notify-slack.sh applies when
+// MIGRATION_JOB_NAME is empty).
+func BuildInitialApprovalMessage(errMsg string, jobReq, svcReq, denyReq *domain.ApprovalRequest) SlackPayload {
+	headerText := "🔁 操作を最初からやり直してください"
+	body := safeTrunc(errMsg, maxSectionText-200)
+	if svcReq != nil {
+		body += "\n\n*Revision(s):* `" + safeTrunc(svcReq.Targets, 500) + "`"
+	}
+
+	buttons := []Button{}
+	if jobReq != nil {
+		buttons = append(buttons, NewButton(
+			"approve_job",
+			"1. DB Migration → Canary",
+			marshalActionValue(jobReq),
+			"danger",
+		))
+	}
+	if svcReq != nil {
+		btn := NewButton(
+			"approve_service",
+			"2. Canary (skip migration)",
+			marshalActionValue(svcReq),
+			"primary",
+		).WithConfirm(
+			"続行しますか？",
+			"DBマイグレーションを実施しましたか？未実施の場合は先に実行してください。",
+			"はい、続行します",
+			"キャンセル",
+		)
+		buttons = append(buttons, btn)
+	}
+	if denyReq != nil {
+		buttons = append(buttons, NewButton(
+			"deny",
+			"🛑 Deny",
+			marshalActionValue(denyReq),
+			"danger",
+		))
+	}
+
+	blocks := []Block{
+		HeaderBlock(safeTrunc(headerText, maxHeaderText)),
+		SectionBlock(body),
+	}
+	if len(buttons) > 0 {
+		blocks = append(blocks, ActionsBlock(buttons...))
+	}
+	return ReplacePayload(blocks...)
 }
 
 // progressActionValue mirrors the handler's actionValue for button serialization.

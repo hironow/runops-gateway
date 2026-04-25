@@ -64,6 +64,10 @@ func (s *stubNotifier) OfferContinuation(_ context.Context, _ port.NotifyTarget,
 	return nil
 }
 
+func (s *stubNotifier) RebuildInitialApproval(_ context.Context, _ port.NotifyTarget, _ string, _ *domain.ApprovalRequest, _ *domain.ApprovalRequest, _ *domain.ApprovalRequest) error {
+	return nil
+}
+
 var _ port.Notifier = (*stubNotifier)(nil)
 
 // stubAuthChecker implements AuthChecker.

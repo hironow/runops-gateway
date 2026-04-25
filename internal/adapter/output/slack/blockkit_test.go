@@ -612,3 +612,83 @@ func TestSlackPayload_JSONSerialization(t *testing.T) {
 		t.Errorf("type = %v, want section", section["type"])
 	}
 }
+
+func TestCanaryBtnLabel_MigrateApply_ReturnsMigrationLabel(t *testing.T) {
+	// regression: action=migrate_apply has no percent component, so the old
+	// code path returned "✅ Canary" — confusing because the button retried
+	// a migration, not a canary step.
+	req := &domain.ApprovalRequest{Action: "migrate_apply"}
+	got := canaryBtnLabel(req)
+	if got == "✅ Canary" {
+		t.Error("migrate_apply must NOT render as '✅ Canary'")
+	}
+	if got != "🔄 マイグレーション再試行" {
+		t.Errorf("canaryBtnLabel(migrate_apply) = %q, want \"🔄 マイグレーション再試行\"", got)
+	}
+}
+
+func TestCanaryBtnLabel_CanaryWithPercent_ReturnsPercentLabel(t *testing.T) {
+	req := &domain.ApprovalRequest{Action: "canary_25"}
+	got := canaryBtnLabel(req)
+	want := "✅ 25% に昇格"
+	if got != want {
+		t.Errorf("canaryBtnLabel(canary_25) = %q, want %q", got, want)
+	}
+}
+
+func TestBuildInitialApprovalMessage_AllThreeButtons(t *testing.T) {
+	jobReq := &domain.ApprovalRequest{
+		Project: "p", Location: "l", ResourceType: domain.ResourceTypeJob,
+		ResourceNames: "migrate-job", Action: "migrate_apply",
+	}
+	svcReq := &domain.ApprovalRequest{
+		Project: "p", Location: "l", ResourceType: domain.ResourceTypeService,
+		ResourceNames: "frontend", Targets: "frontend-v2", Action: "canary_10",
+	}
+	denyReq := &domain.ApprovalRequest{
+		Project: "p", Location: "l", ResourceType: domain.ResourceTypeService,
+		ResourceNames: "frontend", Targets: "frontend-v2", Action: "deny",
+	}
+	msg := BuildInitialApprovalMessage("❌ バックアップ失敗", jobReq, svcReq, denyReq)
+
+	// The action block (last block) must contain exactly 3 buttons.
+	last := msg.Blocks[len(msg.Blocks)-1]
+	if last.Type != BlockTypeActions {
+		t.Fatalf("last block type = %q, want actions", last.Type)
+	}
+	if len(last.Elements) != 3 {
+		t.Fatalf("expected 3 buttons, got %d", len(last.Elements))
+	}
+	wantTexts := []string{"1. DB Migration → Canary", "2. Canary (skip migration)", "🛑 Deny"}
+	for i, want := range wantTexts {
+		got := last.Elements[i].Text.Text
+		if got != want {
+			t.Errorf("button[%d].Text = %q, want %q", i, got, want)
+		}
+	}
+}
+
+func TestBuildInitialApprovalMessage_NoJobReq_SuppressesMigrationButton(t *testing.T) {
+	// When the deployment has no migration job (jobReq nil), the button
+	// "1. DB Migration → Canary" must NOT appear — same suppression
+	// notify-slack.sh applies when MIGRATION_JOB_NAME is empty.
+	svcReq := &domain.ApprovalRequest{
+		Project: "p", Location: "l", ResourceType: domain.ResourceTypeService,
+		ResourceNames: "nn-makers", Targets: "nn-makers-v2", Action: "canary_10",
+	}
+	denyReq := &domain.ApprovalRequest{
+		Project: "p", Location: "l", ResourceType: domain.ResourceTypeService,
+		ResourceNames: "nn-makers", Action: "deny",
+	}
+	msg := BuildInitialApprovalMessage("err", nil, svcReq, denyReq)
+
+	last := msg.Blocks[len(msg.Blocks)-1]
+	if len(last.Elements) != 2 {
+		t.Fatalf("expected 2 buttons (no migrate), got %d", len(last.Elements))
+	}
+	for _, e := range last.Elements {
+		if e.Text.Text == "1. DB Migration → Canary" {
+			t.Errorf("migration button must be suppressed when jobReq is nil")
+		}
+	}
+}

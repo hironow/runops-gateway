@@ -58,6 +58,13 @@ type Notifier interface {
 	// if nextReq is non-nil, buttons to advance or stop the rollout.
 	// stopReq may be nil (no second button shown).
 	OfferContinuation(ctx context.Context, target NotifyTarget, summary string, nextReq *domain.ApprovalRequest, stopReq *domain.ApprovalRequest) error
+	// RebuildInitialApproval replaces the message with the initial approval prompt
+	// (the same 3 buttons that cloudbuild's notify-slack.sh emits on first deploy).
+	// Used after a recoverable error so the operator returns to a known-good state
+	// rather than retrying with stale context. jobReq may be nil when the deployment
+	// has no migration job (button "1. DB Migration → Canary" is suppressed).
+	// errMsg is rendered above the buttons to explain why the prompt was rebuilt.
+	RebuildInitialApproval(ctx context.Context, target NotifyTarget, errMsg string, jobReq, svcReq, denyReq *domain.ApprovalRequest) error
 }
 
 // AuthChecker is a secondary port for authorization and expiry validation.

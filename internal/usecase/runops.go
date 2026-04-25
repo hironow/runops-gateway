@@ -126,6 +126,17 @@ func (s *RunOpsService) approveShift(ctx context.Context, req domain.ApprovalReq
 
 // approveJob handles DB backup and Cloud Run job execution.
 func (s *RunOpsService) approveJob(ctx context.Context, req domain.ApprovalRequest, target port.NotifyTarget) error {
+	// Defensive: ResourceNames carries the migration job name; an empty value means
+	// the deployment was misconfigured (apps without a migration job should not
+	// surface the "DB Migration → Canary" button at all — notify-slack.sh suppresses
+	// it when MIGRATION_JOB_NAME is empty). Reject early instead of submitting a
+	// backup against an empty/non-existent Cloud SQL instance.
+	if req.ResourceNames == "" {
+		errMsg := "❌ マイグレーションジョブ名が未設定です。デプロイ構成 (cloudbuild.yaml の _MIGRATION_JOB_NAME) を確認してください。"
+		s.rebuildInitial(ctx, target, req, errMsg)
+		return fmt.Errorf("usecase: approveJob requires non-empty ResourceNames")
+	}
+
 	if err := s.notifier.UpdateMessage(ctx, target, "📦 DBバックアップを取得中..."); err != nil {
 		slog.Error("UpdateMessage failed", "err", err)
 	}
@@ -137,7 +148,7 @@ func (s *RunOpsService) approveJob(ctx context.Context, req domain.ApprovalReque
 		sqlInstance = req.ResourceNames
 	}
 	if err := s.gcp.TriggerBackup(ctx, req.Project, sqlInstance); err != nil {
-		s.offerRetry(ctx, target, req, fmt.Sprintf("❌ バックアップエラー: %v", err))
+		s.rebuildInitial(ctx, target, req, fmt.Sprintf("❌ バックアップエラー: %v", err))
 		return err
 	}
 
@@ -146,7 +157,7 @@ func (s *RunOpsService) approveJob(ctx context.Context, req domain.ApprovalReque
 	}
 
 	if err := s.gcp.ExecuteJob(ctx, req.Project, req.Location, req.ResourceNames, []string{"--mode=apply"}); err != nil {
-		s.offerRetry(ctx, target, req, fmt.Sprintf("❌ マイグレーションエラー: %v", err))
+		s.rebuildInitial(ctx, target, req, fmt.Sprintf("❌ マイグレーションエラー: %v", err))
 		return err
 	}
 
@@ -223,6 +234,54 @@ func cloneRequest(req domain.ApprovalRequest, action string) *domain.ApprovalReq
 func (s *RunOpsService) offerRetry(ctx context.Context, target port.NotifyTarget, req domain.ApprovalRequest, errMsg string) {
 	retryReq := cloneRequest(req, req.Action)
 	s.offerOrFallback(ctx, target, errMsg, retryReq, nil)
+}
+
+// rebuildInitial restores the message to the 3-button approval prompt that
+// notify-slack.sh emits initially. The original Job request carries enough
+// context (NextServiceNames + NextRevisions) to reconstruct the Service button;
+// the Job button itself is reconstructed from req.ResourceNames. If rebuild
+// fails (e.g. Slack API error), fall back to a plain text message so the
+// session does not stay stuck on a "⏳ 処理中..." placeholder.
+func (s *RunOpsService) rebuildInitial(ctx context.Context, target port.NotifyTarget, req domain.ApprovalRequest, errMsg string) {
+	now := time.Now().Unix()
+
+	// Reconstruct the migration job button (button 1).
+	jobReq := req
+	jobReq.Action = "migrate_apply"
+	jobReq.IssuedAt = now
+
+	// Reconstruct the service canary button (button 2). Suppressed when the
+	// upstream cloudbuild had no service deployments to advertise.
+	var svcReq *domain.ApprovalRequest
+	if req.NextServiceNames != "" {
+		s := req
+		s.ResourceType = domain.ResourceTypeService
+		s.ResourceNames = req.NextServiceNames
+		s.Targets = req.NextRevisions
+		s.Action = "canary_10"
+		s.IssuedAt = now
+		s.MigrationDone = false
+		svcReq = &s
+	}
+
+	// Reconstruct the deny button (button 3). Mirrors the service button so
+	// the deny payload references the actual deploy target.
+	denyReq := req
+	if svcReq != nil {
+		denyReq.ResourceType = domain.ResourceTypeService
+		denyReq.ResourceNames = svcReq.ResourceNames
+		denyReq.Targets = svcReq.Targets
+	}
+	denyReq.Action = "deny"
+	denyReq.IssuedAt = now
+
+	if err := s.notifier.RebuildInitialApproval(ctx, target, errMsg, &jobReq, svcReq, &denyReq); err != nil {
+		slog.Error("RebuildInitialApproval failed, sending fallback", "err", err)
+		fallback := errMsg + "\n\n⚠️ Slack メッセージの更新に失敗しました。GCP のログを確認してください。"
+		if ferr := s.notifier.UpdateMessage(ctx, target, fallback); ferr != nil {
+			slog.Error("fallback UpdateMessage also failed", "err", ferr)
+		}
+	}
 }
 
 // offerOrFallback tries OfferContinuation; on failure, sends a plain text fallback
