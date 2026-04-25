@@ -572,3 +572,47 @@ func TestHandler_MalformedPayloadJSON(t *testing.T) {
 		t.Errorf("expected 200, got %d", rr.Code)
 	}
 }
+
+func TestHandler_ButtonValueBuildInfo_PropagatesToApprovalRequest(t *testing.T) {
+	// given — Slack interactive payload whose action value carries build_info.
+	// The handler must surface it on domain.ApprovalRequest so the usecase
+	// (and downstream rebuild/progress messages) can show it.
+	secret := "test-secret"
+	mock := newMockUseCase()
+	handler := NewHandler(mock, testNotifier, secret)
+
+	av := actionValue{
+		Project: "test-project", Location: "asia-northeast1",
+		ResourceType: "service", ResourceNames: "frontend", Targets: "v2",
+		Action: "canary_10", IssuedAt: time.Now().Unix(),
+		BuildInfo: "main @ d948375",
+	}
+	avBytes, _ := json.Marshal(av)
+
+	payload := interactivePayload{}
+	payload.User.ID = "U123"
+	payload.ResponseURL = "https://hooks.slack.com/response"
+	payload.Actions = []struct {
+		ActionID string `json:"action_id"`
+		Value    string `json:"value"`
+	}{
+		{ActionID: "approve", Value: string(avBytes)},
+	}
+	payloadBytes, _ := json.Marshal(payload)
+
+	req := buildValidRequest(t, secret, string(payloadBytes))
+	rr := httptest.NewRecorder()
+
+	// when
+	handler.ServeHTTP(rr, req)
+
+	// then — the BuildInfo from the wire is on the domain request.
+	select {
+	case got := <-mock.approveCh:
+		if got.BuildInfo != "main @ d948375" {
+			t.Errorf("BuildInfo = %q, want %q", got.BuildInfo, "main @ d948375")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for ApproveAction")
+	}
+}

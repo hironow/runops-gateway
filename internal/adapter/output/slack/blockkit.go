@@ -134,8 +134,15 @@ func BuildDenialMessage(denierID, summary string) SlackPayload {
 
 // BuildProgressMessage constructs a Block Kit payload for a mid-rollout progress message.
 func BuildProgressMessage(summary string, nextReq *domain.ApprovalRequest, stopReq *domain.ApprovalRequest) SlackPayload {
+	body := summary
+	if buildInfo := pickBuildInfo(nextReq, stopReq); buildInfo != "" {
+		body += "\n*Build:* " + safeTrunc(buildInfo, 200)
+	}
+	if approver := pickApproverID(nextReq, stopReq); approver != "" {
+		body += "\n*操作:* <@" + safeTrunc(approver, 80) + ">"
+	}
 	blocks := []Block{
-		SectionBlock(safeTrunc(summary, maxSectionText)),
+		SectionBlock(safeTrunc(body, maxSectionText)),
 	}
 
 	if nextReq != nil {
@@ -178,9 +185,15 @@ func canaryBtnLabel(req *domain.ApprovalRequest) string {
 // MIGRATION_JOB_NAME is empty).
 func BuildInitialApprovalMessage(errMsg string, jobReq, svcReq, denyReq *domain.ApprovalRequest) SlackPayload {
 	headerText := "🔁 操作を最初からやり直してください"
-	body := safeTrunc(errMsg, maxSectionText-200)
+	body := safeTrunc(errMsg, maxSectionText-400)
 	if svcReq != nil {
 		body += "\n\n*Revision(s):* `" + safeTrunc(svcReq.Targets, 500) + "`"
+	}
+	if buildInfo := pickBuildInfo(jobReq, svcReq, denyReq); buildInfo != "" {
+		body += "\n*Build:* " + safeTrunc(buildInfo, 200)
+	}
+	if approver := pickApproverID(jobReq, svcReq, denyReq); approver != "" {
+		body += "\n*操作:* <@" + safeTrunc(approver, 80) + ">"
 	}
 
 	buttons := []Button{}
@@ -225,6 +238,30 @@ func BuildInitialApprovalMessage(errMsg string, jobReq, svcReq, denyReq *domain.
 	return ReplacePayload(blocks...)
 }
 
+// pickBuildInfo returns the first non-empty BuildInfo across the given requests.
+// All buttons emitted by notify-slack.sh carry the same BuildInfo, so picking
+// from any non-nil request gives the build identifier of the original deploy.
+func pickBuildInfo(reqs ...*domain.ApprovalRequest) string {
+	for _, r := range reqs {
+		if r != nil && r.BuildInfo != "" {
+			return r.BuildInfo
+		}
+	}
+	return ""
+}
+
+// pickApproverID returns the first non-empty ApproverID across the given requests.
+// cloneRequest preserves ApproverID across button transitions, so any non-nil
+// request reflects who pressed the button leading to the current message.
+func pickApproverID(reqs ...*domain.ApprovalRequest) string {
+	for _, r := range reqs {
+		if r != nil && r.ApproverID != "" {
+			return r.ApproverID
+		}
+	}
+	return ""
+}
+
 // progressActionValue mirrors the handler's actionValue for button serialization.
 type progressActionValue struct {
 	Project          string `json:"project"`
@@ -238,6 +275,7 @@ type progressActionValue struct {
 	NextServiceNames string `json:"next_service_names,omitempty"`
 	NextRevisions    string `json:"next_revisions,omitempty"`
 	NextAction       string `json:"next_action,omitempty"`
+	BuildInfo        string `json:"build_info,omitempty"`
 }
 
 // marshalActionValue serializes an ApprovalRequest into the Slack button value JSON,
@@ -255,6 +293,7 @@ func marshalActionValue(req *domain.ApprovalRequest) string {
 		NextServiceNames: req.NextServiceNames,
 		NextRevisions:    req.NextRevisions,
 		NextAction:       req.NextAction,
+		BuildInfo:        req.BuildInfo,
 	}
 	b, _ := json.Marshal(v)
 	return compressButtonValue(string(b))

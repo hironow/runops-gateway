@@ -99,9 +99,10 @@ if [[ -n "${MIGRATION_JOB_NAME}" ]]; then
     --arg nsn  "${SERVICE_NAMES}" \
     --arg nr   "${REVISIONS}" \
     --arg na   "canary_10" \
+    --arg bi   "${BUILD_INFO}" \
     '{project:$p, location:$l, resource_type:$rt, resource_names:$rn, targets:$t, action:$a,
       issued_at:$ia, migration_done:false,
-      next_service_names:$nsn, next_revisions:$nr, next_action:$na}')
+      next_service_names:$nsn, next_revisions:$nr, next_action:$na, build_info:$bi}')
 fi
 
 # "2. Canary (skip migration)" button: go straight to canary without DB migration.
@@ -113,8 +114,9 @@ SRV_ACTION=$(jq -n \
   --arg t   "${REVISIONS}" \
   --arg a   "canary_10" \
   --argjson ia "${TIMESTAMP}" \
+  --arg bi  "${BUILD_INFO}" \
   '{project:$p, location:$l, resource_type:$rt, resource_names:$rn, targets:$t, action:$a,
-    issued_at:$ia, migration_done:true}')
+    issued_at:$ia, migration_done:true, build_info:$bi}')
 
 # "3. Worker Pool Canary" button: promote worker pools independently from services.
 # resource_type=worker-pool dispatches to ApproveAction → approveShift → UpdateWorkerPool.
@@ -129,8 +131,9 @@ if [[ -n "${WORKER_POOL_NAMES}" ]]; then
     --arg t   "${WORKER_POOL_REVISIONS}" \
     --arg a   "canary_10" \
     --argjson ia "${TIMESTAMP}" \
+    --arg bi  "${BUILD_INFO}" \
     '{project:$p, location:$l, resource_type:$rt, resource_names:$rn, targets:$t, action:$a,
-      issued_at:$ia, migration_done:true}')
+      issued_at:$ia, migration_done:true, build_info:$bi}')
 fi
 
 # "Deny" button: reject the deployment without performing any action.
@@ -142,7 +145,8 @@ DENY_ACTION=$(jq -n \
   --arg t   "${REVISIONS}" \
   --arg a   "canary_10" \
   --argjson ia "${TIMESTAMP}" \
-  '{project:$p, location:$l, resource_type:$rt, resource_names:$rn, targets:$t, action:$a, issued_at:$ia}')
+  --arg bi  "${BUILD_INFO}" \
+  '{project:$p, location:$l, resource_type:$rt, resource_names:$rn, targets:$t, action:$a, issued_at:$ia, build_info:$bi}')
 
 # Compress all button values — matches marshalActionValue which always compresses
 # so that the decompression path is exercised on every button click.
