@@ -107,4 +107,9 @@ type ApprovalRequest struct {
 	// NextAction is the action string for the next canary buttons, e.g. "canary_10".
 	// Non-empty only when NextServiceNames is set.
 	NextAction string
+	// BuildInfo is a human-readable build identifier propagated from the initial
+	// cloudbuild.yaml notification (e.g. "main @ d948375"). Carried through every
+	// button so progress and rebuilt-prompt messages can show what's being deployed
+	// even after the operator has clicked through. Empty for legacy clients.
+	BuildInfo string
 }

@@ -692,3 +692,99 @@ func TestBuildInitialApprovalMessage_NoJobReq_SuppressesMigrationButton(t *testi
 		}
 	}
 }
+
+func TestBuildInitialApprovalMessage_IncludesBuildInfo(t *testing.T) {
+	// given — operator pressed button 1 from a deploy whose BuildInfo says
+	// "main @ d948375". After backup failure the rebuild prompt must surface
+	// the same identifier so the operator knows which deploy they're acting on.
+	jobReq := &domain.ApprovalRequest{
+		Project: "p", Location: "l", ResourceType: domain.ResourceTypeJob,
+		ResourceNames: "migrate-job", Action: "migrate_apply",
+		BuildInfo: "main @ d948375",
+	}
+	svcReq := &domain.ApprovalRequest{
+		Project: "p", Location: "l", ResourceType: domain.ResourceTypeService,
+		ResourceNames: "frontend", Targets: "frontend-v2", Action: "canary_10",
+		BuildInfo: "main @ d948375",
+	}
+
+	msg := BuildInitialApprovalMessage("❌ backup error", jobReq, svcReq, nil)
+
+	// then — body section contains the build identifier verbatim.
+	body := msg.Blocks[1].Text.Text
+	if !strings.Contains(body, "main @ d948375") {
+		t.Errorf("expected body to include build info, got: %q", body)
+	}
+	if !strings.Contains(body, "*Build:*") {
+		t.Errorf("expected '*Build:*' label in body, got: %q", body)
+	}
+}
+
+func TestBuildInitialApprovalMessage_NoBuildInfo_OmitsBuildLine(t *testing.T) {
+	// given — legacy clients without BuildInfo (empty string).
+	svcReq := &domain.ApprovalRequest{
+		Project: "p", Location: "l", ResourceType: domain.ResourceTypeService,
+		ResourceNames: "frontend", Targets: "frontend-v2", Action: "canary_10",
+	}
+
+	msg := BuildInitialApprovalMessage("err", nil, svcReq, nil)
+
+	// then — no "*Build:*" line when nothing to show.
+	body := msg.Blocks[1].Text.Text
+	if strings.Contains(body, "*Build:*") {
+		t.Errorf("expected no build line when BuildInfo empty, got: %q", body)
+	}
+}
+
+func TestBuildProgressMessage_IncludesBuildInfo(t *testing.T) {
+	// given — canary advancing from 10% to 30%; the next button request
+	// carries BuildInfo so the progress message can show it.
+	nextReq := &domain.ApprovalRequest{
+		ResourceType:  domain.ResourceTypeService,
+		ResourceNames: "frontend", Targets: "frontend-v2",
+		Action: "canary_30", BuildInfo: "main @ d948375",
+	}
+
+	msg := BuildProgressMessage("✅ 10%完了", nextReq, nil)
+
+	// then — section block includes both the summary and the build info.
+	body := msg.Blocks[0].Text.Text
+	if !strings.Contains(body, "10%完了") {
+		t.Errorf("expected summary in body, got: %q", body)
+	}
+	if !strings.Contains(body, "main @ d948375") {
+		t.Errorf("expected build info in body, got: %q", body)
+	}
+}
+
+func TestMarshalActionValue_RoundTripsBuildInfo(t *testing.T) {
+	// given — round-trip through marshal+decompress+unmarshal must preserve
+	// BuildInfo so that progressActionValue and the handler agree on the wire.
+	req := &domain.ApprovalRequest{
+		Project: "p", Location: "l", ResourceType: domain.ResourceTypeService,
+		ResourceNames: "svc", Targets: "v1",
+		Action: "canary_10", IssuedAt: 1700000000,
+		BuildInfo: "main @ deadbeef",
+	}
+
+	value := marshalActionValue(req)
+	if !strings.HasPrefix(value, "gz:") {
+		t.Fatalf("expected gz: prefix, got %q", value)
+	}
+	// Decompress to JSON and verify build_info field is present.
+	raw, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(value, "gz:"))
+	if err != nil {
+		t.Fatalf("base64 decode: %v", err)
+	}
+	gz, err := gzip.NewReader(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatalf("gzip reader: %v", err)
+	}
+	plain, err := io.ReadAll(gz)
+	if err != nil {
+		t.Fatalf("gzip read: %v", err)
+	}
+	if !strings.Contains(string(plain), `"build_info":"main @ deadbeef"`) {
+		t.Errorf("expected build_info in JSON, got: %s", plain)
+	}
+}

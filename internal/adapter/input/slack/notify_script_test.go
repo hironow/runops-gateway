@@ -1,6 +1,9 @@
 package slack
 
 import (
+	"bytes"
+	"compress/gzip"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -494,4 +497,68 @@ func TestNotifyScript_CompressGz_CompatibleWithParseActionValue(t *testing.T) {
 	if av.Action != "canary_10" {
 		t.Errorf("Action: got %q, want %q", av.Action, "canary_10")
 	}
+}
+
+func TestNotifyScript_BuildInfoEmbeddedInAllButtons(t *testing.T) {
+	// All three buttons (job, service, deny) must carry the same build_info
+	// so the Slack handler can show "Build: main @ <sha>" in every subsequent
+	// progress / rebuild message — even after the operator clicks through.
+	skipIfToolMissing(t, "bash", "gzip", "base64", "jq")
+
+	cmd := exec.Command("bash", notifyScript(t),
+		"--dry-run",
+		"frontend-service",
+		"db-migrate-job",
+		"main",
+		"d948375abcdef12345",
+		"frontend-service-00001-abc",
+		"test-project",
+		"asia-northeast1",
+	)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("script failed: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(out, &payload); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	want := "main @ d948375"
+	for _, id := range []string{"approve_job", "approve_service", "deny"} {
+		v := buttonValue(t, payload, id)
+		if v == "" {
+			t.Errorf("button %s missing", id)
+			continue
+		}
+		decoded := decodeGz(t, v)
+		bi, _ := decoded["build_info"].(string)
+		if bi != want {
+			t.Errorf("button %s build_info = %q, want %q", id, bi, want)
+		}
+	}
+}
+
+// decodeGz decompresses a "gz:<base64url>" button value back to a JSON map.
+func decodeGz(t *testing.T, value string) map[string]any {
+	t.Helper()
+	if !strings.HasPrefix(value, "gz:") {
+		t.Fatalf("expected gz: prefix, got %q", value[:min(len(value), 20)])
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(value, "gz:"))
+	if err != nil {
+		t.Fatalf("base64 decode: %v", err)
+	}
+	gz, err := gzip.NewReader(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatalf("gzip new reader: %v", err)
+	}
+	plain, err := io.ReadAll(gz)
+	if err != nil {
+		t.Fatalf("gzip read: %v", err)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(plain, &out); err != nil {
+		t.Fatalf("json unmarshal: %v", err)
+	}
+	return out
 }

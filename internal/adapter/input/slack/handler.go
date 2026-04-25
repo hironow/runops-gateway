@@ -37,6 +37,7 @@ type actionValue struct {
 	NextRevisions    string `json:"next_revisions"`
 	NextRevision     string `json:"next_revision"` // legacy: singular form
 	NextAction       string `json:"next_action"`
+	BuildInfo        string `json:"build_info"`
 }
 
 // interactivePayload is a minimal representation of Slack's interactive payload.
@@ -123,6 +124,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		NextServiceNames: firstNonEmpty(av.NextServiceNames, av.NextServiceName),
 		NextRevisions:    firstNonEmpty(av.NextRevisions, av.NextRevision),
 		NextAction:       av.NextAction,
+		BuildInfo:        av.BuildInfo,
 	}
 	target := port.NotifyTarget{
 		CallbackURL: slackPayload.ResponseURL,
