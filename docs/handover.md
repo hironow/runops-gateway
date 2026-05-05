@@ -55,7 +55,8 @@ or merge する運用とする。
 | **OTel 配線** | ✅ 完了 (2026-05-05, `feat/otel-direct-otlp` PR #8 draft) | ADR 0020 (Direct OTLP) + ADR 0021 (Pub/Sub trace 委譲) + ADR 0022 (CloudEvents 不採用)。`internal/adapter/observability` に SetupTracerProvider / NormalizeEndpoint / BuildResource / 自動 noop fallback。3 binary に TracerProvider + otelhttp wrap、Pub/Sub 3 client に `EnableOpenTelemetryTracing: true`、`compose.yaml` に Jaeger v2.17、`just trace-up/down/view`。手動 span: `slack.verify_signature` / `slack.handle_dispatch_action` / `slack.handle_approval_action` / `usecase.dispatch_agent_task` / `usecase.dispatch_result_handle` / `dmail.receiver.on_message` / `dmail.outbound.on_message` / `dmail.emitter.publish_file`。goroutine 跨ぎは `context.WithoutCancel` で trace context 引き継ぎ |
 | **Phase 4b (tofu コード)** | ✅ develop merged (2026-05-05, PR #8) | 本番化用 tofu: `tofu/pubsub.tf` (dmail-inbound / dmail-outbound + 各 DLQ)、`tofu/subscriptions.tf` (dmail-inbound-receiver / dmail-outbound-gateway + Pub/Sub service agent IAM)、`tofu/iam_pubsub.tf` (chatops_sa + 任意の exe-coder VM SA)、`tofu/telemetry.tf` (cloudtrace + telemetry API enable + tracesWriter)。`main.tf` の Cloud Run service に `SLACK_BOT_TOKEN` / `DISPATCHER_BACKEND=pubsub` / `PUBSUB_DMAIL_INBOUND_TOPIC` / `PUBSUB_DMAIL_OUTBOUND_SUB` / OTEL 一式の env を注入。`slack-bot-token` Secret Manager + accessor も追加。**scaling は `var.cloud_run_min_instances` (default 0) / `var.cloud_run_max_instances` (default 3) で制御**。Phase 3 outbound (ADR 0018) を有効化する際は `cloud_run_min_instances=1` に上げる |
 | **DLQ terminal sink** | ✅ tofu コード完了 (2026-05-05, `chore/dlq-terminal-sink`) | PR #8 後追い。`tofu/subscriptions.tf` に `dmail-inbound-dlq-pull` / `dmail-outbound-dlq-pull` を追加 (DLQ topic に subscription が無いと message が retention で蒸発する公式アンチパターン解消)。`tofu/monitoring.tf` (新設) に `subscription/dead_letter_message_count` の Cloud Monitoring alert + email notification channel (`dlq_alert_email` 空なら count=0 で skip)。`docs/runbooks/dlq.md` (新設) に triage 手順と republish snippet。詳細: `experiments/2026-05-05_pubsub-dlq-terminal-sink.md` |
-| **Phase 4b (実 apply)** | ✅ 完了 (2026-05-05, gen-ai-hironow) | ローカル `tofu apply -var-file=tofu/gen-ai-hironow.tfvars` で **25 add + 2 change** が成功。Pub/Sub 4 topic + 4 subscription (working 2 + DLQ pull 2)、IAM 一式 (chatops_sa publisher/subscriber + exe-coder VM SA + Pub/Sub service agent + tracesWriter)、`slack-bot-token` secret + accessor、Cloud Monitoring DLQ alert (`hironow365@gmail.com` 通知)、Cloud Run env 12 個追加 (Phase 1-4a + OTel) を反映。`slack-bot-token` の実値 (xoxb-...) は v2 として登録済、Cloud Run revision `runops-gateway-00048-gdj` で latest 参照を v2 に再 pin 済み。**image は依然 `bd57b416` (Phase 0) のまま** で、Slash Command `/runops` や OTel 配線が動くのは main promote 後の CD pipeline で新 image deploy された時点 |
+| **Phase 4b (実 apply)** | ✅ 完了 (2026-05-05, gen-ai-hironow) | ローカル `tofu apply -var-file=tofu/gen-ai-hironow.tfvars` で **25 add + 2 change** が成功。Pub/Sub 4 topic + 4 subscription (working 2 + DLQ pull 2)、IAM 一式 (chatops_sa publisher/subscriber + exe-coder VM SA + Pub/Sub service agent + tracesWriter)、`slack-bot-token` secret + accessor、Cloud Monitoring DLQ alert (`hironow365@gmail.com` 通知) + backlog-stale alert (PR #19)、Cloud Run env 12 個追加 (Phase 1-4a + OTel) を反映。`slack-bot-token` 実値 (xoxb-...) v2 投入済 |
+| **main promote (実 image)** | ✅ 完了 (2026-05-05, PR #12 → #15 → #18 → #20) | 4 release を経て本番 Cloud Run image を Phase 1-4b 全部入りに rollout。実動作確認: `/runops sightjack approve-test-1` → Block Kit → Approve → `pubsub_message_id=18812416980158651` payload 確認 (idempotency_key=d23e2d029ee93dd650857933fec1493c)。`/runops sightjack mention-test-1` → 同 (msg_id=19471312983780761, idem=e28e5f762bdd3ec981c55de4e57b6fd2)。CD post-deploy smoke green、Slack 上で `*依頼者:* @hironow` mention 表示確認 |
 
 「設計済 / 未着手」は intent.md と本ドキュメントに方針が書かれているが
 コードに手がついていない状態。
@@ -790,6 +791,27 @@ delivery_attempt がカウントされない)。alert は 2 種類で相補的:
 
 retention が 14 日なので 14 日以上 dmail-receiver が deploy されない
 場合は backlog から消失する。docs/runbooks/dlq.md の Trigger 節に詳細。
+
+### 8-prepre2. Cloud Trace OTLP は `gcp.project_id` resource attribute を要求
+
+実本番 deploy 後の Cloud Run ログで以下が連発:
+
+```
+traces export: rpc error: code = InvalidArgument
+  desc = Resource is missing required attribute "gcp.project_id"
+```
+
+Cloud Trace の OTLP API (`telemetry.googleapis.com:443`) は **OTel
+semconv の `cloud.account.id` ではなく、literal な `gcp.project_id`**
+を resource attribute として要求する。`gcp.NewDetector()` を呼ぶ手も
+あるが unit test が GCE metadata server に依存するので避け、`Config`
+に `GCPProjectID` フィールドを追加して caller (3 binary) が
+`os.Getenv("GOOGLE_CLOUD_PROJECT")` を渡す方式に統一 (PR #21)。
+
+判別:
+- Cloud Trace UI に **service が出てこない** + Cloud Run log に
+  `Resource is missing required attribute "gcp.project_id"` がある
+  → resource に gcp.project_id 不足 (PR #21 で修正)
 
 ### 8-pre. `/healthz` は Cloud Run / Knative の予約 path
 

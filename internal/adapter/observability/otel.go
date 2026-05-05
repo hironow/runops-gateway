@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/sdk/resource"
@@ -60,6 +61,15 @@ type Config struct {
 	// OTEL_TRACES_SAMPLER_ARG. Parsed as float64; values outside [0,1] are
 	// clamped by the OTel SDK.
 	SamplerArg string
+
+	// GCPProjectID is the GCP project the runtime SA belongs to. When set,
+	// Cloud Trace's OTLP API (telemetry.googleapis.com) requires the
+	// resource to carry an attribute literally named "gcp.project_id"
+	// (NOT semconv cloud.account.id) — exporting without it returns
+	// `InvalidArgument: Resource is missing required attribute "gcp.project_id"`.
+	// Caller typically sets this from os.Getenv("GOOGLE_CLOUD_PROJECT");
+	// empty value skips the attribute (local Jaeger doesn't need it).
+	GCPProjectID string
 }
 
 // serviceNamespace is the org-level grouping every binary in this repo
@@ -71,14 +81,21 @@ const serviceNamespace = "runops"
 // service.version come from cfg. The GCP resource detector is intentionally
 // not wired here yet — it lives behind its own helper so unit tests do not
 // hit the GCP metadata server.
+//
+// gcp.project_id is appended when cfg.GCPProjectID is non-empty so the Cloud
+// Trace OTLP endpoint accepts the export. We attach it as a plain string
+// attribute (no semconv constant) because Cloud Trace's required key is
+// literally "gcp.project_id", not the semconv equivalent cloud.account.id.
 func BuildResource(ctx context.Context, cfg Config) (*resource.Resource, error) {
-	return resource.New(ctx,
-		resource.WithAttributes(
-			semconv.ServiceName(cfg.ServiceName),
-			semconv.ServiceNamespace(serviceNamespace),
-			semconv.ServiceVersion(cfg.ServiceVersion),
-		),
-	)
+	attrs := []attribute.KeyValue{
+		semconv.ServiceName(cfg.ServiceName),
+		semconv.ServiceNamespace(serviceNamespace),
+		semconv.ServiceVersion(cfg.ServiceVersion),
+	}
+	if cfg.GCPProjectID != "" {
+		attrs = append(attrs, attribute.String("gcp.project_id", cfg.GCPProjectID))
+	}
+	return resource.New(ctx, resource.WithAttributes(attrs...))
 }
 
 // SetupTracerProvider returns a TracerProvider that the caller is responsible
