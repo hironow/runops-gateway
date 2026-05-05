@@ -1,7 +1,12 @@
 # 0013. outbox 書き込みは Pub/Sub bridge を経由する
 
 **Date:** 2026-05-05
-**Status:** Accepted
+**Status:** Proposed (Phase 2 以降で再評価)
+
+> **Draft notice (2026-05-05)**: 本 ADR は D-Mail outbox 書き込みの bridge 設計であり、
+> Phase 2 以降の議論である。Phase 1（Issue 0018: シンプル経路）では Pub/Sub には触れず、
+> Slack 内で完結する stub dispatch のみを実装する。Phase 1 完了後、Phase 2 着手時に
+> 本 ADR を Accepted に昇格するか再評価する。
 
 ## Context
 

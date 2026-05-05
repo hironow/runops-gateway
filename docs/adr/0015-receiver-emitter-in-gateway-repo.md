@@ -1,7 +1,12 @@
 # 0015. dmail-receiver / dmail-emitter は本リポジトリで管理する
 
 **Date:** 2026-05-05
-**Status:** Accepted
+**Status:** Proposed (Phase 2 以降で再評価)
+
+> **Draft notice (2026-05-05)**: 本 ADR は ADR 0013 の Pub/Sub bridge を構成する
+> 2 daemon の責務範囲を定める判断であり、Phase 2 以降の議論である。Phase 1
+> （Issue 0018: シンプル経路）では receiver / emitter は実装しない。Phase 1 完了後、
+> Phase 2 着手時に本 ADR を Accepted に昇格するか再評価する。
 
 ## Context
 

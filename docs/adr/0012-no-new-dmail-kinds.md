@@ -1,7 +1,12 @@
 # 0012. 新しい D-Mail kind は追加しない
 
 **Date:** 2026-05-05
-**Status:** Accepted
+**Status:** Proposed (Phase 2 以降で再評価)
+
+> **Draft notice (2026-05-05)**: 本 ADR は D-Mail Protocol を runops-gateway に
+> 統合する判断であり、Phase 2 以降の議論である。Phase 1（Issue 0018: シンプル経路）
+> では D-Mail には触れない。Phase 1 完了後、Phase 2 着手時に本 ADR を Accepted に
+> 昇格するか再評価する。
 
 ## Context
 
