@@ -6,11 +6,18 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http"
+	"time"
 )
 
 // VerifySignature checks the X-Slack-Signature header against the signing secret.
-// Returns nil if valid, error otherwise.
+// Returns nil if valid, error otherwise. Uses time.Now for freshness checks.
 func VerifySignature(header http.Header, body []byte, signingSecret string) error {
+	return verifySignatureAt(time.Now(), header, body, signingSecret)
+}
+
+// verifySignatureAt is the testable form of VerifySignature: callers can
+// inject the "current time" used for replay-window checks.
+func verifySignatureAt(_ time.Time, header http.Header, body []byte, signingSecret string) error {
 	timestamp := header.Get("X-Slack-Request-Timestamp")
 	signature := header.Get("X-Slack-Signature")
 	if timestamp == "" || signature == "" {
