@@ -11,6 +11,9 @@ import (
 	"syscall"
 	"time"
 
+	gpubsub "cloud.google.com/go/pubsub/v2"
+
+	pubsubinput "github.com/hironow/runops-gateway/internal/adapter/input/pubsub"
 	slackadapter "github.com/hironow/runops-gateway/internal/adapter/input/slack"
 	"github.com/hironow/runops-gateway/internal/adapter/output/auth"
 	dispatcheradapter "github.com/hironow/runops-gateway/internal/adapter/output/dispatcher"
@@ -91,6 +94,14 @@ func main() {
 		Handler: mux,
 	}
 
+	// Phase 3 (ADR 0018): if PUBSUB_DMAIL_OUTBOUND_SUB is set, start an
+	// in-process Pub/Sub StreamingPull that forwards 5-pillar results to a
+	// thread reply on the originating Slack message. Empty env keeps the
+	// previous (Phase 2a) behaviour where the gateway only publishes.
+	outboundCtx, outboundCancel := context.WithCancel(context.Background())
+	defer outboundCancel()
+	outboundDone := startOutboundSubscriber(outboundCtx, cfg, notifier)
+
 	go func() {
 		slog.Info("runops-gateway starting", "addr", srv.Addr)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -107,11 +118,67 @@ func main() {
 	slog.Info("shutting down gracefully...")
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	outboundCancel()
+	<-outboundDone
 	if err := srv.Shutdown(ctx); err != nil {
 		slog.Error("shutdown error", "error", err)
 	}
 	slog.Info("server stopped")
 }
+
+// startOutboundSubscriber starts the dmail-outbound StreamingPull goroutine
+// when configured. Returns a channel that closes once the receive loop has
+// exited so main can wait for clean shutdown. When the subscription is not
+// configured the returned channel is closed immediately.
+func startOutboundSubscriber(ctx context.Context, cfg config, notifier port.Notifier) <-chan struct{} {
+	done := make(chan struct{})
+	if cfg.pubsubOutboundSub == "" {
+		slog.Info("dmail-outbound subscriber disabled (PUBSUB_DMAIL_OUTBOUND_SUB unset)")
+		close(done)
+		return done
+	}
+	if cfg.pubsubProjectID == "" {
+		slog.Warn("PUBSUB_DMAIL_OUTBOUND_SUB set but PUBSUB_PROJECT_ID empty; outbound subscriber disabled")
+		close(done)
+		return done
+	}
+
+	client, err := gpubsub.NewClient(ctx, cfg.pubsubProjectID)
+	if err != nil {
+		slog.Error("pubsub client for outbound subscriber", "error", err)
+		close(done)
+		return done
+	}
+	handler := usecase.NewDispatchResultHandler(notifier)
+	receiver := pubsubinput.NewOutboundReceiver(handler)
+
+	go func() {
+		defer close(done)
+		defer client.Close()
+		sub := client.Subscriber(cfg.pubsubOutboundSub)
+		slog.Info("dmail-outbound subscriber started",
+			"project_id", cfg.pubsubProjectID,
+			"subscription", cfg.pubsubOutboundSub)
+		err := sub.Receive(ctx, func(ctx context.Context, m *gpubsub.Message) {
+			receiver.OnMessage(ctx, outboundMessage{inner: m})
+		})
+		if err != nil && ctx.Err() == nil {
+			slog.Error("dmail-outbound subscriber receive loop exited", "error", err)
+		} else {
+			slog.Info("dmail-outbound subscriber stopped")
+		}
+	}()
+	return done
+}
+
+// outboundMessage adapts *pubsub.Message to pubsubinput.Message.
+type outboundMessage struct{ inner *gpubsub.Message }
+
+func (m outboundMessage) ID() string                    { return m.inner.ID }
+func (m outboundMessage) Data() []byte                  { return m.inner.Data }
+func (m outboundMessage) Attributes() map[string]string { return m.inner.Attributes }
+func (m outboundMessage) Ack()                          { m.inner.Ack() }
+func (m outboundMessage) Nack()                         { m.inner.Nack() }
 
 type config struct {
 	slackSigningSecret    string
@@ -119,8 +186,9 @@ type config struct {
 	slackDefaultChannelID string // optional — only used when target.ChannelID is empty
 	port                  string
 	dispatcherBackend     string // "stub" (default) or "pubsub" (Phase 2a)
-	pubsubProjectID       string // required when backend=pubsub
+	pubsubProjectID       string // required when backend=pubsub OR outbound sub is set
 	pubsubInboundTopic    string // required when backend=pubsub
+	pubsubOutboundSub     string // optional — enables Phase 3 OutboundReceiver
 }
 
 func loadConfig() (config, error) {
@@ -132,6 +200,7 @@ func loadConfig() (config, error) {
 		dispatcherBackend:     os.Getenv("DISPATCHER_BACKEND"),
 		pubsubProjectID:       os.Getenv("PUBSUB_PROJECT_ID"),
 		pubsubInboundTopic:    os.Getenv("PUBSUB_DMAIL_INBOUND_TOPIC"),
+		pubsubOutboundSub:     os.Getenv("PUBSUB_DMAIL_OUTBOUND_SUB"),
 	}
 	if cfg.slackSigningSecret == "" {
 		return config{}, fmt.Errorf("SLACK_SIGNING_SECRET is required")
@@ -155,6 +224,7 @@ func loadConfig() (config, error) {
 		"dispatcher_backend", cfg.dispatcherBackend,
 		"pubsub_project_id", cfg.pubsubProjectID,
 		"pubsub_inbound_topic", cfg.pubsubInboundTopic,
+		"pubsub_outbound_sub", cfg.pubsubOutboundSub,
 	)
 	return cfg, nil
 }
