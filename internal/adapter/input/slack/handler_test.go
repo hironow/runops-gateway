@@ -338,6 +338,83 @@ func TestInteractiveHandler_DispatchApprove_CallsDispatchUseCase(t *testing.T) {
 	}
 }
 
+func TestInteractiveHandler_DispatchApprove_RejectsImpersonation(t *testing.T) {
+	// given — clicker (U_other) is NOT the original requester (U0123ABCD)
+	secret := "test-secret"
+	mock := newMockUseCase()
+	disp := &recordedDispatchUseCase{}
+	handler := NewInteractiveHandler(mock, disp, testNotifier, secret)
+
+	dv := dispatchActionValue{
+		Role:           "paintress",
+		Text:           "fix M-42",
+		RequesterID:    "U0123ABCD", // payload-bound original requester
+		IdempotencyKey: "k-impersonate",
+		IssuedAt:       time.Now().Unix(),
+	}
+	dvBytes, _ := json.Marshal(dv)
+
+	payload := interactivePayload{}
+	payload.User.ID = "U_other" // clicker is someone else
+	payload.ResponseURL = "https://hooks.slack.com/x"
+	payload.Actions = []interactiveAction{
+		{ActionID: "dispatch_approve", Value: string(dvBytes)},
+	}
+	payloadBytes, _ := json.Marshal(payload)
+
+	req := buildValidRequest(t, secret, string(payloadBytes))
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	// give the goroutine a chance to NOT run
+	time.Sleep(50 * time.Millisecond)
+	if got := disp.snapshot(); len(got) != 0 {
+		t.Errorf("DispatchAgentTask must not be called when clicker != requester; got %d calls (%+v)", len(got), got)
+	}
+}
+
+func TestInteractiveHandler_DispatchDeny_RejectsImpersonation(t *testing.T) {
+	// given — Deny is also restricted to the original requester to prevent
+	// griefers from dismissing other people's pending confirmations.
+	secret := "test-secret"
+	mock := newMockUseCase()
+	disp := &recordedDispatchUseCase{}
+	handler := NewInteractiveHandler(mock, disp, testNotifier, secret)
+
+	dv := dispatchActionValue{
+		Role:        "paintress",
+		Text:        "fix M-42",
+		RequesterID: "U0123ABCD",
+	}
+	dvBytes, _ := json.Marshal(dv)
+
+	payload := interactivePayload{}
+	payload.User.ID = "U_other" // clicker is someone else
+	payload.ResponseURL = "https://hooks.slack.com/x"
+	payload.Actions = []interactiveAction{
+		{ActionID: "dispatch_deny", Value: string(dvBytes)},
+	}
+	payloadBytes, _ := json.Marshal(payload)
+
+	req := buildValidRequest(t, secret, string(payloadBytes))
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	// no use case is invoked either way; this test mainly asserts no panic
+	// and silent rejection. The full verification of "impersonation rejected"
+	// lives in the approve test above.
+	time.Sleep(50 * time.Millisecond)
+	if got := disp.snapshot(); len(got) != 0 {
+		t.Errorf("DispatchAgentTask must not be called via dispatch_deny; got %d calls", len(got))
+	}
+}
+
 func TestInteractiveHandler_DispatchDeny_DoesNotInvokeDispatchUseCase(t *testing.T) {
 	// given
 	secret := "test-secret"

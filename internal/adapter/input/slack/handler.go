@@ -188,6 +188,10 @@ func (h *InteractiveHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // handleDispatchAction routes the two Slash Command confirmation buttons.
 // dispatch_approve runs the use case asynchronously; dispatch_deny replaces the
 // confirmation message with a cancellation note and never invokes the use case.
+//
+// Both buttons require the clicker to be the original requester (Phase 1
+// hijack guard, Codex Review round 4 finding 1). Phase 4 will lift this for
+// HIGH severity 4-eyes flows.
 func (h *InteractiveHandler) handleDispatchAction(action interactiveAction, clickerUserID string, target port.NotifyTarget) {
 	dv, err := parseDispatchActionValue(action.Value)
 	if err != nil {
@@ -196,6 +200,22 @@ func (h *InteractiveHandler) handleDispatchAction(action interactiveAction, clic
 	}
 	if dv.Role == "" {
 		slog.Warn("dispatch action value missing role")
+		return
+	}
+
+	// Hijack guard: never trust the requester ID embedded in the payload as the
+	// click-time approver. Cross-check the clicker's Slack user ID instead.
+	if clickerUserID == "" || clickerUserID != dv.RequesterID {
+		slog.Warn("dispatch action clicker mismatch",
+			"action", action.ActionID, "clicker", clickerUserID, "requester", dv.RequesterID)
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := h.notifier.SendEphemeral(ctx, target, clickerUserID,
+				"🚫 自分が発行した dispatch のみ承認・キャンセルできます"); err != nil {
+				slog.Error("dispatch hijack ephemeral notification failed", "error", err)
+			}
+		}()
 		return
 	}
 
@@ -218,7 +238,7 @@ func (h *InteractiveHandler) handleDispatchAction(action interactiveAction, clic
 	req := domain.DispatchRequest{
 		Role:           domain.AgentRole(dv.Role),
 		Text:           dv.Text,
-		RequesterID:    dv.RequesterID,
+		RequesterID:    clickerUserID, // trust the clicker, not the payload
 		IdempotencyKey: dv.IdempotencyKey,
 		IssuedAt:       dv.IssuedAt,
 	}
@@ -228,7 +248,6 @@ func (h *InteractiveHandler) handleDispatchAction(action interactiveAction, clic
 		if err := h.dispatchUseCase.DispatchAgentTask(ctx, req, target); err != nil {
 			slog.Error("DispatchAgentTask failed", "error", err)
 		}
-		_ = clickerUserID // Phase 1: requester==approver (no 4-eyes); Phase 4 will check.
 	}()
 }
 
