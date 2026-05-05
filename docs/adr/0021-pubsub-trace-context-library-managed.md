@@ -1,7 +1,7 @@
 # 0021. Pub/Sub の trace context propagation は v2 ライブラリに委譲する (ADR 0013 を一部 supersede)
 
 **Date:** 2026-05-05
-**Status:** Proposed
+**Status:** Accepted (2026-05-05, feat/otel-direct-otlp 実装で動作確認済 — pubsub/v2 v2.6.0 の `EnableOpenTelemetryTracing: true` を 3 client に適用、ADR 0013 schema から traceparent を実質削除)
 
 ## Context
 

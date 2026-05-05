@@ -1,7 +1,7 @@
 # 0022. CloudEvents は採用しない (再検討トリガーを明示)
 
 **Date:** 2026-05-05
-**Status:** Proposed
+**Status:** Accepted (2026-05-05, Codex review 通過 + ADR 0020/0021 の Accepted 化と整合)
 
 ## Context
 

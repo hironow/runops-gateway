@@ -1,7 +1,7 @@
 # 0020. OpenTelemetry trace は直接 OTLP gRPC で export する (Collector sidecar 不採用)
 
 **Date:** 2026-05-05
-**Status:** Proposed
+**Status:** Accepted (2026-05-05, feat/otel-direct-otlp 実装で動作確認済 — Jaeger v2 に trace 到達確認、3 binary とも `OTEL_EXPORTER_OTLP_ENDPOINT` 切替で動作)
 
 ## Context
 
