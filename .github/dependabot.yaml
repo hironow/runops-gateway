@@ -1,0 +1,52 @@
+# Dependabot config for runops-gateway.
+#
+# GitHub Actions: SHA pin 必須 (org policy "Require actions to be pinned to a
+# full-length commit SHA") なので、Dependabot は SHA pin を新リリースの SHA に
+# 自動で更新する。
+#
+# Go modules: 本リポは多数の OTel / GCP SDK に依存しているので、関連 module を
+# group にまとめて 1 PR で更新する。
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      docker-actions:
+        patterns:
+          - "docker/*"
+      google-actions:
+        patterns:
+          - "google-github-actions/*"
+      github-actions-misc:
+        patterns:
+          - "actions/*"
+          - "jdx/*"
+          - "opentofu/*"
+
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      otel:
+        patterns:
+          - "go.opentelemetry.io/*"
+      gcp:
+        patterns:
+          - "cloud.google.com/go*"
+          - "google.golang.org/*"
+          - "github.com/googleapis/*"
+      go-deps-rest:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "go.opentelemetry.io/*"
+          - "cloud.google.com/go*"
+          - "google.golang.org/*"
+          - "github.com/googleapis/*"
