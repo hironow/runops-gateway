@@ -153,6 +153,6 @@ func (n *FallbackNotifier) UpdateMessage(...) error {
 
 ## 参照
 
-- [`docs/issues/0017-offer-continuation-404-fix.md`](../issues/0017-offer-continuation-404-fix.md)
+- 実装: `internal/adapter/output/slack/fallback.go` (FallbackNotifier、Phase 2a で merge 済み)
 - Slack docs: <https://api.slack.com/methods/chat.postMessage>
 - Slack docs: <https://api.slack.com/interactivity/handling#message_responses>

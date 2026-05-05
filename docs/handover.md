@@ -40,12 +40,12 @@ or merge する運用とする。
 | Phase | 状態 | 内容 |
 | --- | --- | --- |
 | Phase 0 | ✅ 完了 | 既存 ChatOps（Cloud Run カナリア・DB マイグレ） |
-| **Phase 1 (新)** | ✅ 完了 (2026-05-05, develop merged) | **シンプル経路**: `/slack/command` → **Block Kit 確認 → Approve クリック (`/slack/interactive`)** → DispatchAgentTask → thread reply。Codex Review round 2/3/4 の致命指摘 **5 件** はすべて修正済み |
-| **Phase 2a** | 🟡 実装中 (`feat/long-running-dispatch`) | Issue 0017 chat.postMessage fallback (ADR 0017) ✅ + PubsubDispatcher publish 経路 ✅ + `DISPATCHER_BACKEND=stub\|pubsub` 切替 ✅ |
-| Phase 2b | 📝 draft | exe-coder VM 上の `dmail-receiver` daemon (Pub/Sub pull → phonewave outbox atomic write) |
-| Phase 2c | 📝 draft | exe-coder VM 上の `dmail-emitter` daemon (5本柱 archive → Pub/Sub `dmail-outbound` publish) |
-| Phase 3 | 📝 draft | dmail-outbound subscription + InteractiveHandler への結果 thread reply (Slack 集約) |
-| Phase 4 | 📝 draft | HIGH severity approval gate + 本番化 (4-eyes、preempt 解除) |
+| **Phase 1** | ✅ 完了 (2026-05-05, develop merged) | **シンプル経路**: `/slack/command` → **Block Kit 確認 → Approve クリック (`/slack/interactive`)** → DispatchAgentTask → thread reply。Codex Review round 2/3/4 の致命指摘 **5 件** はすべて修正済み |
+| **Phase 2a** | ✅ 完了 (2026-05-05, `feat/long-running-dispatch`) | Issue 0017 chat.postMessage fallback (ADR 0017) + PubsubDispatcher publish 経路 + `DISPATCHER_BACKEND=stub\|pubsub` 切替 + emulator 統合テスト |
+| **Phase 2b** | ✅ 完了 (2026-05-05, 同 branch) | `cmd/dmail-receiver` daemon: Pub/Sub StreamingPull → phonewave outbox に atomic write (`OutboxWriter`) |
+| **Phase 2c** | ✅ 完了 (2026-05-05, 同 branch) | `cmd/dmail-emitter` daemon: 5本柱 archive を fsnotify 監視 → Pub/Sub `dmail-outbound` publish (`Watcher` + `Emitter`) |
+| Phase 3 | 📝 draft | dmail-outbound subscription を gateway に inbound 化、`/slack/interactive` 結果 thread reply (Slack 集約)、ADR 0014 の最終形 |
+| Phase 4 | 📝 draft | HIGH severity approval gate + 本番化 (4-eyes、preempt 解除、tofu の `slack-bot-token` / Pub/Sub IAM / SA 設定) |
 
 「設計済 / 未着手」は intent.md と本ドキュメントに方針が書かれているが
 コードに手がついていない状態。
@@ -158,8 +158,9 @@ sender 情報を付けて識別する。
 目的: D-Mail / Pub/Sub に着手する前に、**Slack で受け、認可し、確認し、応答する
 最小の循環** を runops-gateway 単体で完結させる。実処理 (5本柱への投入) は stub。
 
-詳細は **[`docs/issues/0018-simple-message-path.md`](issues/0018-simple-message-path.md)**
-を参照（フロー図・コード差分・TDD 計画・ローカル動作確認手順を含む）。
+詳細な設計判断は ADR 0014 (Slack 通知集約) と本ドキュメント末尾の
+"Phase 1 review findings" を参照。実装の最終形は git ログ
+(`feat: Phase 1 ...` の squash commit) を見るのが早い。
 
 ### Phase 1 のスコープ要約
 

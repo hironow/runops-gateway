@@ -135,6 +135,6 @@ func VerifySignature(header http.Header, body []byte, signingSecret string) erro
 
 ## 参照
 
-- [`docs/issues/0019-slack-replay-protection.md`](../issues/0019-slack-replay-protection.md) — TDD 実装計画
+- 実装は `internal/adapter/input/slack/verify.go` の `verifySignatureAt` (Phase 1 で merge 済み)
 - Slack docs: <https://api.slack.com/authentication/verifying-requests-from-slack>
 - Codex Review (round 2, 2026-05-05): 唯一の致命的指摘として本欠落を報告
