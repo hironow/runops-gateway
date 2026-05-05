@@ -286,6 +286,42 @@ go run ./scripts/smoke/dispatch.go --target paintress --text "hello phase 2b"
 ls "$SMOKE/outbox/"   # → <pubsub_message_id>.md
 ```
 
+### C-4. 手動 smoke (Phase 3: dmail-outbound → Slack thread reply)
+
+gateway を `PUBSUB_DMAIL_OUTBOUND_SUB=runops-gateway-sub` 込みで起動し、
+mock Slack server (or 実 Slack の test channel) を立てて、emulator に
+publish した結果が thread reply として届くまで確認できる。
+
+```bash
+# 1) mock Slack chat.postMessage receiver (port 18888)
+python3 -c '
+from http.server import HTTPServer, BaseHTTPRequestHandler
+class H(BaseHTTPRequestHandler):
+    def do_POST(self):
+        body = self.rfile.read(int(self.headers["Content-Length"]))
+        print(f"[mock slack] {body.decode()}")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(b"{\"ok\":true,\"ts\":\"1700000000.000100\"}")
+HTTPServer(("0.0.0.0", 18888), H).serve_forever()
+' &
+
+# 2) gateway を Phase 3 設定で起動
+SLACK_SIGNING_SECRET=test-secret \
+SLACK_BOT_TOKEN=xoxb-fake \
+PUBSUB_EMULATOR_HOST=localhost:9399 \
+PUBSUB_PROJECT_ID=runops-local \
+PUBSUB_DMAIL_OUTBOUND_SUB=runops-gateway-sub \
+go run ./cmd/server &
+# (chat.postMessage URL を mock に向けたい場合は cmd/server の slackChatPostMessageURL
+#  定数を一時的に "http://localhost:18888/" に変えてから go run、もしくは
+#  一時的に integration test を直接実行して挙動を確認するのが現実的)
+
+# 3) Phase 2c emitter が無くても、Pub/Sub に直接 publish して経路を確認できる
+# (scripts/smoke/dispatch.go の Target を amadeus 等に変えるなど任意)
+```
+
 ### C-3. 手動 smoke (Phase 2c 送信側)
 
 ```bash
