@@ -441,6 +441,12 @@ just test-integration   # tests/integration/pubsub_approval_test.go が含まれ
 3 binary すべてが `OTEL_EXPORTER_OTLP_ENDPOINT` 切替で local Jaeger に
 trace を送れることを確認する。
 
+> **prod との差**: prod (Cloud Run) では `GOOGLE_CLOUD_PROJECT` env が
+> 自動セットされ、`internal/adapter/observability` で resource
+> attribute `gcp.project_id` に転用される (PR #21、Cloud Trace OTLP の
+> 必須属性)。**local Jaeger は不要** — Jaeger は `gcp.project_id` を
+> 要求しないので空のまま動く。
+
 ### E-1. Jaeger を立てる
 
 ```bash
