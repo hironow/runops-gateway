@@ -52,7 +52,7 @@ or merge する運用とする。
 | **Phase 2c** | ✅ 完了 (2026-05-05, 同 branch) | `cmd/dmail-emitter` daemon: 5本柱 archive を fsnotify 監視 → Pub/Sub `dmail-outbound` publish (`Watcher` + `Emitter`) |
 | **Phase 3** | ✅ 完了 (2026-05-05, 同 branch) | gateway 内 `OutboundReceiver` (StreamingPull) → `DispatchResultHandler` → FallbackNotifier (chat.postMessage) で Slack thread reply。ADR 0018 (pull subscription)、metadata propagation (parent_idempotency_key / slack_channel_id / slack_thread_ts) |
 | **Phase 4a** | ✅ 完了 (2026-05-05, 同 branch) | HIGH severity convergence の 4-eyes approval gate (ADR 0019)。`ApprovalRequester` で Block Kit、`approval_approve` / `approval_deny` action_id を `InteractiveHandler` に追加、ConsumedTokenStore で one-time consume、approver != original_requester 強制、承認後 dmail-inbound に convergence ack を publish |
-| **OTel 配線** | ✅ 完了 (2026-05-05, `feat/otel-direct-otlp` PR #8 draft) | ADR 0020 (Direct OTLP) + ADR 0021 (Pub/Sub trace 委譲) + ADR 0022 (CloudEvents 不採用)。`internal/adapter/observability` に SetupTracerProvider / NormalizeEndpoint / BuildResource / 自動 noop fallback。3 binary に TracerProvider + otelhttp wrap、Pub/Sub 3 client に `EnableOpenTelemetryTracing: true`、`compose.yaml` に Jaeger v2.17、`just trace-up/down/view`。`usecase.dispatch_agent_task` / `usecase.dispatch_result_handle` / `slack.verify_signature` の手動 span 追加済 |
+| **OTel 配線** | ✅ 完了 (2026-05-05, `feat/otel-direct-otlp` PR #8 draft) | ADR 0020 (Direct OTLP) + ADR 0021 (Pub/Sub trace 委譲) + ADR 0022 (CloudEvents 不採用)。`internal/adapter/observability` に SetupTracerProvider / NormalizeEndpoint / BuildResource / 自動 noop fallback。3 binary に TracerProvider + otelhttp wrap、Pub/Sub 3 client に `EnableOpenTelemetryTracing: true`、`compose.yaml` に Jaeger v2.17、`just trace-up/down/view`。手動 span: `slack.verify_signature` / `slack.handle_dispatch_action` / `slack.handle_approval_action` / `usecase.dispatch_agent_task` / `usecase.dispatch_result_handle` / `dmail.receiver.on_message` / `dmail.outbound.on_message` / `dmail.emitter.publish_file`。goroutine 跨ぎは `context.WithoutCancel` で trace context 引き継ぎ |
 | Phase 4b | 📝 draft | 本番化 (tofu で Pub/Sub topic / subscription / IAM、Cloud Run min-instances=1、`slack-bot-token` Secret Manager、preempt 解除、Cloud Trace OTLP API enable + `roles/telemetry.tracesWriter`) |
 
 「設計済 / 未着手」は intent.md と本ドキュメントに方針が書かれているが
@@ -729,8 +729,35 @@ phonewave は archive に書いた後で outbox の元ファイルを消す。
   `EnableOpenTelemetryTracing: true` で W3C Trace Context を自動
   inject/extract (`googclient_*` attributes)。ADR 0013 の `traceparent` は
   ADR 0021 で実質削除済 (二重 inject 回避)
-- 手動 span: `slack.verify_signature` / `usecase.dispatch_agent_task` /
-  `usecase.dispatch_result_handle`。otelhttp root span が parent
+- 手動 span 一覧 (PR #8 完成形):
+
+```
+inbound (Slack -> 5 pillars):
+  POST /slack/interactive             (otelhttp root)
+   |- slack.verify_signature
+   |- slack.handle_{dispatch,approval}_action  (sync validation only)
+        +-- (goroutine, context.WithoutCancel で trace context 引き継ぎ)
+            |- usecase.dispatch_agent_task
+                 |- send dmail-inbound          (auto, pubsub/v2)
+                    ~~ Pub/Sub bus boundary ~~
+                    |- receive dmail-inbound    (auto, dmail-receiver 側)
+                         |- dmail.receiver.on_message
+                              attrs: outbox.filename / pubsub.message_id
+
+outbound (5 pillars -> Slack):
+  dmail.emitter.publish_file          (root, fsnotify event 起点)
+   |- send dmail-outbound             (auto, pubsub/v2)
+      ~~ Pub/Sub bus boundary ~~
+      |- receive dmail-outbound       (auto, gateway 内 subscriber)
+           |- dmail.outbound.on_message
+                |- usecase.dispatch_result_handle
+                     |- (chat.postMessage / approval publish のいずれか)
+```
+
+  Legend / 凡例:
+  - root: 起点 span (上流 trace なし)
+  - auto: pubsub/v2 が自動生成する span (自動生成スパン)
+  - goroutine: HTTP response 終了後も走り続ける処理 (HTTP応答後に走り続けるゴルーチン)
 - `just trace-up` で Jaeger 起動、`just trace-view` で UI 開封
 - **5本柱との連結**: receiver が phonewave outbox に書く際に D-Mail
   frontmatter にも traceparent を書き込む必要 → **5本柱側の対応待ち**。
@@ -856,7 +883,7 @@ Interactive 両方) を疑う。
 | **E-2. 手動 receiver smoke** | `cmd/dmail-receiver` を一時 outbox に向けて起動 + `scripts/smoke/dispatch.go` で 1 件 publish |
 | **E-3. 手動 emitter smoke** | `cmd/dmail-emitter` を一時 archive に向けて起動 + heredoc で `.md` を投入 |
 | **E-4. Phase 3 thread reply smoke** | gateway を `PUBSUB_DMAIL_OUTBOUND_SUB` 込みで起動 + mock Slack 受信 server で chat.postMessage を観察 |
-| **E-5. OTel trace を Jaeger で確認** | `just trace-up` → server を `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317` で起動 → Slack POST を打って `http://localhost:16686` で `runops-gateway` の trace を見る (otelhttp root → `slack.verify_signature` → `usecase.dispatch_agent_task` → `send dmail-inbound`) |
+| **E-5. OTel trace を Jaeger で確認** | `just trace-up` → 3 binary を `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317` 込みで起動 → Slack POST or smoke スクリプトで dispatch を 1 件流す → `http://localhost:16686` で `runops-gateway` / `dmail-receiver` / `dmail-emitter` の 3 service が表示され、上記 inbound/outbound 2 trace tree がそれぞれ 1 つの trace_id で繋がっていることを確認 |
 
 ### 5本柱まで含めた完全 e2e (📝 future)
 
