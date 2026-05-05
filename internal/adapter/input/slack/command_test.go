@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -46,7 +47,9 @@ func (r *recordedDispatchUseCase) calls() []domain.DispatchRequest {
 
 func signedCommandRequest(t *testing.T, secret, body string) *http.Request {
 	t.Helper()
-	ts := "1700000000"
+	// Use the current second so the request stays inside the freshness window
+	// enforced by VerifySignature (ADR 0016 / Issue 0019).
+	ts := strconv.FormatInt(time.Now().Unix(), 10)
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write([]byte("v0:" + ts + ":" + body))
 	sig := "v0=" + hex.EncodeToString(mac.Sum(nil))
