@@ -241,7 +241,7 @@ go run ./cmd/runops approve service YOUR_SERVICE_NAME \
 
 ## パターン C: Pub/Sub bridge (Phase 2a/b/c)
 
-`/agent` Slash Command 経路 → Pub/Sub → phonewave outbox → 5本柱、および
+`/runops` Slash Command 経路 → Pub/Sub → phonewave outbox → 5本柱、および
 逆向きの 5本柱 archive → Pub/Sub → gateway 経路を、Firebase Pub/Sub emulator
 で完全にローカル検証する。GCP も Slack も実体は不要。
 
@@ -353,6 +353,151 @@ EOF
 curl -s -X POST "http://localhost:9399/v1/projects/runops-local/subscriptions/runops-gateway-sub:pull" \
   -H "Content-Type: application/json" -d '{"maxMessages":5}' | python3 -m json.tool
 ```
+
+---
+
+## パターン D: HIGH severity 4-eyes approval (Phase 4a)
+
+`amadeus` の HIGH severity convergence (ADR 0019) が gateway で
+`approval_approve` / `approval_deny` ボタン付き chat.postMessage に
+化けることを確認する。Slack 実体は不要 (mock receiver で代替)。
+
+### D-1. mock Slack chat.postMessage receiver を立てる
+
+```bash
+# 受信した payload を /tmp/post.json に書き出す簡易 server
+go run - <<'GO' &
+package main
+import (
+  "encoding/json"; "io"; "log"; "net/http"
+)
+func main() {
+  http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+    var body any; _ = json.NewDecoder(r.Body).Decode(&body)
+    f, _ := os.Create("/tmp/post.json"); io.Copy(f, ...)  // 簡略
+    json.NewEncoder(w).Encode(map[string]any{"ok": true, "ts": "1700000000.000100"})
+  })
+  log.Fatal(http.ListenAndServe(":18080", nil))
+}
+GO
+```
+
+(実際は `tests/integration/pubsub_approval_test.go` の httptest セットアップを
+再利用するのが簡単。E-1 の `just test-integration` で同じ経路を
+emulator 込みで通せる)
+
+### D-2. emulator + gateway を Phase 4a 設定で起動
+
+```bash
+just pubsub-up && just pubsub-init
+
+PUBSUB_EMULATOR_HOST=localhost:9399 \
+  PUBSUB_PROJECT_ID=runops-local \
+  PUBSUB_DMAIL_INBOUND_TOPIC=dmail-inbound \
+  PUBSUB_DMAIL_OUTBOUND_SUB=dmail-outbound-sub \
+  DISPATCHER_BACKEND=pubsub \
+  SLACK_SIGNING_SECRET=test-secret \
+  SLACK_BOT_TOKEN=xoxb-mock \
+  SLACK_DEFAULT_CHANNEL_ID=C_LOCAL \
+  go run ./cmd/server
+```
+
+### D-3. HIGH severity convergence を直接 publish
+
+```bash
+gcloud --project runops-local pubsub topics publish dmail-outbound \
+  --message "$(cat <<'EOF'
+---
+schema_version: "1"
+kind: convergence
+target: sightjack
+source: amadeus
+idempotency_key: convergence-test-1
+metadata:
+  parent_idempotency_key: parent-1
+  slack_channel_id: C_LOCAL
+  slack_thread_ts: "1700000000.000050"
+  requester_id: U_ORIG
+  severity: high
+---
+HIGH severity convergence detected: foo bar
+EOF
+)"
+```
+
+mock Slack receiver の log で `approval_approve` ボタン付き Block Kit が
+来ていれば成功。
+
+### D-4. (オプション) integration test で 1 行確認
+
+```bash
+just test-integration   # tests/integration/pubsub_approval_test.go が含まれる
+```
+
+---
+
+## パターン E: OTel trace を Jaeger v2 で確認 (ADR 0020)
+
+3 binary すべてが `OTEL_EXPORTER_OTLP_ENDPOINT` 切替で local Jaeger に
+trace を送れることを確認する。
+
+### E-1. Jaeger を立てる
+
+```bash
+just trace-up           # cr.jaegertracing.io/jaegertracing/jaeger:2.17.0
+# UI: http://localhost:16686, OTLP gRPC: localhost:4317
+```
+
+### E-2. cmd/server を OTel 込みで起動 → Slack POST 1 件
+
+```bash
+SLACK_SIGNING_SECRET=test-secret \
+  OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 \
+  OTEL_SERVICE_NAME=runops-gateway-local \
+  OTEL_TRACES_SAMPLER=parentbased_traceidratio \
+  OTEL_TRACES_SAMPLER_ARG=1.0 \
+  go run ./cmd/server &
+
+curl -sf http://localhost:8080/healthz   # /healthz は trace から除外される
+# pattern A-2 の curl で /slack/interactive を叩く (HMAC 計算込み)
+```
+
+### E-3. Jaeger UI で確認
+
+```
+open http://localhost:16686
+# Service ドロップダウンで 'runops-gateway-local' を選択
+# 'POST /slack/interactive' root span 配下に slack.verify_signature →
+# slack.handle_dispatch_action → usecase.dispatch_agent_task → send dmail-inbound
+# が 1 trace_id で繋がっていることを確認
+```
+
+### E-4. 3 binary 連携 trace (Pub/Sub bridge 込み)
+
+```bash
+just trace-up && just pubsub-up && just pubsub-init
+
+# 3 binary を OTLP endpoint 共通で並走
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 \
+  OTEL_TRACES_SAMPLER=parentbased_always_on \
+  PUBSUB_EMULATOR_HOST=localhost:9399 PUBSUB_PROJECT_ID=runops-local \
+  PHONEWAVE_OUTBOX_DIR=$(mktemp -d) \
+  PUBSUB_DMAIL_INBOUND_SUB=dmail-receiver-sub \
+  go run ./cmd/dmail-receiver &
+
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 \
+  OTEL_TRACES_SAMPLER=parentbased_always_on \
+  PUBSUB_EMULATOR_HOST=localhost:9399 PUBSUB_PROJECT_ID=runops-local \
+  PUBSUB_DMAIL_OUTBOUND_TOPIC=dmail-outbound \
+  PHONEWAVE_ARCHIVE_DIRS=$(mktemp -d) \
+  go run ./cmd/dmail-emitter &
+
+# その後 cmd/server も同様に起動 + 1 dispatch を流す。Jaeger UI に
+# runops-gateway / dmail-receiver / dmail-emitter の 3 service が並び、
+# inbound trace は publish->receive で 1 trace_id、outbound trace も同様
+```
+
+詳細な span tree は `docs/handover.md` の「ハマりどころ 7. trace context propagation」を参照。
 
 ---
 

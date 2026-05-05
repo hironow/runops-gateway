@@ -107,3 +107,53 @@ resource "google_pubsub_subscription_iam_member" "outbound_dlq_subscriber" {
   role         = "roles/pubsub.subscriber"
   member       = "serviceAccount:${local.pubsub_service_agent}"
 }
+
+# DLQ terminal sinks: a pull subscription on each DLQ topic so forwarded
+# messages survive past topic retention (14d) and can be inspected by a
+# human operator. Per the GCP 'Handle message failures' doc, a DLQ topic
+# with no subscriptions silently drops every message — see
+# experiments/2026-05-05_pubsub-dlq-terminal-sink.md and docs/runbooks/dlq.md
+# for the operator-facing triage flow.
+#
+# Differences from the working subscriptions above:
+#   - enable_message_ordering = OFF (per-target order is meaningless after
+#     5 deliveries failed on each individual message)
+#   - no dead_letter_policy (DLQ-of-DLQ would be turtles all the way down)
+
+resource "google_pubsub_subscription" "dmail_inbound_dlq_pull" {
+  name  = "dmail-inbound-dlq-pull"
+  topic = google_pubsub_topic.dmail_inbound_dlq.id
+
+  ack_deadline_seconds       = 60
+  message_retention_duration = "1209600s" # 14d, matches topic
+  retain_acked_messages      = false
+  enable_message_ordering    = false
+
+  expiration_policy {
+    ttl = "" # never expire
+  }
+
+  labels = {
+    component = "dmail-bridge"
+    role      = "dlq-terminal-sink"
+  }
+}
+
+resource "google_pubsub_subscription" "dmail_outbound_dlq_pull" {
+  name  = "dmail-outbound-dlq-pull"
+  topic = google_pubsub_topic.dmail_outbound_dlq.id
+
+  ack_deadline_seconds       = 60
+  message_retention_duration = "1209600s"
+  retain_acked_messages      = false
+  enable_message_ordering    = false
+
+  expiration_policy {
+    ttl = ""
+  }
+
+  labels = {
+    component = "dmail-bridge"
+    role      = "dlq-terminal-sink"
+  }
+}

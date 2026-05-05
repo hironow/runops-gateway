@@ -53,7 +53,9 @@ or merge する運用とする。
 | **Phase 3** | ✅ 完了 (2026-05-05, 同 branch) | gateway 内 `OutboundReceiver` (StreamingPull) → `DispatchResultHandler` → FallbackNotifier (chat.postMessage) で Slack thread reply。ADR 0018 (pull subscription)、metadata propagation (parent_idempotency_key / slack_channel_id / slack_thread_ts) |
 | **Phase 4a** | ✅ 完了 (2026-05-05, 同 branch) | HIGH severity convergence の 4-eyes approval gate (ADR 0019)。`ApprovalRequester` で Block Kit、`approval_approve` / `approval_deny` action_id を `InteractiveHandler` に追加、ConsumedTokenStore で one-time consume、approver != original_requester 強制、承認後 dmail-inbound に convergence ack を publish |
 | **OTel 配線** | ✅ 完了 (2026-05-05, `feat/otel-direct-otlp` PR #8 draft) | ADR 0020 (Direct OTLP) + ADR 0021 (Pub/Sub trace 委譲) + ADR 0022 (CloudEvents 不採用)。`internal/adapter/observability` に SetupTracerProvider / NormalizeEndpoint / BuildResource / 自動 noop fallback。3 binary に TracerProvider + otelhttp wrap、Pub/Sub 3 client に `EnableOpenTelemetryTracing: true`、`compose.yaml` に Jaeger v2.17、`just trace-up/down/view`。手動 span: `slack.verify_signature` / `slack.handle_dispatch_action` / `slack.handle_approval_action` / `usecase.dispatch_agent_task` / `usecase.dispatch_result_handle` / `dmail.receiver.on_message` / `dmail.outbound.on_message` / `dmail.emitter.publish_file`。goroutine 跨ぎは `context.WithoutCancel` で trace context 引き継ぎ |
-| **Phase 4b** | ✅ 完了 (2026-05-05, 同 PR #8) | 本番化: `tofu/pubsub.tf` (dmail-inbound / dmail-outbound + 各 DLQ)、`tofu/subscriptions.tf` (dmail-inbound-receiver / dmail-outbound-gateway + Pub/Sub service agent IAM)、`tofu/iam_pubsub.tf` (chatops_sa + 任意の exe-coder VM SA)、`tofu/telemetry.tf` (cloudtrace + telemetry API enable + tracesWriter)。`main.tf` の Cloud Run service に `SLACK_BOT_TOKEN` / `DISPATCHER_BACKEND=pubsub` / `PUBSUB_DMAIL_INBOUND_TOPIC` / `PUBSUB_DMAIL_OUTBOUND_SUB` / OTEL 一式の env を注入、`min_instance_count=1` に変更 (ADR 0018 StreamingPull)。`slack-bot-token` Secret Manager + accessor も追加 |
+| **Phase 4b (tofu コード)** | ✅ develop merged (2026-05-05, PR #8) | 本番化用 tofu: `tofu/pubsub.tf` (dmail-inbound / dmail-outbound + 各 DLQ)、`tofu/subscriptions.tf` (dmail-inbound-receiver / dmail-outbound-gateway + Pub/Sub service agent IAM)、`tofu/iam_pubsub.tf` (chatops_sa + 任意の exe-coder VM SA)、`tofu/telemetry.tf` (cloudtrace + telemetry API enable + tracesWriter)。`main.tf` の Cloud Run service に `SLACK_BOT_TOKEN` / `DISPATCHER_BACKEND=pubsub` / `PUBSUB_DMAIL_INBOUND_TOPIC` / `PUBSUB_DMAIL_OUTBOUND_SUB` / OTEL 一式の env を注入、`min_instance_count=1` に変更 (ADR 0018 StreamingPull)。`slack-bot-token` Secret Manager + accessor も追加 |
+| **DLQ terminal sink** | ✅ tofu コード完了 (2026-05-05, `chore/dlq-terminal-sink`) | PR #8 後追い。`tofu/subscriptions.tf` に `dmail-inbound-dlq-pull` / `dmail-outbound-dlq-pull` を追加 (DLQ topic に subscription が無いと message が retention で蒸発する公式アンチパターン解消)。`tofu/monitoring.tf` (新設) に `subscription/dead_letter_message_count` の Cloud Monitoring alert + email notification channel (`dlq_alert_email` 空なら count=0 で skip)。`docs/runbooks/dlq.md` (新設) に triage 手順と republish snippet。詳細: `experiments/2026-05-05_pubsub-dlq-terminal-sink.md` |
+| Phase 4b (実 apply) | 📝 未実施 | `tofu apply` は別フロー (Cloud Run image deploy は main push トリガーの CD pipeline)。事前準備: `terraform.tfvars` に `slack_default_channel_id` / `otel_traces_sampler_arg` (任意、default 0.1) / `exe_coder_vm_sa_email` (hironow/dotfiles 側 SA 確定後) / `dlq_alert_email` (空なら DLQ alert は skip) を設定。Secret Manager の `slack-bot-token` を `gcloud secrets versions add slack-bot-token --data-file=<(echo -n xoxb-...)` で実値投入。apply 後 `gcloud run services describe runops-gateway --region asia-northeast1` で env 反映を確認、必要なら `docs/runbooks/dlq.md` の "First-time setup" の seek を実行 |
 
 「設計済 / 未着手」は intent.md と本ドキュメントに方針が書かれているが
 コードに手がついていない状態。
@@ -897,8 +899,10 @@ Interactive 両方) を疑う。
 
 ## 次にこのドキュメントを更新するタイミング
 
-- Phase 4b (tofu / 本番化) が完了したら全体ステータス表を「✅ 完了」に揃え、
-  ハマりどころ集を Cloud Run 上の実体験で書き直す
+- `tofu apply` が走って prod の Pub/Sub topic / IAM / Cloud Run env が
+  更新されたら、Phase 4b (実 apply) 行を「✅ 完了 (YYYY-MM-DD)」に格上げ
+  して apply 時の所感 (cold start / Pub/Sub レイテンシ / Cloud Trace
+  への span 到達確認) をハマりどころ集に追記
 - 5本柱本体が D-Mail frontmatter から traceparent を読んで span を再開する
   対応を入れたら、ハマりどころ 7 の「5本柱との連結」を解消済に書き直す
 - 5本柱までの完全 e2e (パターン F/G/H) を 1 度通したら、その手順を
@@ -917,9 +921,13 @@ Interactive 両方) を疑う。
 - 設計の意図: `docs/intent.md`
 - 既存 ADR: `docs/adr/0001-0022` (0001-0019 は Phase 1〜4a、0020-0022 は OTel + CloudEvents 検討)
 - ローカル検証手順: `docs/local-verification.md`
+- Slack 設定: `docs/slack-setup.md`
+- 運用 runbook: `docs/runbooks/`
+  - `dlq.md` — DLQ alert 発火時の triage 手順
 - 調査ノート: `experiments/`
   - `2026-05-05_otel-cloud-run-pubsub-jaeger.md` — OTel ベスプラ調査 (ADR 0020 のインプット)
   - `2026-05-05_cloudevents-adoption.md` — CloudEvents 採用検討 (ADR 0022 のインプット)
+  - `2026-05-05_pubsub-dlq-terminal-sink.md` — DLQ pull subscription + alert (`tofu/monitoring.tf` のインプット)
 - 5本柱の README:
   - `/Users/nino/tap/sightjack/README.md`
   - `/Users/nino/tap/paintress/README.md`
