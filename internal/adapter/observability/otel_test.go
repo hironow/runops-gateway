@@ -3,6 +3,7 @@ package observability_test
 import (
 	"context"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -145,6 +146,62 @@ func TestNormalizeEndpoint_StripsSchemeAndDecidesInsecure(t *testing.T) {
 			}
 			if insecure != tc.wantInsecure {
 				t.Errorf("insecure = %v, want %v", insecure, tc.wantInsecure)
+			}
+		})
+	}
+}
+
+// TestBuildSampler_RespectsOTelSamplerEnv covers the trace-sampling decision.
+// Production env (Cloud Run / VM systemd) sets OTEL_TRACES_SAMPLER and
+// OTEL_TRACES_SAMPLER_ARG; the implementation must honor them, otherwise
+// every span flows to Cloud Trace and quotas blow.
+//
+// Subtests cover the three values that matter:
+//   - empty            -> ParentBased(AlwaysSample())   (dev default)
+//   - parentbased_always_on
+//   - parentbased_traceidratio + arg
+//
+// We assert on Description() rather than reaching into the unexported
+// internals because Description is the documented stable surface.
+func TestBuildSampler_RespectsOTelSamplerEnv(t *testing.T) {
+	cases := []struct {
+		name        string
+		samplerName string
+		samplerArg  string
+		wantDesc    string
+	}{
+		{
+			name:        "empty defaults to ParentBased(AlwaysOn)",
+			samplerName: "",
+			samplerArg:  "",
+			wantDesc:    "ParentBased{root:AlwaysOnSampler",
+		},
+		{
+			name:        "parentbased_always_on explicit",
+			samplerName: "parentbased_always_on",
+			samplerArg:  "",
+			wantDesc:    "ParentBased{root:AlwaysOnSampler",
+		},
+		{
+			name:        "parentbased_traceidratio at 0.1",
+			samplerName: "parentbased_traceidratio",
+			samplerArg:  "0.1",
+			wantDesc:    "ParentBased{root:TraceIDRatioBased{0.1}",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := observability.Config{
+				Sampler:    tc.samplerName,
+				SamplerArg: tc.samplerArg,
+			}
+			s := observability.BuildSampler(cfg)
+			if s == nil {
+				t.Fatalf("BuildSampler returned nil")
+			}
+			if got := s.Description(); !strings.Contains(got, tc.wantDesc) {
+				t.Errorf("sampler description = %q, want substring %q", got, tc.wantDesc)
 			}
 		})
 	}
