@@ -17,8 +17,11 @@ import (
 	gcpadapter "github.com/hironow/runops-gateway/internal/adapter/output/gcp"
 	slacknotifier "github.com/hironow/runops-gateway/internal/adapter/output/slack"
 	"github.com/hironow/runops-gateway/internal/adapter/output/state"
+	"github.com/hironow/runops-gateway/internal/core/port"
 	"github.com/hironow/runops-gateway/internal/usecase"
 )
+
+const slackChatPostMessageURL = "https://slack.com/api/chat.postMessage"
 
 func main() {
 	// Load and validate required config
@@ -36,7 +39,19 @@ func main() {
 	}
 	defer gcpCtrl.Close()
 
-	notifier := slacknotifier.NewResponseURLNotifier()
+	primary := slacknotifier.NewResponseURLNotifier()
+	// FallbackNotifier (ADR 0017 / Issue 0017) wraps the response_url-based
+	// primary so a 30-min expiry or 5-call limit drops into chat.postMessage.
+	// Falls back gracefully when SLACK_BOT_TOKEN is unset (primary errors
+	// propagate as before — Phase 0 behaviour preserved for deployments that
+	// have not provisioned the Bot Token yet).
+	var notifier port.Notifier = primary
+	if cfg.slackBotToken != "" {
+		notifier = slacknotifier.NewFallbackNotifier(primary, slackChatPostMessageURL, cfg.slackBotToken, cfg.slackDefaultChannelID)
+		slog.Info("FallbackNotifier enabled", "default_channel_id", cfg.slackDefaultChannelID)
+	} else {
+		slog.Warn("SLACK_BOT_TOKEN unset — chat.postMessage fallback is DISABLED; long-running operations may lose Slack updates")
+	}
 	authChecker := auth.NewEnvAuthChecker()
 
 	svc := usecase.NewRunOpsService(gcpCtrl, notifier, authChecker, state.NewMemoryStore())
@@ -91,14 +106,18 @@ func main() {
 }
 
 type config struct {
-	slackSigningSecret string
-	port               string
+	slackSigningSecret    string
+	slackBotToken         string // optional — enables FallbackNotifier (ADR 0017)
+	slackDefaultChannelID string // optional — only used when target.ChannelID is empty
+	port                  string
 }
 
 func loadConfig() (config, error) {
 	cfg := config{
-		slackSigningSecret: os.Getenv("SLACK_SIGNING_SECRET"),
-		port:               os.Getenv("PORT"),
+		slackSigningSecret:    os.Getenv("SLACK_SIGNING_SECRET"),
+		slackBotToken:         os.Getenv("SLACK_BOT_TOKEN"),
+		slackDefaultChannelID: os.Getenv("SLACK_DEFAULT_CHANNEL_ID"),
+		port:                  os.Getenv("PORT"),
 	}
 	if cfg.slackSigningSecret == "" {
 		return config{}, fmt.Errorf("SLACK_SIGNING_SECRET is required")
@@ -106,9 +125,11 @@ func loadConfig() (config, error) {
 	if cfg.port == "" {
 		cfg.port = "8080"
 	}
-	// Log config (never log secrets)
+	// Log config (never log secrets — bot_token presence is logged as a bool)
 	slog.Info("config loaded",
 		"port", cfg.port,
+		"bot_token_present", cfg.slackBotToken != "",
+		"default_channel_id", cfg.slackDefaultChannelID,
 	)
 	return cfg, nil
 }

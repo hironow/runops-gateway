@@ -52,6 +52,12 @@ type interactivePayload struct {
 	User struct {
 		ID string `json:"id"`
 	} `json:"user"`
+	Channel struct {
+		ID string `json:"id"`
+	} `json:"channel"`
+	Message struct {
+		TS string `json:"ts"`
+	} `json:"message"`
 	ResponseURL string              `json:"response_url"`
 	Actions     []interactiveAction `json:"actions"`
 }
@@ -125,6 +131,12 @@ func (h *InteractiveHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	target := port.NotifyTarget{
 		CallbackURL: slackPayload.ResponseURL,
 		Mode:        port.ModeSlack,
+		// ChannelID + ThreadTS let FallbackNotifier (ADR 0017) drop into
+		// chat.postMessage when the response_url has expired or hit its 5-call
+		// limit. Both are optional from Slack's side and stay empty for any
+		// interaction that did not originate from a Block Kit message.
+		ChannelID: slackPayload.Channel.ID,
+		ThreadTS:  slackPayload.Message.TS,
 	}
 
 	// dispatch_* actions carry a dispatchActionValue payload (Phase 1 / F-5 fix),
