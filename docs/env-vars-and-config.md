@@ -3,6 +3,12 @@
 runops-gateway はカナリアデプロイ（トラフィックシフト）のみを担当する。
 Cloud Run サービスの構成（環境変数、secrets、CPU/メモリ、スケーリング）は管理対象外。
 
+> **本ドキュメントの対象**: runops-gateway が **管理対象とするアプリ** の env 管理方針。
+> runops-gateway **自身** の env (SLACK_SIGNING_SECRET / SLACK_BOT_TOKEN /
+> DISPATCHER_BACKEND / PUBSUB_* / OTEL_* 等) は別物で、`tofu/main.tf` の
+> `google_cloud_run_v2_service.runops_gateway` で管理している
+> (Phase 4b 以降、`docs/handover.md` を参照)。
+
 ## runops-gateway が触るもの・触らないもの
 
 | 操作 | runops が担当 | 備考 |
