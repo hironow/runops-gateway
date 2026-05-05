@@ -53,3 +53,15 @@ variable "cloud_sql_instance" {
   type        = string
   default     = ""
 }
+
+variable "exe_coder_vm_sa_email" {
+  description = <<-EOT
+    Service account email of the exe-coder VM (managed in hironow/dotfiles).
+    Granted pubsub.subscriber on dmail-inbound-receiver and pubsub.publisher on
+    dmail-outbound so the dmail-receiver and dmail-emitter daemons can run
+    against the production topology. Leave empty until the exe-coder VM SA is
+    actually provisioned — IAM bindings are created only when this is set.
+  EOT
+  type        = string
+  default     = ""
+}
