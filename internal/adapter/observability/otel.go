@@ -12,6 +12,7 @@ package observability
 
 import (
 	"context"
+	"strings"
 
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
@@ -40,4 +41,34 @@ func SetupTracerProvider(ctx context.Context, cfg Config) (*sdktrace.TracerProvi
 	_ = ctx
 	_ = cfg
 	return sdktrace.NewTracerProvider(), nil
+}
+
+// NormalizeEndpoint decodes a raw OTEL_EXPORTER_OTLP_ENDPOINT value into the
+// (host:port, insecure) tuple the OTLP gRPC exporter wants.
+//
+// Returns ok=false for an empty input so callers can take the "no exporter"
+// path. The OTel spec accepts the value with or without a scheme:
+// "http://localhost:4317" → insecure (local Jaeger),
+// "https://telemetry.googleapis.com:443" or bare "host:port" → secure
+// (Cloud Trace).
+func NormalizeEndpoint(raw string) (endpoint string, insecure bool, ok bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", false, false
+	}
+
+	switch {
+	case strings.HasPrefix(raw, "http://"):
+		endpoint = strings.TrimPrefix(raw, "http://")
+		insecure = true
+	case strings.HasPrefix(raw, "https://"):
+		endpoint = strings.TrimPrefix(raw, "https://")
+		insecure = false
+	default:
+		endpoint = raw
+		insecure = false
+	}
+
+	endpoint = strings.TrimRight(endpoint, "/")
+	return endpoint, insecure, true
 }
