@@ -766,6 +766,14 @@ outbound (5 pillars -> Slack):
   frontmatter にも traceparent を書き込む必要 → **5本柱側の対応待ち**。
   本リポ側は Pub/Sub bus 1 跨ぎ範囲までは 1 trace で繋がる
 - CloudEvents は ADR 0022 で **不採用** (現状維持)。再検討トリガーは ADR 内
+- **goroutine 内 span flush** (Issue 0005): Slack 3 秒応答のため handler
+  から spawn する goroutine の span が Cloud Run idle shutdown で lost
+  する問題は ✅ 解消済 (PendingTracker pattern)。 handler の `go func()`
+  は semgrep rule (`runops-concurrency-bare-goroutine-in-slack-handler`)
+  で禁止、 必ず `h.goAsync(...)` 経由。 main shutdown 順序は
+  `srv.Shutdown → pending.Wait → tp.Shutdown` で [4s/4s/2s] 予算配分
+  (Cloud Run 10 秒 grace 内)。詳細は
+  `experiments/2026-05-06_otel-goroutine-flush-cloudrun.md`
 
 ### 8. Slack response_url と chat.postMessage の使い分け
 

@@ -13,6 +13,7 @@
 | [0002](0002-five-pillars-frontmatter-trace.md) | 5本柱が D-Mail frontmatter から traceparent を読み span を再開 | 5本柱 4 リポ | 📝 未着手 | — |
 | [0003](0003-phase3-outbound-enable.md) | Phase 3 outbound StreamingPull を実運用化 (`CLOUD_RUN_MIN_INSTANCES=1`) | `hironow/runops-gateway` + 0001 完了 | 📝 未着手 | — |
 | [0004](0004-cloud-trace-span-verification.md) | Cloud Trace UI で実 span tree を確認 + 添付 | `hironow/runops-gateway` | 📝 未着手 | — |
+| [0005](0005-async-span-flush.md) | goroutine 内 span が Cloud Run idle shutdown までに flush されず lost する | `hironow/runops-gateway` | ✅ GREEN 完了 (PendingTracker + ordered shutdown + semgrep rule) | — |
 
 ## ファイル命名規則
 

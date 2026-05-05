@@ -57,13 +57,14 @@ func main() {
 		tp = sdktrace.NewTracerProvider()
 	}
 	otel.SetTracerProvider(tp)
-	defer func() {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := tp.Shutdown(shutdownCtx); err != nil {
-			slog.Error("OTel TracerProvider shutdown error", "error", err)
-		}
-	}()
+	// tp.Shutdown is invoked explicitly at the end of main so it can run
+	// **after** pending.Wait — see Issue 0005. A defer here would race the
+	// goroutine wait and lose spans whose End() hadn't fired yet.
+
+	// PendingTracker for handler-spawned goroutines (Slack 3-second async
+	// pattern, ADR 0002). main waits on this between srv.Shutdown and
+	// tp.Shutdown so every span gets End()-ed before the SDK tears down.
+	var pending observability.PendingTracker
 
 	// Wire adapters
 	gcpCtrl, err := gcpadapter.NewController(context.Background())
@@ -123,7 +124,8 @@ func main() {
 		}()
 	}
 
-	slackHandler := slackadapter.NewInteractiveHandler(svc, dispatchSvc, notifier, consumed, cfg.slackSigningSecret)
+	slackHandler := slackadapter.NewInteractiveHandler(svc, dispatchSvc, notifier, consumed, cfg.slackSigningSecret).
+		WithPendingTracker(&pending)
 	if approvalPub != nil {
 		slackHandler = slackHandler.WithApprovalPublisher(approvalPub)
 		slog.Info("Phase 4a approval_approve / approval_deny path enabled")
@@ -178,12 +180,35 @@ func main() {
 	<-quit
 
 	slog.Info("shutting down gracefully...")
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// Cloud Run gives 10s between SIGTERM and SIGKILL. Budget [4s, 4s, 2s]:
+	//   (1) srv.Shutdown      — drain in-flight HTTP requests
+	//   (2) pending.Wait      — wait for handler goroutines to End() spans
+	//   (3) tp.Shutdown       — let BSP flush queue + final OTLP export
+	// The outbound subscriber cancel runs first; its goroutine has its own
+	// pubsub library trace handling and isn't gated on tp.Shutdown.
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 9*time.Second)
 	defer cancel()
+
 	outboundCancel()
 	<-outboundDone
-	if err := srv.Shutdown(ctx); err != nil {
-		slog.Error("shutdown error", "error", err)
+
+	// (1) HTTP graceful: refuse new requests, let in-flight ServeHTTP finish.
+	httpCtx, cancelHTTP := context.WithTimeout(shutdownCtx, 4*time.Second)
+	defer cancelHTTP()
+	if err := srv.Shutdown(httpCtx); err != nil {
+		slog.Error("HTTP shutdown error", "error", err)
+	}
+
+	// (2) PendingTracker: wait until handler-spawned goroutines End() their
+	// spans. Skipping this step is the bug Issue 0005 documents — span
+	// flush would race the SDK Shutdown and silently drop traces.
+	pending.WaitWithDeadline(shutdownCtx, 4*time.Second)
+
+	// (3) tp.Shutdown: BSP drain + final OTLP export.
+	tpCtx, cancelTP := context.WithTimeout(shutdownCtx, 2*time.Second)
+	defer cancelTP()
+	if err := tp.Shutdown(tpCtx); err != nil {
+		slog.Error("OTel TracerProvider shutdown error", "error", err)
 	}
 	slog.Info("server stopped")
 }
