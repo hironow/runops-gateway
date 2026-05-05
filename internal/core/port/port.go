@@ -42,9 +42,16 @@ const (
 )
 
 // NotifyTarget describes where and how a notification should be delivered.
+//
+// CallbackURL (Slack response_url) is the primary transport. ChannelID and
+// ThreadTS are populated when the call originates from /slack/interactive so
+// FallbackNotifier (ADR 0017) can fall back to chat.postMessage when the
+// response_url hits its 30-min / 5-call limits.
 type NotifyTarget struct {
 	CallbackURL string
 	Mode        NotifyMode
+	ChannelID   string
+	ThreadTS    string
 }
 
 // Notifier is a secondary port for sending user-facing notifications.
