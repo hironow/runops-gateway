@@ -84,7 +84,12 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	client, err := gpubsub.NewClient(ctx, cfg.projectID)
+	// EnableOpenTelemetryTracing per ADR 0021: receive spans are stitched to
+	// the publisher's trace via googclient_* message attributes that the
+	// library auto-extracts.
+	client, err := gpubsub.NewClientWithConfig(ctx, cfg.projectID, &gpubsub.ClientConfig{
+		EnableOpenTelemetryTracing: true,
+	})
 	if err != nil {
 		slog.Error("dmail-receiver: pubsub client", "error", err)
 		os.Exit(1)

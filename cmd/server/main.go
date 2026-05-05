@@ -202,7 +202,13 @@ func startOutboundSubscriber(ctx context.Context, cfg config, notifier port.Noti
 		return done
 	}
 
-	client, err := gpubsub.NewClient(ctx, cfg.pubsubProjectID)
+	// EnableOpenTelemetryTracing per ADR 0021: the library auto-creates
+	// receive spans and extracts the W3C context from googclient_* attributes
+	// so this subscriber's spans link back to the publisher across the
+	// process boundary.
+	client, err := gpubsub.NewClientWithConfig(ctx, cfg.pubsubProjectID, &gpubsub.ClientConfig{
+		EnableOpenTelemetryTracing: true,
+	})
 	if err != nil {
 		slog.Error("pubsub client for outbound subscriber", "error", err)
 		close(done)
