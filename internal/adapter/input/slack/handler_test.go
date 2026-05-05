@@ -264,6 +264,63 @@ func TestInteractiveHandler_UnknownActionID(t *testing.T) {
 	}
 }
 
+// TestInteractiveHandler_DispatchActionIDsDoNotRouteToApprove is a regression
+// guard for Phase 4. Phase 4 will introduce dispatch_approve / dispatch_deny
+// action_ids on the same /slack/interactive endpoint. The current router uses
+// strings.HasPrefix(action.ActionID, "approve") which DOES NOT match
+// "dispatch_approve" (its prefix is "dispatch_"), so today these IDs fall
+// safely into the default "unknown_action" branch.
+//
+// If a future change rewrites the matcher to e.g. strings.Contains(... "approve")
+// or HasPrefix(... "dispatch_approve"), this test will catch the resulting
+// silent dispatch of an existing ApproveAction.
+func TestInteractiveHandler_DispatchActionIDsDoNotRouteToApprove(t *testing.T) {
+	cases := []string{"dispatch_approve", "dispatch_deny"}
+	for _, actionID := range cases {
+		t.Run(actionID, func(t *testing.T) {
+			secret := "test-secret"
+			mock := newMockUseCase()
+			handler := NewInteractiveHandler(mock, testNotifier, secret)
+
+			av := actionValue{
+				Project:       "test-project",
+				Location:      "asia-northeast1",
+				ResourceType:  "service",
+				ResourceNames: "svc",
+				IssuedAt:      time.Now().Unix(),
+			}
+			avBytes, _ := json.Marshal(av)
+
+			payload := interactivePayload{}
+			payload.User.ID = "U999"
+			payload.Actions = []struct {
+				ActionID string `json:"action_id"`
+				Value    string `json:"value"`
+			}{
+				{ActionID: actionID, Value: string(avBytes)},
+			}
+			payloadBytes, _ := json.Marshal(payload)
+
+			req := buildValidRequest(t, secret, string(payloadBytes))
+			rr := httptest.NewRecorder()
+			handler.ServeHTTP(rr, req)
+
+			if rr.Code != http.StatusOK {
+				t.Errorf("expected 200, got %d", rr.Code)
+			}
+			// ApproveAction MUST NOT be called for dispatch_* IDs.
+			select {
+			case req := <-mock.approveCh:
+				t.Errorf("ApproveAction was called for action_id=%q with req=%+v — Phase 4 routing leaked into Phase 0 ChatOps", actionID, req)
+			case req := <-mock.denyCh:
+				t.Errorf("DenyAction was called for action_id=%q with req=%+v — Phase 4 routing leaked into Phase 0 ChatOps", actionID, req)
+			case <-time.After(50 * time.Millisecond):
+				// expected: no use case invocation
+			}
+		})
+	}
+}
+
 func TestInteractiveHandler_MalformedActionValue(t *testing.T) {
 	// given — action_id is valid but Value is not parseable JSON
 	secret := "test-secret"

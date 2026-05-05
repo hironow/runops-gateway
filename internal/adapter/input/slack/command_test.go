@@ -6,6 +6,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -172,6 +173,110 @@ func TestCommandHandler_RejectsEmptyText(t *testing.T) {
 	}
 	if len(uc.calls()) != 0 {
 		t.Errorf("dispatch must not run for empty text; got %d", len(uc.calls()))
+	}
+}
+
+func TestCommandHandler_RejectsEmptyCommandField(t *testing.T) {
+	uc := &recordedDispatchUseCase{}
+	secret := "test-secret"
+	h := NewCommandHandler(uc, secret)
+
+	body := formBody(url.Values{
+		// command field intentionally omitted
+		"text":         {"paintress fix"},
+		"user_id":      {"U0123"},
+		"response_url": {"https://hooks.slack.com/x"},
+	})
+	req := signedCommandRequest(t, secret, body)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 with ephemeral error, got %d", rr.Code)
+	}
+	if !strings.Contains(rr.Body.String(), "command") {
+		t.Errorf("expected error mentioning command field, got: %s", rr.Body.String())
+	}
+	if len(uc.calls()) != 0 {
+		t.Errorf("dispatch must not run when command is empty; got %d", len(uc.calls()))
+	}
+}
+
+func TestCommandHandler_RejectsRoleOnlyInput(t *testing.T) {
+	// "/agent paintress" with no task description must yield ephemeral usage hint.
+	uc := &recordedDispatchUseCase{}
+	secret := "test-secret"
+	h := NewCommandHandler(uc, secret)
+
+	body := formBody(url.Values{
+		"command":      {"/agent"},
+		"text":         {"paintress"}, // role only, no free text
+		"user_id":      {"U0123"},
+		"response_url": {"https://hooks.slack.com/x"},
+	})
+	req := signedCommandRequest(t, secret, body)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	if !strings.Contains(rr.Body.String(), "/agent") {
+		t.Errorf("expected usage hint mentioning /agent, got: %s", rr.Body.String())
+	}
+	if len(uc.calls()) != 0 {
+		t.Errorf("dispatch must not run for role-only input; got %d", len(uc.calls()))
+	}
+}
+
+func TestCommandHandler_ReturnsOkEvenWhenUseCaseErrors(t *testing.T) {
+	// Slack 3-second rule: /slack/command must always 200 once HMAC+parse pass,
+	// because the use case runs in a goroutine and any failure is reported via
+	// response_url asynchronously, not the immediate HTTP response.
+	uc := &recordedDispatchUseCase{err: errors.New("downstream boom")}
+	secret := "test-secret"
+	h := NewCommandHandler(uc, secret)
+
+	body := formBody(url.Values{
+		"command":      {"/agent"},
+		"text":         {"paintress fix"},
+		"user_id":      {"U0123"},
+		"response_url": {"https://hooks.slack.com/x"},
+	})
+	req := signedCommandRequest(t, secret, body)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 even on use case error, got %d", rr.Code)
+	}
+	for i := 0; i < 100 && len(uc.calls()) == 0; i++ {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if len(uc.calls()) != 1 {
+		t.Errorf("dispatch must still be attempted; got %d", len(uc.calls()))
+	}
+}
+
+func TestCommandHandler_RejectsMalformedFormBody(t *testing.T) {
+	// Body that ParseForm cannot parse (invalid percent-encoding).
+	uc := &recordedDispatchUseCase{}
+	secret := "test-secret"
+	h := NewCommandHandler(uc, secret)
+
+	malformedBody := "command=%2Fagent&text=%ZZ" // %ZZ is not valid percent-encoding
+	req := signedCommandRequest(t, secret, malformedBody)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 with ephemeral, got %d", rr.Code)
+	}
+	if !strings.Contains(rr.Body.String(), "リクエスト形式") {
+		t.Errorf("expected ephemeral parse error, got: %s", rr.Body.String())
+	}
+	if len(uc.calls()) != 0 {
+		t.Errorf("dispatch must not run on parse error; got %d", len(uc.calls()))
 	}
 }
 
