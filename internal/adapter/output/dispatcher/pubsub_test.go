@@ -12,10 +12,10 @@ import (
 
 // recordingDMailPublisher captures every PublishDMail call.
 type recordingDMailPublisher struct {
-	mu      sync.Mutex
-	mails   []domain.DMail
+	mu       sync.Mutex
+	mails    []domain.DMail
 	resultID string
-	err     error
+	err      error
 }
 
 func (r *recordingDMailPublisher) PublishDMail(_ context.Context, m domain.DMail) (string, error) {

@@ -1,0 +1,52 @@
+# golangci-lint v2 config for runops-gateway
+# https://golangci-lint.run/docs/configuration/file/
+#
+# Started conservatively (default linter set + a few extras) so the existing
+# code base passes today; raise the bar incrementally via PRs as patterns
+# emerge. CLAUDE.md captures the policy.
+version: "2"
+
+run:
+  timeout: 3m
+  go: "1.26"
+
+linters:
+  default: standard
+  enable:
+    - revive          # idiomatic Go style (replacement for golint)
+    - misspell        # English spelling in identifiers / comments
+    - unconvert       # redundant type conversions
+    - bodyclose       # response.Body must be closed
+  # errcheck is intentionally NOT enforced yet because the existing code base
+  # has ~50 unchecked-error sites (mostly `_ = w.Write(...)`, deferred
+  # `Close()`, etc.). Address them in follow-up PRs and remove this disable.
+  disable:
+    - errcheck
+  exclusions:
+    rules:
+      - path: '_test\.go$'
+        linters:
+          - revive
+          - bodyclose
+      # Generated / vendored
+      - path: 'vendor/'
+        linters:
+          - all
+
+  settings:
+    revive:
+      severity: warning
+      rules:
+        - name: unused-parameter
+          disabled: true
+        - name: var-naming
+          arguments:
+            - ["ID", "URL", "HTTP", "API", "JSON", "TLS"]
+
+issues:
+  max-same-issues: 50
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

@@ -45,11 +45,11 @@ type fakeMessage struct {
 	nacked     bool
 }
 
-func (m *fakeMessage) ID() string                  { return m.id }
-func (m *fakeMessage) Data() []byte                { return m.data }
+func (m *fakeMessage) ID() string                    { return m.id }
+func (m *fakeMessage) Data() []byte                  { return m.data }
 func (m *fakeMessage) Attributes() map[string]string { return m.attributes }
-func (m *fakeMessage) Ack()                        { m.acked = true }
-func (m *fakeMessage) Nack()                       { m.nacked = true }
+func (m *fakeMessage) Ack()                          { m.acked = true }
+func (m *fakeMessage) Nack()                         { m.nacked = true }
 
 func TestReceiver_OnMessage_WritesUsingIDAttributeAsFilename(t *testing.T) {
 	w := &fakeWriter{}

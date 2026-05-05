@@ -66,11 +66,11 @@ func loadConfig() (config, error) {
 // pubsubMessage adapts *pubsub.Message to pubsubinput.Message.
 type pubsubMessage struct{ inner *gpubsub.Message }
 
-func (m pubsubMessage) ID() string                      { return m.inner.ID }
-func (m pubsubMessage) Data() []byte                    { return m.inner.Data }
-func (m pubsubMessage) Attributes() map[string]string   { return m.inner.Attributes }
-func (m pubsubMessage) Ack()                            { m.inner.Ack() }
-func (m pubsubMessage) Nack()                           { m.inner.Nack() }
+func (m pubsubMessage) ID() string                    { return m.inner.ID }
+func (m pubsubMessage) Data() []byte                  { return m.inner.Data }
+func (m pubsubMessage) Attributes() map[string]string { return m.inner.Attributes }
+func (m pubsubMessage) Ack()                          { m.inner.Ack() }
+func (m pubsubMessage) Nack()                         { m.inner.Nack() }
 
 // otelServiceName returns OTEL_SERVICE_NAME with a sensible default for this
 // daemon. ADR 0020: every binary's resource carries service.name.

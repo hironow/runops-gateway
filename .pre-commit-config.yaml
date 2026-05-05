@@ -1,0 +1,56 @@
+# prek (j178/prek) — Rust reimplementation of pre-commit
+# Install: just install-hooks  (== prek install)
+# Run:     just pre-commit     (== prek run --all-files)
+# Push gate: just check-all    (== pre-commit + just check + just test)
+minimum_prek_version: "0.3.0"
+
+exclude: |
+  (?x)^(
+    output/|
+    node_modules/|
+    \.venv/|
+    tofu/\.terraform/
+  )
+
+repos:
+  # Rust-native builtin hooks (fast, no external repo clone needed)
+  - repo: builtin
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+        # tofu module .terraform.lock 系を踏まないために .yaml のみ。
+      - id: check-toml
+      - id: check-json
+      - id: check-added-large-files
+        args: ["--maxkb=1024"]
+      - id: check-merge-conflict
+      - id: detect-private-key
+
+  # Local hooks delegate to just recipes so the same checks run from
+  # the CLI (`just fmt`, `just lint`) and from prek.
+  - repo: local
+    hooks:
+      - id: just-fmt
+        name: just fmt
+        entry: just fmt
+        language: system
+        pass_filenames: false
+        files: '\.go$'
+        description: Run gofmt across Go sources.
+
+      - id: just-lint
+        name: just lint
+        entry: just lint
+        language: system
+        pass_filenames: false
+        files: '\.go$|\.golangci\.yaml$|tools/go\.(mod|sum)$'
+        description: Run go vet + golangci-lint.
+
+      - id: tofu-fmt
+        name: tofu fmt
+        entry: tofu fmt -recursive tofu
+        language: system
+        pass_filenames: false
+        files: '^tofu/.*\.tf$'
+        description: Format OpenTofu files (idempotent).

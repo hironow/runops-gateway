@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
+	outputslack "github.com/hironow/runops-gateway/internal/adapter/output/slack"
 	"github.com/hironow/runops-gateway/internal/core/domain"
 	"github.com/hironow/runops-gateway/internal/core/port"
-	outputslack "github.com/hironow/runops-gateway/internal/adapter/output/slack"
 )
 
 // DispatchUseCase is the primary port driven by the Slash Command handler.

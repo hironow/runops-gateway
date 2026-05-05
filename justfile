@@ -29,9 +29,10 @@ test:
 test-v:
     go test -v ./...
 
-# Run linting
+# Run linting (go vet + golangci-lint)
 lint:
     go vet ./...
+    CGO_ENABLED=0 go tool -modfile=tools/go.mod golangci-lint run ./...
 
 lint-md:
     @{{MARKDOWNLINT}} --fix "*.md" "docs/**/*.md"
@@ -95,6 +96,25 @@ test-scripts:
 
 # Run all checks (used before commit)
 check: fmt lint lint-md test
+
+# ------------------------------
+# prek (j178/prek) — Rust reimplementation of pre-commit
+# Install:   just install-hooks  (== prek install)
+# Run all:   just pre-commit     (== prek run --all-files)
+# Push gate: just check-all      (== prek + check + test)
+# ------------------------------
+
+# Install prek-managed git hooks once per clone
+install-hooks:
+    prek install
+
+# Run every prek hook against all files
+pre-commit:
+    prek run --all-files
+
+# CI-equivalent gate: prek hooks + check + full test suite
+check-all: pre-commit check test
+    @echo "✅ all checks passed"
 
 # Copy initial setup files to a managed app repository.
 # Usage: just init-app ../my-app my-project my-service,my-other-service my-migrate-job [asia-northeast1] [my-artifact-repo] [gateway-project]

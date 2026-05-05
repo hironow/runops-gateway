@@ -367,9 +367,9 @@ func dispatchApproveToken(dv dispatchActionValue) string {
 // original producer; approval_deny just notes the rejection in the thread.
 //
 // Stacked guards (mirror Phase 1 hijack defenses):
-//   1. clicker != original_requester (4-eyes)
-//   2. ConsumedTokenStore mark+lock (one-time button consume)
-//   3. Body digest match (tamper detection on the button payload)
+//  1. clicker != original_requester (4-eyes)
+//  2. ConsumedTokenStore mark+lock (one-time button consume)
+//  3. Body digest match (tamper detection on the button payload)
 //
 // Authorization (allowlist) is shared with the rest of the gateway via the
 // EnvAuthChecker invoked indirectly through the FallbackNotifier — but Phase
