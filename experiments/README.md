@@ -7,6 +7,7 @@
 | Date | Experiment | Status | Note |
 |---|---|---|---|
 | 2026-05-05 | [otel-cloud-run-pubsub-jaeger](2026-05-05_otel-cloud-run-pubsub-jaeger.md) | 🟢 Complete | Phase 4b と並行で OTel 配線するためのベスプラ調査。次の ADR 0020 (Direct OTLP export) のインプット |
+| 2026-05-05 | [cloudevents-adoption](2026-05-05_cloudevents-adoption.md) | 🟢 Complete | CloudEvents 採用検討。結論「不採用 (現状維持)」、再検討トリガー条件は ADR 0022 で記録 |
 
 ## ステータス凡例
 
