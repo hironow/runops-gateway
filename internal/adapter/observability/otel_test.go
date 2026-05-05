@@ -2,10 +2,83 @@ package observability_test
 
 import (
 	"context"
+	"net"
 	"testing"
+	"time"
 
 	"github.com/hironow/runops-gateway/internal/adapter/observability"
 )
+
+// TestSetupTracerProvider_DialsConfiguredEndpoint exercises the actual export
+// path: when Config.Endpoint points at a reachable host:port (with insecure
+// mode), SetupTracerProvider must succeed without blocking on the dial AND
+// the OTLP gRPC client must eventually try to connect to that endpoint.
+//
+// The test uses a plain net.Listener as a "dial detector" — it accepts and
+// then silently drops the connection. We do not spin up a full gRPC server
+// here because the unit-of-work is "did SetupTracerProvider wire the
+// exporter to *this* address?", not "did spans round-trip end-to-end". That
+// fuller assertion belongs in an integration test.
+func TestSetupTracerProvider_DialsConfiguredEndpoint(t *testing.T) {
+	// given a listener on a random localhost port + the connect signal channel
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen: %v", err)
+	}
+	defer func() { _ = listener.Close() }()
+
+	connected := make(chan struct{}, 1)
+	go func() {
+		for {
+			conn, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				return
+			}
+			select {
+			case connected <- struct{}{}:
+			default:
+			}
+			_ = conn.Close()
+		}
+	}()
+
+	// otlptracegrpc accepts an "http://host:port" URL and treats it as
+	// insecure (no TLS), which is what NormalizeEndpoint already decodes.
+	cfg := observability.Config{
+		ServiceName: "runops-gateway",
+		Endpoint:    "http://" + listener.Addr().String(),
+	}
+
+	// when
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	tp, err := observability.SetupTracerProvider(ctx, cfg)
+	if err != nil {
+		t.Fatalf("SetupTracerProvider: %v", err)
+	}
+	defer func() {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer shutdownCancel()
+		_ = tp.Shutdown(shutdownCtx)
+	}()
+
+	// emit one span and force-flush so the BatchSpanProcessor pushes to the
+	// exporter immediately instead of waiting for its default 5s tick.
+	tracer := tp.Tracer("test")
+	_, span := tracer.Start(ctx, "test-span")
+	span.End()
+	flushCtx, flushCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer flushCancel()
+	_ = tp.ForceFlush(flushCtx)
+
+	// then a TCP dial to our listener arrives within the deadline
+	select {
+	case <-connected:
+		// success
+	case <-time.After(3 * time.Second):
+		t.Fatalf("OTLP exporter never dialled the configured endpoint %s", listener.Addr())
+	}
+}
 
 // TestNormalizeEndpoint_StripsSchemeAndDecidesInsecure exercises the pure
 // helper that decodes OTEL_EXPORTER_OTLP_ENDPOINT into the (host:port,

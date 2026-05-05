@@ -12,8 +12,11 @@ package observability
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
@@ -62,11 +65,32 @@ func BuildResource(ctx context.Context, cfg Config) (*resource.Resource, error) 
 // SetupTracerProvider returns a TracerProvider that the caller is responsible
 // for shutting down (defer tp.Shutdown(ctx)). With Endpoint empty, the
 // returned provider has no exporter wired up — Shutdown still succeeds, all
-// spans are silently dropped.
+// spans are silently dropped. With Endpoint set, an OTLP gRPC exporter is
+// built and attached via a BatchSpanProcessor.
 func SetupTracerProvider(ctx context.Context, cfg Config) (*sdktrace.TracerProvider, error) {
-	_ = ctx
-	_ = cfg
-	return sdktrace.NewTracerProvider(), nil
+	res, err := BuildResource(ctx, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("observability: build resource: %w", err)
+	}
+
+	endpoint, insecure, ok := NormalizeEndpoint(cfg.Endpoint)
+	if !ok {
+		return sdktrace.NewTracerProvider(sdktrace.WithResource(res)), nil
+	}
+
+	opts := []otlptracegrpc.Option{otlptracegrpc.WithEndpoint(endpoint)}
+	if insecure {
+		opts = append(opts, otlptracegrpc.WithInsecure())
+	}
+	exporter, err := otlptrace.New(ctx, otlptracegrpc.NewClient(opts...))
+	if err != nil {
+		return nil, fmt.Errorf("observability: build OTLP gRPC exporter: %w", err)
+	}
+
+	return sdktrace.NewTracerProvider(
+		sdktrace.WithResource(res),
+		sdktrace.WithBatcher(exporter),
+	), nil
 }
 
 // NormalizeEndpoint decodes a raw OTEL_EXPORTER_OTLP_ENDPOINT value into the
