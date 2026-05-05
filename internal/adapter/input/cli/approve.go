@@ -39,7 +39,7 @@ func newApproveCmd(useCase port.RunOpsUseCase) *cobra.Command {
 				Action:          action,
 				ApproverID:      approver,
 				IssuedAt:        0, // CLI mode: no expiry
-				SqlInstanceName: sqlInstance,
+				SQLInstanceName: sqlInstance,
 			}
 			notify := port.NotifyTarget{Mode: port.ModeStdout}
 

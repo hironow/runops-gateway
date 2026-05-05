@@ -395,7 +395,7 @@ func TestNotifyScript_WithWorkerPool_ButtonEncodesResourceType(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseActionValue failed: %v", err)
 	}
-	if string(av.ResourceType) != "worker-pool" {
+	if av.ResourceType != "worker-pool" {
 		t.Errorf("ResourceType = %q, want %q", av.ResourceType, "worker-pool")
 	}
 	if av.ResourceNames != "async-worker,batch-worker" {

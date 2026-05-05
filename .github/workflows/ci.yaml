@@ -28,6 +28,9 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      - name: Lint (golangci-lint via go tool)
+        run: CGO_ENABLED=0 go tool -modfile=tools/go.mod golangci-lint run ./...
+
       - name: Test (race detector)
         run: go test -race ./...
 

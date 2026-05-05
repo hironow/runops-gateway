@@ -29,9 +29,10 @@ test:
 test-v:
     go test -v ./...
 
-# Run linting
+# Run linting (go vet + golangci-lint)
 lint:
     go vet ./...
+    CGO_ENABLED=0 go tool -modfile=tools/go.mod golangci-lint run ./...
 
 lint-md:
     @{{MARKDOWNLINT}} --fix "*.md" "docs/**/*.md"

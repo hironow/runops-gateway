@@ -181,8 +181,8 @@ func TestVerifySignatureAt_RejectsUnparseableTimestamp(t *testing.T) {
 
 func TestVerifySignatureAt_AcceptsWithinFiveMinuteWindow(t *testing.T) {
 	cases := []struct {
-		name      string
-		skewSecs  int64 // negative = ts is in the past relative to now
+		name     string
+		skewSecs int64 // negative = ts is in the past relative to now
 	}{
 		{"now", 0},
 		{"ts 4 minutes old", 4 * 60},

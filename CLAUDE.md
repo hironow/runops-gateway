@@ -79,3 +79,36 @@ repo settings の **"Require actions to be pinned to a full-length commit SHA"**
 google-actions / github-actions-misc / otel / gcp / go-deps-rest)。
 
 PR が来たら CI green を確認して squash merge → develop の通常運用に乗せる。
+
+## Go の lint policy
+
+`go vet` に加えて **golangci-lint** で lint。Go 1.24+ の tool dependency
+機能 (`go.mod tool` directive) を使い、ツール自体は `tools/go.mod` で
+分離管理する (本リポの go.mod を汚さない)。
+
+実行:
+
+```bash
+just lint   # go vet ./... + CGO_ENABLED=0 go tool -modfile=tools/go.mod golangci-lint run ./...
+```
+
+config: `.golangci.yaml` (v2 schema)。現状の有効 linter:
+
+- standard set (govet / staticcheck / ineffassign / unused)
+- revive: idiomatic Go style (var-naming は `ID/URL/HTTP/API/JSON/TLS`
+  をイニシャリズム扱い)
+- misspell: English spelling
+- unconvert: 不要な型変換
+- bodyclose: `http.Response.Body` の close 漏れ
+
+intentionally disabled: **errcheck**。導入時点で既存コードに ~50 件の
+unchecked error site があり、段階的に修正する想定。再有効化のときは
+`.golangci.yaml` の `linters.disable` から `errcheck` を消し、PR で
+unchecked 箇所を `_ = ...` か `if err != nil { ... }` に直す。
+
+新しい linter を有効化する流儀:
+
+1. PR で `.golangci.yaml` の `linters.enable` に追加
+2. ローカルで `just lint` を走らせ、issues が増えるなら同 PR で fix
+3. `tools/go.mod` の golangci-lint version を上げたいときは
+   `go get -tool github.com/golangci/golangci-lint/v2/cmd/golangci-lint@vX.Y.Z`

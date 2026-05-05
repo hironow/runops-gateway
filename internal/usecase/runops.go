@@ -141,9 +141,9 @@ func (s *RunOpsService) approveJob(ctx context.Context, req domain.ApprovalReque
 		slog.Error("UpdateMessage failed", "err", err)
 	}
 
-	// Cloud SQL instance name — SqlInstanceName が明示指定されていればそれを、
+	// Cloud SQL instance name — SQLInstanceName が明示指定されていればそれを、
 	// 未指定なら ResourceNames (= Job 名) を legacy fallback として使う。
-	sqlInstance := req.SqlInstanceName
+	sqlInstance := req.SQLInstanceName
 	if sqlInstance == "" {
 		sqlInstance = req.ResourceNames
 	}

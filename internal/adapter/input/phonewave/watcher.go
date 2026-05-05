@@ -98,6 +98,7 @@ func (w *Watcher) scanOnce(ctx context.Context, dir string) error {
 //     (the first event may see an empty file and fail to parse;
 //     the Write event lets the emitter retry once data has landed)
 //   - truncate-then-write editors
+//
 // Emitter dedups by path, so re-firing on Write is harmless when the
 // Create-side already succeeded.
 func shouldHandle(ev fsnotify.Event) bool {
