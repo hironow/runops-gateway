@@ -1,12 +1,14 @@
 # 0013. outbox 書き込みは Pub/Sub bridge を経由する
 
 **Date:** 2026-05-05
-**Status:** Proposed (Phase 2 以降で再評価)
+**Status:** Accepted (Phase 2a 着手で publish 経路を実装、2026-05-05)
 
-> **Draft notice (2026-05-05)**: 本 ADR は D-Mail outbox 書き込みの bridge 設計であり、
-> Phase 2 以降の議論である。Phase 1（Issue 0018: シンプル経路）では Pub/Sub には触れず、
-> Slack 内で完結する stub dispatch のみを実装する。Phase 1 完了後、Phase 2 着手時に
-> 本 ADR を Accepted に昇格するか再評価する。
+> **2026-05-05 update**: Phase 2a (`feat/long-running-dispatch`) で
+> publish 側 (`internal/adapter/output/pubsub` + `PubsubDispatcher`) が実装され
+> 動作確認済み。Pub/Sub message attribute (kind / target_tool / source /
+> dmail_schema_version / idempotency_key / forwarded metadata) を本 ADR 通りに
+> 付与している。dmail-receiver (Phase 2b) と dmail-emitter (Phase 2c) は依然
+> として未実装。
 
 ## Context
 

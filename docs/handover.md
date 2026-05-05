@@ -40,11 +40,12 @@ or merge する運用とする。
 | Phase | 状態 | 内容 |
 | --- | --- | --- |
 | Phase 0 | ✅ 完了 | 既存 ChatOps（Cloud Run カナリア・DB マイグレ） |
-| **Phase 1 (新)** | ✅ 完了 (2026-05-05) | **シンプル経路**: `/slack/command` → **Block Kit 確認 → Approve クリック (`/slack/interactive`)** → DispatchAgentTask → thread reply。Codex Review round 2/3/4 の致命指摘 **5 件** (F-1 replay sig / F-4 text leak / F-5 missing confirmation / F-7 clicker hijack / F-8 button replay) はすべて同 PR 内で修正済み |
-| Phase 2 (旧 Phase 1) | 📝 draft | Pub/Sub topology + dmail-receiver — ADR 0013/0015 が Proposed |
-| Phase 3 (旧 Phase 2) | 📝 draft | `/agent` の stub を Pub/Sub publish に差し替え + `runops dispatch` CLI |
-| Phase 4 (旧 Phase 3) | 📝 draft | dmail-emitter (逆向き) + 5本柱からの結果通知 |
-| Phase 5 (旧 Phase 4) | 📝 draft | HIGH severity approval gate + 本番化 |
+| **Phase 1 (新)** | ✅ 完了 (2026-05-05, develop merged) | **シンプル経路**: `/slack/command` → **Block Kit 確認 → Approve クリック (`/slack/interactive`)** → DispatchAgentTask → thread reply。Codex Review round 2/3/4 の致命指摘 **5 件** はすべて修正済み |
+| **Phase 2a** | 🟡 実装中 (`feat/long-running-dispatch`) | Issue 0017 chat.postMessage fallback (ADR 0017) ✅ + PubsubDispatcher publish 経路 ✅ + `DISPATCHER_BACKEND=stub\|pubsub` 切替 ✅ |
+| Phase 2b | 📝 draft | exe-coder VM 上の `dmail-receiver` daemon (Pub/Sub pull → phonewave outbox atomic write) |
+| Phase 2c | 📝 draft | exe-coder VM 上の `dmail-emitter` daemon (5本柱 archive → Pub/Sub `dmail-outbound` publish) |
+| Phase 3 | 📝 draft | dmail-outbound subscription + InteractiveHandler への結果 thread reply (Slack 集約) |
+| Phase 4 | 📝 draft | HIGH severity approval gate + 本番化 (4-eyes、preempt 解除) |
 
 「設計済 / 未着手」は intent.md と本ドキュメントに方針が書かれているが
 コードに手がついていない状態。

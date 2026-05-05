@@ -1,5 +1,21 @@
 # Issue 0017: OfferContinuation の 404 を抑止する
 
+> **解決済み (2026-05-05, ✅ Phase 2a `feat/long-running-dispatch` ブランチ)**:
+> ADR 0017 (Bot Token + chat.postMessage fallback) を採用し、`FallbackNotifier`
+> decorator として実装した。`ResponseURLNotifier` を wrap して、primary が
+> response_url 30分/5回制限の 404 を返した時に chat.postMessage に自動切替する。
+> NotifyTarget に ChannelID + ThreadTS を追加し、InteractiveHandler が Slack
+> payload から populate する。`SLACK_BOT_TOKEN` 未設定時は Phase 0 互換 (起動時
+> WARN ログ)。Issue 0017 計画案 (a) を選択、案 (b)(c) は scope 外。
+>
+> 関連 commits: `1d387b6 docs(adr): record ADR 0017` /
+> `5a41762 test(slack): RED tests for FallbackNotifier` /
+> `86ea6d2 fix(slack): chat.postMessage fallback for response_url limits` /
+> `b964620 feat(server): wire FallbackNotifier with SLACK_BOT_TOKEN`
+>
+> 残課題: tofu に `slack-bot-token` Secret Manager リソース追加 (本 PR 外、
+> infra フェーズで実施)。
+
 ## Goal
 
 `internal/usecase/runops.go` の `approveShift` が成功した後、
