@@ -72,6 +72,22 @@ pubsub-init:
 pubsub-down:
     docker compose -f compose.yaml stop pubsub-emulator
 
+# Start local Jaeger v2 (OpenTelemetry trace backend, ADR 0020)
+trace-up:
+    docker compose -f compose.yaml up -d jaeger
+    @echo "Jaeger UI: http://localhost:16686"
+    @echo "Set OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 in your shell to ship spans there."
+
+# Stop local Jaeger
+trace-down:
+    docker compose -f compose.yaml stop jaeger
+
+# Open Jaeger UI in browser
+trace-view:
+    @command -v open >/dev/null 2>&1 && open http://localhost:16686 \
+        || command -v xdg-open >/dev/null 2>&1 && xdg-open http://localhost:16686 \
+        || echo "Please open http://localhost:16686 manually"
+
 # Test notify-slack.sh: dry-run payload structure + bash/Go compress_gz round-trip
 # Requires: bash, gzip, base64, jq
 test-scripts:

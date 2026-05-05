@@ -24,10 +24,14 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	gpubsub "cloud.google.com/go/pubsub/v2"
+	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
 	pubsubinput "github.com/hironow/runops-gateway/internal/adapter/input/pubsub"
+	"github.com/hironow/runops-gateway/internal/adapter/observability"
 	"github.com/hironow/runops-gateway/internal/adapter/output/phonewave"
 )
 
@@ -68,12 +72,45 @@ func (m pubsubMessage) Attributes() map[string]string   { return m.inner.Attribu
 func (m pubsubMessage) Ack()                            { m.inner.Ack() }
 func (m pubsubMessage) Nack()                           { m.inner.Nack() }
 
+// otelServiceName returns OTEL_SERVICE_NAME with a sensible default for this
+// daemon. ADR 0020: every binary's resource carries service.name.
+func otelServiceName() string {
+	if v := os.Getenv("OTEL_SERVICE_NAME"); v != "" {
+		return v
+	}
+	return "dmail-receiver"
+}
+
 func main() {
 	cfg, err := loadConfig()
 	if err != nil {
 		slog.Error("dmail-receiver: configuration error", "error", err)
 		os.Exit(1)
 	}
+
+	// OpenTelemetry tracing (ADR 0020). Best-effort: failures fall back to
+	// no-op so the daemon always boots even if the OTLP endpoint is wrong.
+	otelCtx, otelCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	tp, err := observability.SetupTracerProvider(otelCtx, observability.Config{
+		Endpoint:       os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
+		ServiceName:    otelServiceName(),
+		ServiceVersion: os.Getenv("OTEL_SERVICE_VERSION"),
+		Sampler:        os.Getenv("OTEL_TRACES_SAMPLER"),
+		SamplerArg:     os.Getenv("OTEL_TRACES_SAMPLER_ARG"),
+	})
+	otelCancel()
+	if err != nil {
+		slog.Warn("OTel TracerProvider setup failed; telemetry disabled", "error", err)
+		tp = sdktrace.NewTracerProvider()
+	}
+	otel.SetTracerProvider(tp)
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := tp.Shutdown(shutdownCtx); err != nil {
+			slog.Error("OTel TracerProvider shutdown error", "error", err)
+		}
+	}()
 	slog.Info("dmail-receiver starting",
 		"project_id", cfg.projectID,
 		"subscription", cfg.subscription,
@@ -84,7 +121,12 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	client, err := gpubsub.NewClient(ctx, cfg.projectID)
+	// EnableOpenTelemetryTracing per ADR 0021: receive spans are stitched to
+	// the publisher's trace via googclient_* message attributes that the
+	// library auto-extracts.
+	client, err := gpubsub.NewClientWithConfig(ctx, cfg.projectID, &gpubsub.ClientConfig{
+		EnableOpenTelemetryTracing: true,
+	})
 	if err != nil {
 		slog.Error("dmail-receiver: pubsub client", "error", err)
 		os.Exit(1)

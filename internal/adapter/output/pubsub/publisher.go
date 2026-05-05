@@ -48,7 +48,14 @@ func NewPublisher(ctx context.Context, projectID, topicID string) (*Publisher, e
 	if projectID == "" || topicID == "" {
 		return nil, fmt.Errorf("pubsub publisher: projectID and topicID are required")
 	}
-	client, err := gpubsub.NewClient(ctx, projectID)
+	// EnableOpenTelemetryTracing per ADR 0021: the library auto-injects the
+	// W3C trace context as googclient_* message attributes and emits
+	// publish/receive spans. Local Jaeger / prod Cloud Trace pick them up
+	// automatically; ADR 0013's manual 'traceparent' attribute is no longer
+	// needed.
+	client, err := gpubsub.NewClientWithConfig(ctx, projectID, &gpubsub.ClientConfig{
+		EnableOpenTelemetryTracing: true,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("pubsub publisher: create client: %w", err)
 	}
@@ -103,8 +110,12 @@ func (p *Publisher) PublishDMail(ctx context.Context, m domain.DMail) (string, e
 	if m.IdempotencyKey != "" {
 		attrs["idempotency_key"] = m.IdempotencyKey
 	}
-	// Metadata may carry traceparent and other ADR 0013 attributes. We forward
-	// them verbatim so the receiver can stitch traces and consult provenance.
+	// Metadata may carry routing fields (slack_channel_id / slack_thread_ts /
+	// parent_idempotency_key / requester_id / severity) that the receiver
+	// needs to stitch results back into the original Slack thread. We forward
+	// them verbatim. Trace context is *not* forwarded here — ADR 0021 hands
+	// that off to pubsub/v2's EnableOpenTelemetryTracing (googclient_*
+	// attributes injected automatically).
 	for k, v := range m.Metadata {
 		// Avoid clobbering canonical keys we set above.
 		if _, exists := attrs[k]; exists {

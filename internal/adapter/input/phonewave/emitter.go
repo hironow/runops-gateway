@@ -22,9 +22,17 @@ import (
 	"strings"
 	"sync"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+
 	"github.com/hironow/runops-gateway/internal/core/domain"
 	"github.com/hironow/runops-gateway/internal/core/port"
 )
+
+// emitterTracerName identifies this package as the OTel instrumentation
+// library. fsnotify-driven publish spans live here.
+const emitterTracerName = "github.com/hironow/runops-gateway/internal/adapter/input/phonewave"
 
 // Emitter publishes a single archive .md file as a D-Mail.
 type Emitter struct {
@@ -51,8 +59,17 @@ func (e *Emitter) PublishFile(ctx context.Context, path string) error {
 		return nil
 	}
 
+	// Each fsnotify-detected file is its own root trigger — start a new span
+	// (will become a root span on this binary unless something upstream
+	// already established trace context, which fsnotify never does).
+	ctx, span := otel.Tracer(emitterTracerName).Start(ctx, "dmail.emitter.publish_file")
+	defer span.End()
+	span.SetAttributes(attribute.String("file.path", path))
+
 	info, err := os.Stat(path)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "stat failed")
 		return fmt.Errorf("emitter: stat %s: %w", path, err)
 	}
 	if info.IsDir() {
@@ -84,19 +101,30 @@ func (e *Emitter) PublishFile(ctx context.Context, path string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		clearOnFailure()
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "read failed")
 		return fmt.Errorf("emitter: read %s: %w", path, err)
 	}
 	mail, err := domain.ParseDMail(data)
 	if err != nil {
 		clearOnFailure()
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "parse failed")
 		return fmt.Errorf("emitter: parse %s: %w", path, err)
 	}
+	span.SetAttributes(
+		attribute.String("dmail.kind", string(mail.Kind)),
+		attribute.String("dmail.target", mail.Target),
+	)
 
 	id, err := e.publisher.PublishDMail(ctx, mail)
 	if err != nil {
 		clearOnFailure()
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "publish failed")
 		return fmt.Errorf("emitter: publish %s: %w", path, err)
 	}
+	span.SetAttributes(attribute.String("pubsub.message_id", id))
 	slog.InfoContext(ctx, "dmail emitter: published",
 		"path", path, "kind", mail.Kind, "target", mail.Target,
 		"pubsub_message_id", id)

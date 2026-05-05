@@ -62,7 +62,7 @@ google.golang.org/grpc/credentials/oauth                                      (a
 us-docker.pkg.dev/cloud-ops-agents-artifacts/google-cloud-opentelemetry-collector/otelcol-google:0.148.0
 ```
 
-Cloud Run multi-container (sidecar) で立て、アプリ側は `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317` を向けるだけ。**ただし `run.googleapis.com/launch-stage: ALPHA` 注釈が必要** (2026-05 時点でまだ ALPHA)。
+Cloud Run multi-container (sidecar) で立て、アプリ側は `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317` を向けるだけ。Cloud Run の multi-container 機能そのものは 2024-09 GA (https://cloud.google.com/run/docs/deploying#sidecars)。**ただし上記 Google 公式イメージを使う deploy recipe は `run.googleapis.com/launch-stage: ALPHA` 注釈必須** (2026-05 時点、公式 "Deploy Google-Built OpenTelemetry Collector on Cloud Run" doc に明記)。自前ビルドの Collector 像を sidecar に乗せれば ALPHA を回避できるが、それは自前運用コストとのトレードオフ。
 
 参照:
 - https://docs.cloud.google.com/stackdriver/docs/instrumentation/opentelemetry-collector-cloud-run
@@ -195,7 +195,12 @@ OTLP 直接 export が **新規プロジェクトの推奨**。理由 (公式 bl
 
 > "For extremely high-volume, high-cardinality metric sources, it can be prohibitively expensive to have an OpenTelemetry collector in the pipeline. Collectors can get overloaded with excessive volume of metrics, and horizontally or vertically scaling them is a lot of work for developers."
 
-ただし Cloud Run multi-container (sidecar) のサポートが GA 化したため、必要なら Collector も合理的な選択肢。
+Cloud Run multi-container (sidecar) 自体は 2024-09 に GA 化しており
+(https://cloud.google.com/run/docs/deploying#sidecars) 技術的には sidecar
+Collector も選択肢になる。ただし Google が提供する `otelcol-google` 公式
+イメージを Cloud Run に乗せる recipe は依然 `launch-stage: ALPHA` 注釈
+必須 (2026-05 時点、公式 deploy ガイドに明記)。Collector を自前ビルドする
+場合でも、cold start 増と障害ドメイン分離のトレードオフは残る。
 
 参照:
 - https://cloud.google.com/blog/products/management-tools/otlp-opentelemetry-protocol-for-google-cloud-monitoring-metrics

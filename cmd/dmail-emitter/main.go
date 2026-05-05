@@ -24,10 +24,24 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
+
+	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
 	phonewaveinput "github.com/hironow/runops-gateway/internal/adapter/input/phonewave"
+	"github.com/hironow/runops-gateway/internal/adapter/observability"
 	pubsubadapter "github.com/hironow/runops-gateway/internal/adapter/output/pubsub"
 )
+
+// otelServiceName returns OTEL_SERVICE_NAME with a sensible default for this
+// daemon. ADR 0020: every binary's resource carries service.name.
+func otelServiceName() string {
+	if v := os.Getenv("OTEL_SERVICE_NAME"); v != "" {
+		return v
+	}
+	return "dmail-emitter"
+}
 
 type config struct {
 	projectID   string
@@ -75,6 +89,30 @@ func main() {
 		"archive_dirs", cfg.archiveDirs,
 		"emulator_host", os.Getenv("PUBSUB_EMULATOR_HOST"),
 	)
+
+	// OpenTelemetry tracing (ADR 0020). Best-effort: failures fall back to
+	// no-op so the daemon always boots even if the OTLP endpoint is wrong.
+	otelCtx, otelCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	tp, err := observability.SetupTracerProvider(otelCtx, observability.Config{
+		Endpoint:       os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
+		ServiceName:    otelServiceName(),
+		ServiceVersion: os.Getenv("OTEL_SERVICE_VERSION"),
+		Sampler:        os.Getenv("OTEL_TRACES_SAMPLER"),
+		SamplerArg:     os.Getenv("OTEL_TRACES_SAMPLER_ARG"),
+	})
+	otelCancel()
+	if err != nil {
+		slog.Warn("OTel TracerProvider setup failed; telemetry disabled", "error", err)
+		tp = sdktrace.NewTracerProvider()
+	}
+	otel.SetTracerProvider(tp)
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := tp.Shutdown(shutdownCtx); err != nil {
+			slog.Error("OTel TracerProvider shutdown error", "error", err)
+		}
+	}()
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()

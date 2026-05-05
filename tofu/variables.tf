@@ -53,3 +53,36 @@ variable "cloud_sql_instance" {
   type        = string
   default     = ""
 }
+
+variable "slack_default_channel_id" {
+  description = <<-EOT
+    Slack channel ID used by FallbackNotifier when the original
+    response_url has expired and no in-thread channel context is
+    available (ADR 0017). Empty disables the fallback (primary errors
+    propagate as before — Phase 0 behaviour).
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "otel_traces_sampler_arg" {
+  description = <<-EOT
+    OTEL_TRACES_SAMPLER_ARG passed to runops-gateway. Used with
+    'parentbased_traceidratio'. Start at 0.1 and tune as Pub/Sub-driven
+    span volume reveals itself in Cloud Trace quota usage.
+  EOT
+  type        = string
+  default     = "0.1"
+}
+
+variable "exe_coder_vm_sa_email" {
+  description = <<-EOT
+    Service account email of the exe-coder VM (managed in hironow/dotfiles).
+    Granted pubsub.subscriber on dmail-inbound-receiver and pubsub.publisher on
+    dmail-outbound so the dmail-receiver and dmail-emitter daemons can run
+    against the production topology. Leave empty until the exe-coder VM SA is
+    actually provisioned — IAM bindings are created only when this is set.
+  EOT
+  type        = string
+  default     = ""
+}

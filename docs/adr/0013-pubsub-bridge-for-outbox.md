@@ -1,7 +1,7 @@
 # 0013. outbox 書き込みは Pub/Sub bridge を経由する
 
 **Date:** 2026-05-05
-**Status:** Accepted (Phase 2a 着手で publish 経路を実装、2026-05-05)
+**Status:** Accepted (Phase 2a 着手で publish 経路を実装、2026-05-05) — trace 属性のみ ADR 0021 で superseded (Proposed)
 
 > **2026-05-05 update**: Phase 2a (`feat/long-running-dispatch`) で
 > publish 側 (`internal/adapter/output/pubsub` + `PubsubDispatcher`) が実装され

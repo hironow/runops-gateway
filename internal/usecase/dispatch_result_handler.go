@@ -5,6 +5,11 @@ import (
 	"fmt"
 	"log/slog"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/hironow/runops-gateway/internal/core/domain"
 	"github.com/hironow/runops-gateway/internal/core/port"
 )
@@ -48,6 +53,15 @@ func (h *DispatchResultHandler) WithApprovalRequester(a port.ApprovalRequester) 
 // metadata, unknown kind) so the caller acks-and-drops; returns an error only
 // when the notifier itself fails (caller nacks for retry).
 func (h *DispatchResultHandler) Handle(ctx context.Context, mail domain.DMail) error {
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "usecase.dispatch_result_handle")
+	defer span.End()
+	span.SetAttributes(
+		attribute.String("dmail.kind", string(mail.Kind)),
+		attribute.String("dmail.target", mail.Target),
+		attribute.String("dmail.source", mail.Source),
+		attribute.String("dmail.idempotency_key", mail.IdempotencyKey),
+	)
+
 	channel := mail.Metadata["slack_channel_id"]
 	thread := mail.Metadata["slack_thread_ts"]
 	parent := mail.Metadata["parent_idempotency_key"]
@@ -55,6 +69,7 @@ func (h *DispatchResultHandler) Handle(ctx context.Context, mail domain.DMail) e
 		slog.WarnContext(ctx, "dispatch result: missing slack metadata, dropping",
 			"kind", mail.Kind, "target", mail.Target,
 			"has_channel", channel != "", "has_thread", thread != "", "has_parent", parent != "")
+		span.AddEvent("drop", trace.WithAttributes(attribute.String("reason", "missing_slack_metadata")))
 		return nil
 	}
 
@@ -62,6 +77,7 @@ func (h *DispatchResultHandler) Handle(ctx context.Context, mail domain.DMail) e
 	if !ok {
 		slog.WarnContext(ctx, "dispatch result: unknown kind, dropping",
 			"kind", mail.Kind, "target", mail.Target)
+		span.AddEvent("drop", trace.WithAttributes(attribute.String("reason", "unknown_kind")))
 		return nil
 	}
 
@@ -81,13 +97,19 @@ func (h *DispatchResultHandler) Handle(ctx context.Context, mail domain.DMail) e
 	if mail.Kind == domain.DMailKindConvergence &&
 		mail.Metadata["severity"] == "high" &&
 		h.approver != nil {
+		span.SetAttributes(attribute.String("dmail.route", "approval_request"))
 		if err := h.approver.PostApprovalRequest(ctx, target, mail); err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "post approval request")
 			return fmt.Errorf("dispatch result: post approval request: %w", err)
 		}
 		return nil
 	}
 
+	span.SetAttributes(attribute.String("dmail.route", "thread_reply"))
 	if err := h.notifier.UpdateMessage(ctx, target, text); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "notify thread")
 		return fmt.Errorf("dispatch result: notify thread: %w", err)
 	}
 	return nil
