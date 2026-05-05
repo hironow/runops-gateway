@@ -106,6 +106,49 @@ func TestEmitter_PublishFile_PropagatesPublishError(t *testing.T) {
 	}
 }
 
+func TestEmitter_PublishFile_RetriesAfterParseError(t *testing.T) {
+	// Reproduces the smoke-test bug: fsnotify can fire Create before the
+	// writer has actually written the data, so PublishFile sees an empty/
+	// truncated file and parse fails. Without a retry path, even the next
+	// Write event would be deduped away.
+	//
+	// Phase 2c contract: parse failures must NOT poison the dedup record;
+	// a follow-up event for the same path with valid content must succeed.
+	dir := t.TempDir()
+	pub := &recordingPublisher{}
+	e := NewEmitter(pub)
+
+	path := filepath.Join(dir, "race.md")
+	// Step 1: empty file (simulates fsnotify Create firing before Write).
+	if err := os.WriteFile(path, []byte{}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.PublishFile(context.Background(), path); err == nil {
+		t.Fatal("expected parse error for empty file")
+	}
+	if got := pub.snapshot(); len(got) != 0 {
+		t.Fatalf("publisher must not be called when parse fails; got %d", len(got))
+	}
+
+	// Step 2: full content arrives — emitter must retry, not skip.
+	mail := domain.DMail{
+		ID:             "x",
+		Kind:           domain.DMailKindReport,
+		Target:         "amadeus",
+		IdempotencyKey: "k",
+		Body:           "now valid",
+	}
+	if err := os.WriteFile(path, []byte(mail.RenderMarkdown()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.PublishFile(context.Background(), path); err != nil {
+		t.Fatalf("retry after parse error should succeed; got: %v", err)
+	}
+	if got := pub.snapshot(); len(got) != 1 {
+		t.Errorf("expected one publish on retry; got %d", len(got))
+	}
+}
+
 func TestEmitter_PublishFile_DedupsByPath(t *testing.T) {
 	// Calling PublishFile twice for the same path must publish at most once.
 	// fsnotify can deliver the same Create event twice on some filesystems

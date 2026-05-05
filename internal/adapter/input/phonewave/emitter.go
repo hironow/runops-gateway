@@ -71,22 +71,30 @@ func (e *Emitter) PublishFile(ctx context.Context, path string) error {
 	e.seen[abs] = true
 	e.mu.Unlock()
 
+	// Any failure below means we cannot trust the dedup record: a follow-up
+	// fsnotify event (or the watcher's startup scan re-running) must be
+	// allowed to retry the same path. fsnotify often delivers Create before
+	// the writer has finished writing, so empty / partial reads are routine.
+	clearOnFailure := func() {
+		e.mu.Lock()
+		delete(e.seen, abs)
+		e.mu.Unlock()
+	}
+
 	data, err := os.ReadFile(path)
 	if err != nil {
+		clearOnFailure()
 		return fmt.Errorf("emitter: read %s: %w", path, err)
 	}
 	mail, err := domain.ParseDMail(data)
 	if err != nil {
+		clearOnFailure()
 		return fmt.Errorf("emitter: parse %s: %w", path, err)
 	}
 
 	id, err := e.publisher.PublishDMail(ctx, mail)
 	if err != nil {
-		// Publish failure means the dedup record is unreliable — clear it so
-		// the fsnotify caller can retry on the next event.
-		e.mu.Lock()
-		delete(e.seen, abs)
-		e.mu.Unlock()
+		clearOnFailure()
 		return fmt.Errorf("emitter: publish %s: %w", path, err)
 	}
 	slog.InfoContext(ctx, "dmail emitter: published",

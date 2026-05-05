@@ -92,11 +92,16 @@ func (w *Watcher) scanOnce(ctx context.Context, dir string) error {
 }
 
 // shouldHandle returns true for events that may correspond to a newly
-// available .md file. Includes Create and Rename (some atomic writers do
-// rename-into-place); excludes Write/Chmod/Remove because the file content
-// or existence has not changed in a way the emitter cares about.
+// available .md file. Includes Create, Write, and Rename so we catch:
+//   - atomic temp+rename writers (Rename)
+//   - shell heredoc / editor writers that fire Create then Write
+//     (the first event may see an empty file and fail to parse;
+//     the Write event lets the emitter retry once data has landed)
+//   - truncate-then-write editors
+// Emitter dedups by path, so re-firing on Write is harmless when the
+// Create-side already succeeded.
 func shouldHandle(ev fsnotify.Event) bool {
-	if ev.Op&(fsnotify.Create|fsnotify.Rename) == 0 {
+	if ev.Op&(fsnotify.Create|fsnotify.Write|fsnotify.Rename) == 0 {
 		return false
 	}
 	return strings.HasSuffix(strings.ToLower(ev.Name), ".md")
