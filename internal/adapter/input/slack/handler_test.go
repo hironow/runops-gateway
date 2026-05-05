@@ -81,10 +81,10 @@ func newMockUseCase() *mockUseCase {
 	}
 }
 
-func TestHandler_InvalidSignature(t *testing.T) {
+func TestInteractiveHandler_InvalidSignature(t *testing.T) {
 	// given
 	mock := newMockUseCase()
-	handler := NewHandler(mock, testNotifier, "correct-secret")
+	handler := NewInteractiveHandler(mock, testNotifier, "correct-secret")
 
 	body := []byte("payload=test")
 	req := httptest.NewRequest(http.MethodPost, "/slack/interactive", bytes.NewBuffer(body))
@@ -102,11 +102,11 @@ func TestHandler_InvalidSignature(t *testing.T) {
 	}
 }
 
-func TestHandler_ValidApprove(t *testing.T) {
+func TestInteractiveHandler_ValidApprove(t *testing.T) {
 	// given
 	secret := "test-secret"
 	mock := newMockUseCase()
-	handler := NewHandler(mock, testNotifier, secret)
+	handler := NewInteractiveHandler(mock, testNotifier, secret)
 
 	av := actionValue{
 		Project:       "test-project",
@@ -159,11 +159,11 @@ func TestHandler_ValidApprove(t *testing.T) {
 	}
 }
 
-func TestHandler_ValidDeny(t *testing.T) {
+func TestInteractiveHandler_ValidDeny(t *testing.T) {
 	// given
 	secret := "test-secret"
 	mock := newMockUseCase()
-	handler := NewHandler(mock, testNotifier, secret)
+	handler := NewInteractiveHandler(mock, testNotifier, secret)
 
 	av := actionValue{
 		Project:       "test-project",
@@ -207,11 +207,11 @@ func TestHandler_ValidDeny(t *testing.T) {
 	}
 }
 
-func TestHandler_EmptyActions(t *testing.T) {
+func TestInteractiveHandler_EmptyActions(t *testing.T) {
 	// given
 	secret := "test-secret"
 	mock := newMockUseCase()
-	handler := NewHandler(mock, testNotifier, secret)
+	handler := NewInteractiveHandler(mock, testNotifier, secret)
 
 	payload := interactivePayload{}
 	payload.User.ID = "U789"
@@ -233,11 +233,11 @@ func TestHandler_EmptyActions(t *testing.T) {
 	}
 }
 
-func TestHandler_UnknownActionID(t *testing.T) {
+func TestInteractiveHandler_UnknownActionID(t *testing.T) {
 	// given
 	secret := "test-secret"
 	mock := newMockUseCase()
-	handler := NewHandler(mock, testNotifier, secret)
+	handler := NewInteractiveHandler(mock, testNotifier, secret)
 
 	av := actionValue{Project: "test-project", Location: "asia-northeast1", ResourceType: "service", ResourceNames: "svc", IssuedAt: time.Now().Unix()}
 	avBytes, _ := json.Marshal(av)
@@ -264,11 +264,11 @@ func TestHandler_UnknownActionID(t *testing.T) {
 	}
 }
 
-func TestHandler_MalformedActionValue(t *testing.T) {
+func TestInteractiveHandler_MalformedActionValue(t *testing.T) {
 	// given — action_id is valid but Value is not parseable JSON
 	secret := "test-secret"
 	mock := newMockUseCase()
-	handler := NewHandler(mock, testNotifier, secret)
+	handler := NewInteractiveHandler(mock, testNotifier, secret)
 
 	payload := interactivePayload{}
 	payload.User.ID = "U123"
@@ -298,11 +298,11 @@ func TestHandler_MalformedActionValue(t *testing.T) {
 	}
 }
 
-func TestHandler_MultipleActions_OnlyFirstProcessed(t *testing.T) {
+func TestInteractiveHandler_MultipleActions_OnlyFirstProcessed(t *testing.T) {
 	// given — two actions in the payload; only the first must be dispatched
 	secret := "test-secret"
 	mock := newMockUseCase()
-	handler := NewHandler(mock, testNotifier, secret)
+	handler := NewInteractiveHandler(mock, testNotifier, secret)
 
 	av := actionValue{Project: "test-project", Location: "asia-northeast1", ResourceType: "service", ResourceNames: "svc", IssuedAt: time.Now().Unix()}
 	avBytes, _ := json.Marshal(av)
@@ -411,11 +411,11 @@ func TestParseActionValue_GzPrefixed_DecompressedCorrectly(t *testing.T) {
 	}
 }
 
-func TestHandler_CompressedButtonValue_Dispatched(t *testing.T) {
+func TestInteractiveHandler_CompressedButtonValue_Dispatched(t *testing.T) {
 	// given — button value is gz: compressed (simulates large multi-service bundle)
 	secret := "test-secret"
 	mock := newMockUseCase()
-	handler := NewHandler(mock, testNotifier, secret)
+	handler := NewInteractiveHandler(mock, testNotifier, secret)
 
 	av := actionValue{
 		Project:       "test-project",
@@ -511,11 +511,11 @@ func TestParseActionValue_CorruptGzip_ReturnsError(t *testing.T) {
 	}
 }
 
-func TestHandler_MissingProjectOrLocation_RejectsGracefully(t *testing.T) {
+func TestInteractiveHandler_MissingProjectOrLocation_RejectsGracefully(t *testing.T) {
 	// given — action value has no project/location; handler must return 200 without dispatching
 	secret := "test-secret"
 	mock := newMockUseCase()
-	handler := NewHandler(mock, testNotifier, secret)
+	handler := NewInteractiveHandler(mock, testNotifier, secret)
 
 	av := actionValue{
 		ResourceType:  "service",
@@ -555,11 +555,11 @@ func TestHandler_MissingProjectOrLocation_RejectsGracefully(t *testing.T) {
 	}
 }
 
-func TestHandler_MalformedPayloadJSON(t *testing.T) {
+func TestInteractiveHandler_MalformedPayloadJSON(t *testing.T) {
 	// given
 	secret := "test-secret"
 	mock := newMockUseCase()
-	handler := NewHandler(mock, testNotifier, secret)
+	handler := NewInteractiveHandler(mock, testNotifier, secret)
 
 	req := buildValidRequest(t, secret, `{not valid json}`)
 	rr := httptest.NewRecorder()
@@ -573,13 +573,13 @@ func TestHandler_MalformedPayloadJSON(t *testing.T) {
 	}
 }
 
-func TestHandler_ButtonValueBuildInfo_PropagatesToApprovalRequest(t *testing.T) {
+func TestInteractiveHandler_ButtonValueBuildInfo_PropagatesToApprovalRequest(t *testing.T) {
 	// given — Slack interactive payload whose action value carries build_info.
 	// The handler must surface it on domain.ApprovalRequest so the usecase
 	// (and downstream rebuild/progress messages) can show it.
 	secret := "test-secret"
 	mock := newMockUseCase()
-	handler := NewHandler(mock, testNotifier, secret)
+	handler := NewInteractiveHandler(mock, testNotifier, secret)
 
 	av := actionValue{
 		Project: "test-project", Location: "asia-northeast1",

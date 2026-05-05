@@ -52,20 +52,21 @@ type interactivePayload struct {
 	} `json:"actions"`
 }
 
-// Handler handles POST /slack/interactive requests.
-type Handler struct {
+// InteractiveHandler handles POST /slack/interactive requests
+// (block-kit button clicks: approve / deny / dispatch_approve / dispatch_deny).
+type InteractiveHandler struct {
 	useCase       port.RunOpsUseCase
 	notifier      port.Notifier
 	signingSecret string
 }
 
-// NewHandler creates a new Slack interactive handler.
-func NewHandler(useCase port.RunOpsUseCase, notifier port.Notifier, signingSecret string) *Handler {
-	return &Handler{useCase: useCase, notifier: notifier, signingSecret: signingSecret}
+// NewInteractiveHandler creates a new Slack interactive (button click) handler.
+func NewInteractiveHandler(useCase port.RunOpsUseCase, notifier port.Notifier, signingSecret string) *InteractiveHandler {
+	return &InteractiveHandler{useCase: useCase, notifier: notifier, signingSecret: signingSecret}
 }
 
 // ServeHTTP implements http.Handler.
-func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (h *InteractiveHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// 1. Read body
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -190,7 +191,7 @@ func parseActionValue(s string) (actionValue, error) {
 
 // notifyIfTimeout sends a timeout notice to Slack when the operation context expired.
 // Uses a fresh 30-second context since the original ctx is already cancelled.
-func (h *Handler) notifyIfTimeout(ctx context.Context, err error, target port.NotifyTarget) {
+func (h *InteractiveHandler) notifyIfTimeout(ctx context.Context, err error, target port.NotifyTarget) {
 	if ctx.Err() != context.DeadlineExceeded {
 		return
 	}
