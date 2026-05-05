@@ -11,7 +11,22 @@ import (
 	"log/slog"
 	"path/filepath"
 	"strings"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
+
+// attrEvent shortens span.AddEvent attribute construction (one of these per
+// drop reason).
+func attrEvent(k, v string) trace.EventOption {
+	return trace.WithAttributes(attribute.String(k, v))
+}
+
+// receiverTracerName identifies this package as the OTel instrumentation
+// library. Inbound subscriber spans (dmail-receiver daemon) live here.
+const receiverTracerName = "github.com/hironow/runops-gateway/internal/adapter/input/pubsub"
 
 // Message is the minimum surface Receiver requires from a Pub/Sub message.
 // Mirrors the *pubsub.Message methods used by Subscription.Receive so the
@@ -48,10 +63,15 @@ func NewReceiver(w Writer) *Receiver {
 // Empty data and bad-id attributes are acked-and-dropped because retrying
 // would just reproduce the same shape — the producer needs to fix the bug.
 func (r *Receiver) OnMessage(ctx context.Context, m Message) {
+	ctx, span := otel.Tracer(receiverTracerName).Start(ctx, "dmail.receiver.on_message")
+	defer span.End()
+	span.SetAttributes(attribute.String("pubsub.message_id", m.ID()))
+
 	data := m.Data()
 	if len(data) == 0 {
 		slog.WarnContext(ctx, "dmail receiver: empty data, dropping",
 			"pubsub_message_id", m.ID())
+		span.AddEvent("drop", attrEvent("reason", "empty_data"))
 		m.Ack()
 		return
 	}
@@ -60,13 +80,18 @@ func (r *Receiver) OnMessage(ctx context.Context, m Message) {
 	if err != nil {
 		slog.WarnContext(ctx, "dmail receiver: invalid id attribute, dropping",
 			"pubsub_message_id", m.ID(), "error", err)
+		span.RecordError(err)
+		span.AddEvent("drop", attrEvent("reason", "invalid_id"))
 		m.Ack()
 		return
 	}
+	span.SetAttributes(attribute.String("outbox.filename", name))
 
 	if err := r.writer.WriteFile(name, data); err != nil {
 		slog.ErrorContext(ctx, "dmail receiver: outbox write failed; nacking for retry",
 			"pubsub_message_id", m.ID(), "name", name, "error", err)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "outbox write failed")
 		m.Nack()
 		return
 	}

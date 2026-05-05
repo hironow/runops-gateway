@@ -4,6 +4,10 @@ import (
 	"context"
 	"log/slog"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+
 	"github.com/hironow/runops-gateway/internal/core/domain"
 )
 
@@ -40,10 +44,15 @@ func NewOutboundReceiver(handler ResultHandler) *OutboundReceiver {
 //   - handler returns error → nack so Pub/Sub redelivers; eventual DLQ
 //     forwarding kicks in via the subscription's dead_letter_policy
 func (r *OutboundReceiver) OnMessage(ctx context.Context, m Message) {
+	ctx, span := otel.Tracer(receiverTracerName).Start(ctx, "dmail.outbound.on_message")
+	defer span.End()
+	span.SetAttributes(attribute.String("pubsub.message_id", m.ID()))
+
 	data := m.Data()
 	if len(data) == 0 {
 		slog.WarnContext(ctx, "outbound subscriber: empty data, dropping",
 			"pubsub_message_id", m.ID())
+		span.AddEvent("drop", attrEvent("reason", "empty_data"))
 		m.Ack()
 		return
 	}
@@ -51,12 +60,20 @@ func (r *OutboundReceiver) OnMessage(ctx context.Context, m Message) {
 	if err != nil {
 		slog.WarnContext(ctx, "outbound subscriber: invalid D-Mail, dropping",
 			"pubsub_message_id", m.ID(), "error", err)
+		span.RecordError(err)
+		span.AddEvent("drop", attrEvent("reason", "parse_failed"))
 		m.Ack()
 		return
 	}
+	span.SetAttributes(
+		attribute.String("dmail.kind", string(mail.Kind)),
+		attribute.String("dmail.target", mail.Target),
+	)
 	if err := r.handler.Handle(ctx, mail); err != nil {
 		slog.ErrorContext(ctx, "outbound subscriber: handler failed; nacking for retry",
 			"pubsub_message_id", m.ID(), "kind", mail.Kind, "error", err)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "handler failed")
 		m.Nack()
 		return
 	}
