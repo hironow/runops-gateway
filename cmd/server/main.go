@@ -76,7 +76,28 @@ func main() {
 	// One-time consume guard for dispatch_approve buttons (Codex round 4 #2).
 	// 1-hour TTL covers Slack's 30-min response_url window with margin.
 	consumed := state.NewMemoryConsumedStore(time.Hour)
+
+	// Phase 4a (ADR 0019): when DISPATCHER_BACKEND=pubsub, the same publisher
+	// also carries approval ack messages back into dmail-inbound. Reuses the
+	// existing publisher rather than spinning up a second client.
+	approvalPub, err := buildApprovalPublisher(context.Background(), cfg)
+	if err != nil {
+		slog.Error("failed to build approval publisher", "error", err)
+		os.Exit(1)
+	}
+	if approvalPub != nil {
+		defer func() {
+			if c, ok := approvalPub.(interface{ Close() error }); ok {
+				_ = c.Close()
+			}
+		}()
+	}
+
 	slackHandler := slackadapter.NewInteractiveHandler(svc, dispatchSvc, notifier, consumed, cfg.slackSigningSecret)
+	if approvalPub != nil {
+		slackHandler = slackHandler.WithApprovalPublisher(approvalPub)
+		slog.Info("Phase 4a approval_approve / approval_deny path enabled")
+	}
 	commandHandler := slackadapter.NewCommandHandler(cfg.slackSigningSecret)
 
 	// Register routes
@@ -150,6 +171,14 @@ func startOutboundSubscriber(ctx context.Context, cfg config, notifier port.Noti
 		return done
 	}
 	handler := usecase.NewDispatchResultHandler(notifier)
+	// Phase 4a: when the FallbackNotifier and a chat.postMessage URL are
+	// available, build an ApprovalRequester so HIGH severity convergence
+	// surfaces as a 4-eyes approval prompt instead of a plain reply.
+	if cfg.slackBotToken != "" {
+		approver := slacknotifier.NewApprovalRequester(slackChatPostMessageURL, cfg.slackBotToken)
+		handler = handler.WithApprovalRequester(approver)
+		slog.Info("Phase 4a HIGH severity approval requester enabled")
+	}
 	receiver := pubsubinput.NewOutboundReceiver(handler)
 
 	go func() {
@@ -227,6 +256,24 @@ func loadConfig() (config, error) {
 		"pubsub_outbound_sub", cfg.pubsubOutboundSub,
 	)
 	return cfg, nil
+}
+
+// buildApprovalPublisher returns a DMailPublisher dedicated to the Phase 4a
+// approval ack path, or nil if the deployment is not configured for it. We
+// keep it separate from the dispatcher publisher so the lifecycles (and Close
+// timing) stay independent — Phase 4a is opt-in.
+func buildApprovalPublisher(ctx context.Context, cfg config) (port.DMailPublisher, error) {
+	if cfg.dispatcherBackend != "pubsub" {
+		return nil, nil
+	}
+	if cfg.pubsubProjectID == "" || cfg.pubsubInboundTopic == "" {
+		return nil, nil
+	}
+	pub, err := pubsubadapter.NewPublisher(ctx, cfg.pubsubProjectID, cfg.pubsubInboundTopic)
+	if err != nil {
+		return nil, fmt.Errorf("build approval publisher: %w", err)
+	}
+	return pub, nil
 }
 
 // buildDispatcher returns a port.Dispatcher according to cfg.dispatcherBackend.

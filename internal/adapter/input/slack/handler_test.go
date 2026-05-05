@@ -339,6 +339,216 @@ func TestInteractiveHandler_DispatchApprove_CallsDispatchUseCase(t *testing.T) {
 	}
 }
 
+// recordingApprovalPublisher captures calls so Phase 4a tests can assert the
+// approval ack publish path.
+type recordingApprovalPublisher struct {
+	mu    sync.Mutex
+	mails []domain.DMail
+	err   error
+}
+
+func (r *recordingApprovalPublisher) PublishDMail(_ context.Context, m domain.DMail) (string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.mails = append(r.mails, m)
+	if r.err != nil {
+		return "", r.err
+	}
+	return "ack-" + m.IdempotencyKey, nil
+}
+
+func (r *recordingApprovalPublisher) snapshot() []domain.DMail {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]domain.DMail, len(r.mails))
+	copy(out, r.mails)
+	return out
+}
+
+func makeApprovalPayload(t *testing.T, av approvalActionValue) string {
+	t.Helper()
+	raw, err := marshalApprovalActionValue(av)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+func TestInteractiveHandler_ApprovalApprove_PublishesAckWhenAllGuardsPass(t *testing.T) {
+	secret := "test-secret"
+	mock := newMockUseCase()
+	disp := &recordedDispatchUseCase{}
+	consumed := state.NewMemoryConsumedStore(time.Hour)
+	pub := &recordingApprovalPublisher{}
+	handler := NewInteractiveHandler(mock, disp, testNotifier, consumed, secret).WithApprovalPublisher(pub)
+
+	av := approvalActionValue{
+		ParentIdempotencyKey: "parent-001",
+		OriginalRequesterID:  "U_ORIG",
+		Source:               "amadeus",
+		Target:               "sightjack",
+		BodyDigest:           "abcd1234deadbeef",
+		IssuedAt:             time.Now().Unix(),
+	}
+	payload := interactivePayload{}
+	payload.User.ID = "U_APPROVER" // distinct from U_ORIG
+	payload.ResponseURL = "https://hooks.slack.com/x"
+	payload.Channel.ID = "C_APR"
+	payload.Message.TS = "1700000000.000050"
+	payload.Actions = []interactiveAction{
+		{ActionID: "approval_approve", Value: makeApprovalPayload(t, av)},
+	}
+	payloadBytes, _ := json.Marshal(payload)
+
+	req := buildValidRequest(t, secret, string(payloadBytes))
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) && len(pub.snapshot()) == 0 {
+		time.Sleep(10 * time.Millisecond)
+	}
+	mails := pub.snapshot()
+	if len(mails) != 1 {
+		t.Fatalf("expected 1 approval ack publish, got %d", len(mails))
+	}
+	if mails[0].Kind != domain.DMailKindConvergence {
+		t.Errorf("ack kind=%q want convergence", mails[0].Kind)
+	}
+	if mails[0].Target != "amadeus" {
+		t.Errorf("ack target=%q want amadeus (back to producer)", mails[0].Target)
+	}
+	if mails[0].Metadata["approver_id"] != "U_APPROVER" {
+		t.Errorf("approver_id metadata missing/wrong: %v", mails[0].Metadata)
+	}
+	if mails[0].Metadata["parent_idempotency_key"] != "parent-001" {
+		t.Errorf("parent_idempotency_key drifted: %v", mails[0].Metadata)
+	}
+}
+
+func TestInteractiveHandler_ApprovalApprove_RejectsSelfApproval(t *testing.T) {
+	// Original requester clicks Approve themselves — must be rejected (4-eyes).
+	secret := "test-secret"
+	mock := newMockUseCase()
+	disp := &recordedDispatchUseCase{}
+	consumed := state.NewMemoryConsumedStore(time.Hour)
+	pub := &recordingApprovalPublisher{}
+	handler := NewInteractiveHandler(mock, disp, testNotifier, consumed, secret).WithApprovalPublisher(pub)
+
+	av := approvalActionValue{
+		ParentIdempotencyKey: "parent-002",
+		OriginalRequesterID:  "U_ORIG",
+		Source:               "amadeus",
+		Target:               "sightjack",
+		IssuedAt:             time.Now().Unix(),
+	}
+	payload := interactivePayload{}
+	payload.User.ID = "U_ORIG" // SAME as OriginalRequesterID — must reject
+	payload.ResponseURL = "https://hooks.slack.com/x"
+	payload.Channel.ID = "C_APR"
+	payload.Message.TS = "1700000000.000050"
+	payload.Actions = []interactiveAction{
+		{ActionID: "approval_approve", Value: makeApprovalPayload(t, av)},
+	}
+	payloadBytes, _ := json.Marshal(payload)
+
+	req := buildValidRequest(t, secret, string(payloadBytes))
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if got := pub.snapshot(); len(got) != 0 {
+		t.Errorf("self-approval must not publish; got %d publishes", len(got))
+	}
+}
+
+func TestInteractiveHandler_ApprovalApprove_RejectsReplay(t *testing.T) {
+	// Same approval clicked twice — must publish once.
+	secret := "test-secret"
+	mock := newMockUseCase()
+	disp := &recordedDispatchUseCase{}
+	consumed := state.NewMemoryConsumedStore(time.Hour)
+	pub := &recordingApprovalPublisher{}
+	handler := NewInteractiveHandler(mock, disp, testNotifier, consumed, secret).WithApprovalPublisher(pub)
+
+	av := approvalActionValue{
+		ParentIdempotencyKey: "parent-replay",
+		OriginalRequesterID:  "U_ORIG",
+		Source:               "amadeus",
+		Target:               "sightjack",
+		IssuedAt:             time.Now().Unix(),
+	}
+	build := func() *http.Request {
+		payload := interactivePayload{}
+		payload.User.ID = "U_APPROVER"
+		payload.ResponseURL = "https://hooks.slack.com/x"
+		payload.Channel.ID = "C_APR"
+		payload.Message.TS = "1700000000.000050"
+		payload.Actions = []interactiveAction{
+			{ActionID: "approval_approve", Value: makeApprovalPayload(t, av)},
+		}
+		payloadBytes, _ := json.Marshal(payload)
+		return buildValidRequest(t, secret, string(payloadBytes))
+	}
+
+	rr1 := httptest.NewRecorder()
+	handler.ServeHTTP(rr1, build())
+	rr2 := httptest.NewRecorder()
+	handler.ServeHTTP(rr2, build())
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) && len(pub.snapshot()) == 0 {
+		time.Sleep(10 * time.Millisecond)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if got := len(pub.snapshot()); got != 1 {
+		t.Errorf("expected exactly 1 ack publish (replay rejected); got %d", got)
+	}
+}
+
+func TestInteractiveHandler_ApprovalDeny_DoesNotPublish(t *testing.T) {
+	secret := "test-secret"
+	mock := newMockUseCase()
+	disp := &recordedDispatchUseCase{}
+	consumed := state.NewMemoryConsumedStore(time.Hour)
+	pub := &recordingApprovalPublisher{}
+	handler := NewInteractiveHandler(mock, disp, testNotifier, consumed, secret).WithApprovalPublisher(pub)
+
+	av := approvalActionValue{
+		ParentIdempotencyKey: "parent-deny",
+		OriginalRequesterID:  "U_ORIG",
+		Source:               "amadeus",
+		Target:               "sightjack",
+	}
+	payload := interactivePayload{}
+	payload.User.ID = "U_APPROVER"
+	payload.Channel.ID = "C_APR"
+	payload.Message.TS = "1700000000.000050"
+	payload.ResponseURL = "https://hooks.slack.com/x"
+	payload.Actions = []interactiveAction{
+		{ActionID: "approval_deny", Value: makeApprovalPayload(t, av)},
+	}
+	payloadBytes, _ := json.Marshal(payload)
+
+	req := buildValidRequest(t, secret, string(payloadBytes))
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if got := pub.snapshot(); len(got) != 0 {
+		t.Errorf("deny must not publish; got %d", len(got))
+	}
+}
+
 func TestInteractiveHandler_DispatchApprove_RejectsReplay(t *testing.T) {
 	// given — same dispatchActionValue clicked twice (button replay or
 	// re-fired by a network retry). Second click must NOT trigger a second
