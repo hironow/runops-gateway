@@ -45,6 +45,16 @@ resource "google_secret_manager_secret" "slack_webhook_url" {
   }
 }
 
+# Secret Manager: Slack Bot Token (xoxb-...) per ADR 0017.
+# Enables the FallbackNotifier to drop into chat.postMessage when the
+# response_url has expired or hit its 5-call limit.
+resource "google_secret_manager_secret" "slack_bot_token" {
+  secret_id = "slack-bot-token"
+  replication {
+    auto {}
+  }
+}
+
 # Placeholder secret versions — replace with real values via gcloud after tofu apply:
 #   gcloud secrets versions add slack-signing-secret --data-file=<(echo -n "REAL_VALUE")
 #   gcloud secrets versions add slack-webhook-url --data-file=<(echo -n "REAL_VALUE")
@@ -68,6 +78,15 @@ resource "google_secret_manager_secret_version" "slack_webhook_url_placeholder" 
   }
 }
 
+resource "google_secret_manager_secret_version" "slack_bot_token_placeholder" {
+  secret      = google_secret_manager_secret.slack_bot_token.id
+  secret_data = "placeholder"
+
+  lifecycle {
+    ignore_changes = [secret_data]
+  }
+}
+
 # Allow runtime SA to read both secrets
 resource "google_secret_manager_secret_iam_member" "chatops_signing_secret_accessor" {
   secret_id = google_secret_manager_secret.slack_signing_secret.secret_id
@@ -81,10 +100,16 @@ resource "google_secret_manager_secret_iam_member" "chatops_webhook_url_accessor
   member    = "serviceAccount:${google_service_account.chatops_sa.email}"
 }
 
+resource "google_secret_manager_secret_iam_member" "chatops_bot_token_accessor" {
+  secret_id = google_secret_manager_secret.slack_bot_token.secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.chatops_sa.email}"
+}
+
 # runops-gateway Cloud Run service
 resource "google_cloud_run_v2_service" "runops_gateway" {
-  name               = "runops-gateway"
-  location           = var.region
+  name                = "runops-gateway"
+  location            = var.region
   deletion_protection = true
 
   template {
