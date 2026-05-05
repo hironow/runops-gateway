@@ -10,6 +10,18 @@
 #   just pubsub-down
 
 services:
+  # Jaeger v2 all-in-one. OTLP gRPC (4317) is on by default in v2 — no
+  # COLLECTOR_OTLP_ENABLED env required (that was the v1 flag). Image and
+  # port choices follow ADR 0020 + experiments/2026-05-05_otel-cloud-run-pubsub-jaeger.md.
+  jaeger:
+    image: cr.jaegertracing.io/jaegertracing/jaeger:2.17.0
+    container_name: runops-jaeger
+    ports:
+      - "16686:16686" # Jaeger UI
+      - "4317:4317"   # OTLP gRPC (default ingest)
+      - "4318:4318"   # OTLP HTTP
+    restart: unless-stopped
+
   pubsub-emulator:
     image: ghcr.io/hironow/firebase-pubsub-emulator:latest
     build:
