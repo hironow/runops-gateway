@@ -17,17 +17,17 @@ import (
 // stubNotifier records every call and reports a configurable error so tests can
 // drive the FallbackNotifier through specific failure paths.
 type stubPrimaryNotifier struct {
-	mu              sync.Mutex
-	updateCalls     int
-	replaceCalls    int
-	ephemeralCalls  int
-	offerCalls      int
-	rebuildCalls    int
-	updateErr       error
-	replaceErr      error
-	ephemeralErr    error
-	offerErr        error
-	rebuildErr      error
+	mu             sync.Mutex
+	updateCalls    int
+	replaceCalls   int
+	ephemeralCalls int
+	offerCalls     int
+	rebuildCalls   int
+	updateErr      error
+	replaceErr     error
+	ephemeralErr   error
+	offerErr       error
+	rebuildErr     error
 }
 
 func (s *stubPrimaryNotifier) UpdateMessage(_ context.Context, _ port.NotifyTarget, _ string) error {

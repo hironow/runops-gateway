@@ -99,8 +99,8 @@ func TestOutboundReceiver_OnMessage_AcksOnEmptyOrUnparseable(t *testing.T) {
 	r := NewOutboundReceiver(hdl)
 
 	for name, msg := range map[string]*fakeMessage{
-		"empty data":         {id: "e", data: nil},
-		"not-a-dmail":        {id: "g", data: []byte("not a dmail")},
+		"empty data":           {id: "e", data: nil},
+		"not-a-dmail":          {id: "g", data: []byte("not a dmail")},
 		"unclosed frontmatter": {id: "u", data: []byte("---\nkind: report\nbody")},
 	} {
 		t.Run(name, func(t *testing.T) {

@@ -61,4 +61,3 @@ func TestParseDispatchActionValue_RejectsGarbage(t *testing.T) {
 		t.Error("expected error for malformed JSON, got nil")
 	}
 }
-

@@ -14,11 +14,11 @@ import (
 // (handful of /agent invocations per day) makes this trivially adequate; the
 // lazy GC ensures the map size stays bounded by ttl × concurrent operators.
 type MemoryConsumedStore struct {
-	mu       sync.Mutex
-	tokens   map[string]time.Time // token -> earliest expiry
-	ttl      time.Duration
-	clock    func() time.Time
-	gcEvery  int
+	mu        sync.Mutex
+	tokens    map[string]time.Time // token -> earliest expiry
+	ttl       time.Duration
+	clock     func() time.Time
+	gcEvery   int
 	gcCounter int
 }
 

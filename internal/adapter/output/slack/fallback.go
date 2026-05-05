@@ -24,11 +24,11 @@ import (
 // chat.postEphemeral scope. Errors from primary.SendEphemeral propagate as is;
 // the caller is expected to log and continue.
 type FallbackNotifier struct {
-	primary           port.Notifier
+	primary            port.Notifier
 	chatPostMessageURL string
-	botToken          string
-	defaultChannelID  string
-	httpClient        *http.Client
+	botToken           string
+	defaultChannelID   string
+	httpClient         *http.Client
 }
 
 // NewFallbackNotifier constructs a FallbackNotifier.
@@ -43,11 +43,11 @@ type FallbackNotifier struct {
 // caller to populate target.ChannelID explicitly.
 func NewFallbackNotifier(primary port.Notifier, chatPostMessageURL, botToken, defaultChannelID string) *FallbackNotifier {
 	return &FallbackNotifier{
-		primary:           primary,
+		primary:            primary,
 		chatPostMessageURL: chatPostMessageURL,
-		botToken:          botToken,
-		defaultChannelID:  defaultChannelID,
-		httpClient:        http.DefaultClient,
+		botToken:           botToken,
+		defaultChannelID:   defaultChannelID,
+		httpClient:         http.DefaultClient,
 	}
 }
 
