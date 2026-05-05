@@ -91,13 +91,39 @@ sender 情報を付けて識別する。
 
 1. **OfferContinuation が 404 を返す問題** — トラフィックシフト自体は成功するが、
    次のカナリアステップボタンを表示する `OfferContinuation` が Slack response_url
-   への POST で 404 を返すことがある。Phase 1 着手前に切り分けたい。
+   への POST で 404 を返すことがある。
+
+   調査結果（2026-05-05、コード読み取り + 仕様照合）:
+
+   - **post 層の 404 ハンドリングは正常**: `internal/adapter/output/slack/notifier.go:132`
+     で 404 を error に変換しており、`TestPost_404_ReturnsErrorWithBody` でカバー済み
+   - **不明なのは「なぜ 404 が起きるか」**: Slack response_url の仕様上の制約に抵触している可能性
+   - **仮説 1 (最有力)**: `response_url` の **30 分有効期限** 超過。
+     handler.go 側は 25 分タイムアウトを設けているが (`responseURLTimeout = 25 * time.Minute`)、
+     `approveShift` の途中で UpdateMessage → 長時間 LRO → OfferContinuation の
+     順で 30 分を超えうる構造になっている。特にマルチリソースの逐次処理 (ADR 0010) で顕在化
+   - **仮説 2**: 同一 response_url の **5 回使用制限** 超過。
+     `offerOrFallback` のフォールバックチェーン (UpdateMessage + OfferContinuation +
+     fallback UpdateMessage) で 1 回の操作で 3-4 回消費する。連続失敗時は 5 回を超える
+   - **仮説 3**: `BuildProgressMessage` が生成する Block Kit の構造不正で
+     200 OK を返しつつ `invalid_blocks` エラー（`TestPost_200InvalidBlocks_NoErrorButLogsWarning`
+     が示す silent failure パスと類似）
+
+   **次のアクション** (別ブランチで TDD):
+
+   - `internal/usecase/runops_test.go` に **シーケンス全体** の再現テストを追加
+     - `TestApproveShift_OfferContinuationFailsAfter5Calls` — 6 回目で 404 を返す mock server
+     - `TestApproveShift_OfferContinuationFailsAfter30Min` — 仮想時計で 30 分超過を再現
+   - 修正方向: (a) operator visible な expiry warning の挿入、
+     (b) response_url 使用回数のメトリクス化、(c) chat.postMessage への自動 fallback (ADR 0006 と関連)
+
 2. **Slack API モックテスト** — `httptest.NewServer` での response_url 応答パターン
-   テストが未整備。
+   テストが未整備。Phase 1 と並行して `internal/usecase/runops_test.go` に
+   シーケンステストを追加することで部分的にカバーされる。
 3. **`MemoryStore` の永続化** — プロセス再起動でリセット（intent.md にて
    best-effort 扱いと割り切ったため、Phase 2 までは現状維持）。
 4. **Slack `chat.update` API 対応** — CLI 実行時の既存 Slack メッセージ無効化
-   （ADR 0006）が未実装。
+   （ADR 0006）が未実装。OfferContinuation 404 問題の修正方向 (c) と統合される可能性あり。
 
 ---
 
