@@ -18,8 +18,13 @@ import (
 // the Pub/Sub SDK; the OutboundSubscriber only owns the receive loop and ack
 // semantics. See FallbackNotifier (ADR 0017) for the actual Bot Token /
 // chat.postMessage transport.
+//
+// Phase 4a (ADR 0019) optionally adds an ApprovalRequester so HIGH severity
+// convergence D-Mails surface as in-channel 4-eyes approval requests instead
+// of plain thread replies.
 type DispatchResultHandler struct {
 	notifier port.Notifier
+	approver port.ApprovalRequester // nil → graceful fallback to plain reply
 }
 
 // NewDispatchResultHandler wires a result handler around any port.Notifier
@@ -27,6 +32,15 @@ type DispatchResultHandler struct {
 // thread without a live response_url).
 func NewDispatchResultHandler(n port.Notifier) *DispatchResultHandler {
 	return &DispatchResultHandler{notifier: n}
+}
+
+// WithApprovalRequester returns the handler with an ApprovalRequester wired in.
+// HIGH severity convergence D-Mails will route through the approver instead of
+// posting a plain thread reply. Returns the same handler so the call can chain
+// after NewDispatchResultHandler.
+func (h *DispatchResultHandler) WithApprovalRequester(a port.ApprovalRequester) *DispatchResultHandler {
+	h.approver = a
+	return h
 }
 
 // Handle renders mail into a Slack message and posts it back to the originating
@@ -59,6 +73,18 @@ func (h *DispatchResultHandler) Handle(ctx context.Context, mail domain.DMail) e
 		// is long expired by the time results come back through Pub/Sub. The
 		// FallbackNotifier handles this by going straight to chat.postMessage
 		// with channel + thread_ts.
+	}
+
+	// Phase 4a (ADR 0019): HIGH severity convergence demands a 4-eyes approval
+	// request rather than a plain thread reply. Falls back gracefully if no
+	// ApprovalRequester is wired (deployment hasn't enabled Phase 4a yet).
+	if mail.Kind == domain.DMailKindConvergence &&
+		mail.Metadata["severity"] == "high" &&
+		h.approver != nil {
+		if err := h.approver.PostApprovalRequest(ctx, target, mail); err != nil {
+			return fmt.Errorf("dispatch result: post approval request: %w", err)
+		}
+		return nil
 	}
 
 	if err := h.notifier.UpdateMessage(ctx, target, text); err != nil {

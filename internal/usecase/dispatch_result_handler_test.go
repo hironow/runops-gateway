@@ -151,6 +151,96 @@ func TestDispatchResultHandler_PropagatesNotifierError(t *testing.T) {
 	}
 }
 
+// recordingApprovalRequester captures every PostApprovalRequest call so
+// Phase 4a tests can assert the HIGH severity convergence routing.
+type recordingApprovalRequester struct {
+	mu      sync.Mutex
+	mails   []domain.DMail
+	targets []port.NotifyTarget
+	err     error
+}
+
+func (r *recordingApprovalRequester) PostApprovalRequest(_ context.Context, target port.NotifyTarget, mail domain.DMail) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.mails = append(r.mails, mail)
+	r.targets = append(r.targets, target)
+	return r.err
+}
+
+func (r *recordingApprovalRequester) snapshot() ([]domain.DMail, []port.NotifyTarget) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	mails := append([]domain.DMail{}, r.mails...)
+	targets := append([]port.NotifyTarget{}, r.targets...)
+	return mails, targets
+}
+
+func TestDispatchResultHandler_HighSeverityConvergence_PostsApprovalRequest(t *testing.T) {
+	notif := &recordingThreadNotifier{}
+	approver := &recordingApprovalRequester{}
+	h := usecase.NewDispatchResultHandler(notif).WithApprovalRequester(approver)
+
+	mail := makeDMail(domain.DMailKindConvergence, "ADR-003 violation", true)
+	mail.Source = "amadeus"
+	mail.Target = "sightjack"
+	mail.Metadata["severity"] = "high"
+	mail.Metadata["requester_id"] = "U_ORIG_DISPATCH"
+
+	if err := h.Handle(context.Background(), mail); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	mails, targets := approver.snapshot()
+	if len(mails) != 1 {
+		t.Fatalf("expected 1 approval request, got %d", len(mails))
+	}
+	if mails[0].Source != "amadeus" || mails[0].Target != "sightjack" {
+		t.Errorf("approval mail fields drifted: %+v", mails[0])
+	}
+	if targets[0].ChannelID != "C123" || targets[0].ThreadTS != "1700000000.000050" {
+		t.Errorf("approval target routing wrong: %+v", targets[0])
+	}
+	if got := notif.snapshot(); len(got) != 0 {
+		t.Errorf("regular thread reply must be suppressed for HIGH severity convergence; got %d updates", len(got))
+	}
+}
+
+func TestDispatchResultHandler_NonHighConvergence_FallsBackToTextReply(t *testing.T) {
+	notif := &recordingThreadNotifier{}
+	approver := &recordingApprovalRequester{}
+	h := usecase.NewDispatchResultHandler(notif).WithApprovalRequester(approver)
+
+	mail := makeDMail(domain.DMailKindConvergence, "minor warning", true)
+	mail.Metadata["severity"] = "low"
+
+	if err := h.Handle(context.Background(), mail); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if got, _ := approver.snapshot(); len(got) != 0 {
+		t.Errorf("approval requester must not fire for low-severity convergence; got %d", len(got))
+	}
+	if got := notif.snapshot(); len(got) != 1 {
+		t.Errorf("low-severity convergence should still post a regular thread reply; got %d", len(got))
+	}
+}
+
+func TestDispatchResultHandler_HighSeverity_FallsBackWhenApprovalRequesterNil(t *testing.T) {
+	notif := &recordingThreadNotifier{}
+	// Do NOT call WithApprovalRequester — simulates a deployment that has not
+	// wired Phase 4a yet. Behavior must degrade gracefully (regular reply).
+	h := usecase.NewDispatchResultHandler(notif)
+
+	mail := makeDMail(domain.DMailKindConvergence, "high but no approver wired", true)
+	mail.Metadata["severity"] = "high"
+
+	if err := h.Handle(context.Background(), mail); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if got := notif.snapshot(); len(got) != 1 {
+		t.Errorf("missing ApprovalRequester should fall back to plain thread reply; got %d", len(got))
+	}
+}
+
 func TestDispatchResultHandler_RejectsUnknownKind(t *testing.T) {
 	// Defensive: if a future producer slips a kind we do not format yet,
 	// return nil + drop so we do not nack-loop forever in production.

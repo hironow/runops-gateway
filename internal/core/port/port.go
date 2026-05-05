@@ -120,6 +120,18 @@ type ConsumedTokenStore interface {
 	MarkConsumed(token string) bool
 }
 
+// ApprovalRequester posts an interactive Block Kit approval request into a
+// Slack thread. Phase 4a (ADR 0019) uses this for HIGH severity convergence
+// D-Mails that require a 4-eyes human approval before the gateway publishes
+// the convergence acknowledgement back into dmail-inbound.
+//
+// Distinct from Notifier because it carries the full source DMail (so the
+// Block Kit builder can render the producer body + 4-eyes guard text) and
+// posts in_channel rather than ephemeral.
+type ApprovalRequester interface {
+	PostApprovalRequest(ctx context.Context, target NotifyTarget, mail domain.DMail) error
+}
+
 // DMailPublisher hands a DMail to the cross-process transport that delivers
 // it to the destination tool's inbox via phonewave.
 //
