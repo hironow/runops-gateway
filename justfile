@@ -29,10 +29,15 @@ test:
 test-v:
     go test -v ./...
 
-# Run linting (go vet + golangci-lint)
+# Run linting (go vet + golangci-lint + semgrep)
 lint:
     go vet ./...
     CGO_ENABLED=0 go tool -modfile=tools/go.mod golangci-lint run ./...
+    just semgrep
+
+# Run project semgrep rules
+semgrep:
+    semgrep --config .semgrep/rules/ --error
 
 lint-md:
     @{{MARKDOWNLINT}} --fix "*.md" "docs/**/*.md"

@@ -1,0 +1,26 @@
+rules:
+  - id: runops-concurrency-bare-goroutine-in-slack-handler
+    message: |
+      Bare 'go func()' inside the Slack handler package leaks goroutines past
+      tp.Shutdown and silently drops OTel spans (Issue 0005). Use
+      h.goAsync(func() { ... }) so the PendingTracker can wait for the
+      goroutine before TracerProvider shutdown.
+
+      See:
+        - docs/issues/0005-async-span-flush.md
+        - experiments/2026-05-06_otel-goroutine-flush-cloudrun.md
+    severity: ERROR
+    languages: [go]
+    paths:
+      include:
+        - "/internal/adapter/input/slack/"
+      exclude:
+        - "*_test.go"
+    pattern: |
+      go func() {
+        ...
+      }()
+    metadata:
+      category: concurrency
+      added: "2026-05-06"
+      issue: docs/issues/0005-async-span-flush.md

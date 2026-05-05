@@ -17,6 +17,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 
+	"github.com/hironow/runops-gateway/internal/adapter/observability"
 	"github.com/hironow/runops-gateway/internal/core/domain"
 	"github.com/hironow/runops-gateway/internal/core/port"
 )
@@ -78,7 +79,8 @@ type InteractiveHandler struct {
 	dispatchUseCase   DispatchUseCase
 	notifier          port.Notifier
 	consumedTokens    port.ConsumedTokenStore
-	approvalPublisher port.DMailPublisher // optional, Phase 4a (ADR 0019)
+	approvalPublisher port.DMailPublisher           // optional, Phase 4a (ADR 0019)
+	pending           *observability.PendingTracker // optional, Issue 0005 — when nil, falls back to bare `go`
 	signingSecret     string
 }
 
@@ -104,6 +106,28 @@ func NewInteractiveHandler(useCase port.RunOpsUseCase, dispatchUseCase DispatchU
 func (h *InteractiveHandler) WithApprovalPublisher(p port.DMailPublisher) *InteractiveHandler {
 	h.approvalPublisher = p
 	return h
+}
+
+// WithPendingTracker registers an *observability.PendingTracker so every
+// goroutine spawned to keep working after ServeHTTP returns is tracked and
+// can be wait()-ed by main before tp.Shutdown — see Issue 0005 +
+// experiments/2026-05-06_otel-goroutine-flush-cloudrun.md. When the tracker
+// is nil the handler falls back to a bare `go func()`; this preserves the
+// pre-PendingTracker behaviour for tests / dev.
+func (h *InteractiveHandler) WithPendingTracker(p *observability.PendingTracker) *InteractiveHandler {
+	h.pending = p
+	return h
+}
+
+// goAsync runs fn in a goroutine. When PendingTracker is wired the goroutine
+// is registered so cmd/server's shutdown sequence can wait for it; otherwise
+// it falls through to a plain `go fn()`.
+func (h *InteractiveHandler) goAsync(fn func()) {
+	if h.pending != nil {
+		h.pending.Go(fn)
+		return
+	}
+	go fn()
 }
 
 // responseURLTimeout matches Slack's 30-minute response_url validity, leaving
@@ -217,23 +241,23 @@ func (h *InteractiveHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// 4. Dispatch asynchronously (avoid Slack 3-second timeout).
 	switch {
 	case strings.HasPrefix(action.ActionID, "approve"):
-		go func() {
+		h.goAsync(func() {
 			ctx, cancel := context.WithTimeout(context.Background(), responseURLTimeout)
 			defer cancel()
 			if err := h.useCase.ApproveAction(ctx, req, target); err != nil {
 				slog.Error("ApproveAction failed", "error", err)
 				h.notifyIfTimeout(ctx, err, target)
 			}
-		}()
+		})
 	case action.ActionID == "deny":
-		go func() {
+		h.goAsync(func() {
 			ctx, cancel := context.WithTimeout(context.Background(), responseURLTimeout)
 			defer cancel()
 			if err := h.useCase.DenyAction(ctx, req, target); err != nil {
 				slog.Error("DenyAction failed", "error", err)
 				h.notifyIfTimeout(ctx, err, target)
 			}
-		}()
+		})
 	default:
 		slog.Warn("unknown action_id", "action_id", action.ActionID)
 	}
@@ -278,27 +302,27 @@ func (h *InteractiveHandler) handleDispatchAction(traceCtx context.Context, acti
 			"action", action.ActionID, "clicker", clickerUserID, "requester", dv.RequesterID)
 		span.SetStatus(codes.Error, "clicker mismatch")
 		span.End()
-		go func() {
+		h.goAsync(func() {
 			ctx, cancel := context.WithTimeout(traceCtx, 30*time.Second)
 			defer cancel()
 			if err := h.notifier.SendEphemeral(ctx, target, clickerUserID,
 				"🚫 自分が発行した dispatch のみ承認・キャンセルできます"); err != nil {
 				slog.Error("dispatch hijack ephemeral notification failed", "error", err)
 			}
-		}()
+		})
 		return
 	}
 
 	if action.ActionID == "dispatch_deny" {
 		span.SetAttributes(attribute.String("dispatch.outcome", "denied"))
 		span.End()
-		go func() {
+		h.goAsync(func() {
 			ctx, cancel := context.WithTimeout(traceCtx, responseURLTimeout)
 			defer cancel()
 			if err := h.notifier.UpdateMessage(ctx, target, "🚫 Dispatch をキャンセルしました"); err != nil {
 				slog.Error("dispatch_deny notification failed", "error", err)
 			}
-		}()
+		})
 		return
 	}
 
@@ -317,14 +341,14 @@ func (h *InteractiveHandler) handleDispatchAction(traceCtx context.Context, acti
 			slog.Warn("dispatch_approve replay rejected", "token", token, "clicker", clickerUserID)
 			span.SetStatus(codes.Error, "replay rejected")
 			span.End()
-			go func() {
+			h.goAsync(func() {
 				ctx, cancel := context.WithTimeout(traceCtx, 30*time.Second)
 				defer cancel()
 				if err := h.notifier.SendEphemeral(ctx, target, clickerUserID,
 					"⚠️ この dispatch は既に処理済みです（重複クリック防止）"); err != nil {
 					slog.Error("dispatch replay ephemeral failed", "error", err)
 				}
-			}()
+			})
 			return
 		}
 	}
@@ -344,13 +368,13 @@ func (h *InteractiveHandler) handleDispatchAction(traceCtx context.Context, acti
 		SlackChannelID: target.ChannelID,
 		SlackThreadTS:  target.ThreadTS,
 	}
-	go func() {
+	h.goAsync(func() {
 		ctx, cancel := context.WithTimeout(traceCtx, responseURLTimeout)
 		defer cancel()
 		if err := h.dispatchUseCase.DispatchAgentTask(ctx, req, target); err != nil {
 			slog.Error("DispatchAgentTask failed", "error", err)
 		}
-	}()
+	})
 }
 
 // dispatchApproveToken derives the consumed-token key for a dispatchActionValue.
@@ -410,28 +434,28 @@ func (h *InteractiveHandler) handleApprovalAction(traceCtx context.Context, acti
 			"action", action.ActionID, "clicker", clickerUserID, "original_requester", av.OriginalRequesterID)
 		span.SetStatus(codes.Error, "4-eyes guard rejected")
 		span.End()
-		go func() {
+		h.goAsync(func() {
 			ctx, cancel := context.WithTimeout(traceCtx, 30*time.Second)
 			defer cancel()
 			if err := h.notifier.SendEphemeral(ctx, target, clickerUserID,
 				"🚫 元 dispatch を発行した本人は HIGH severity を承認できません (4-eyes)"); err != nil {
 				slog.Error("approval 4-eyes ephemeral notification failed", "error", err)
 			}
-		}()
+		})
 		return
 	}
 
 	if action.ActionID == "approval_deny" {
 		span.SetAttributes(attribute.String("approval.outcome", "denied"))
 		span.End()
-		go func() {
+		h.goAsync(func() {
 			ctx, cancel := context.WithTimeout(traceCtx, responseURLTimeout)
 			defer cancel()
 			if err := h.notifier.UpdateMessage(ctx, target,
 				fmt.Sprintf("🚫 HIGH severity 承認拒否 by <@%s>", clickerUserID)); err != nil {
 				slog.Error("approval_deny notification failed", "error", err)
 			}
-		}()
+		})
 		return
 	}
 
@@ -449,14 +473,14 @@ func (h *InteractiveHandler) handleApprovalAction(traceCtx context.Context, acti
 			slog.Warn("approval_approve replay rejected", "token", token, "clicker", clickerUserID)
 			span.SetStatus(codes.Error, "replay rejected")
 			span.End()
-			go func() {
+			h.goAsync(func() {
 				ctx, cancel := context.WithTimeout(traceCtx, 30*time.Second)
 				defer cancel()
 				if err := h.notifier.SendEphemeral(ctx, target, clickerUserID,
 					"⚠️ この approval は既に処理済みです (重複クリック防止)"); err != nil {
 					slog.Error("approval replay ephemeral failed", "error", err)
 				}
-			}()
+			})
 			return
 		}
 	}
@@ -481,7 +505,7 @@ func (h *InteractiveHandler) handleApprovalAction(traceCtx context.Context, acti
 		},
 	}
 
-	go func() {
+	h.goAsync(func() {
 		ctx, cancel := context.WithTimeout(traceCtx, responseURLTimeout)
 		defer cancel()
 		if _, err := h.approvalPublisher.PublishDMail(ctx, mail); err != nil {
@@ -496,7 +520,7 @@ func (h *InteractiveHandler) handleApprovalAction(traceCtx context.Context, acti
 			fmt.Sprintf("✅ HIGH severity 承認完了 by <@%s>", clickerUserID)); err != nil {
 			slog.Error("approval success notification failed", "error", err)
 		}
-	}()
+	})
 }
 
 // approvalToken is the consumed-token key for an approvalActionValue.
