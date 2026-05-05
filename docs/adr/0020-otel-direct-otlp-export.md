@@ -20,8 +20,25 @@ TracerProvider を init し、OTLP exporter で local Jaeger / prod Cloud Trace
 の両方に出せる」ことが要求されている。`OTEL_EXPORTER_OTLP_ENDPOINT` を
 切り替えるだけで両対応となる「同一コード・別 endpoint」を達成したい。
 
-達成イメージ: **Slack 受信 → Pub/Sub publish → cross-process → subscriber →
-file write / notifier、までを 1 trace_id で繋ぐ**。
+達成イメージ (本 ADR の範囲):
+
+**Slack 受信 → gateway 内 publish span → Pub/Sub library が message
+attribute へ trace context を自動 inject → subscriber 側 library が
+extract して receive span を立て → atomic write までを 1 trace_id で繋ぐ**。
+
+つまり **Pub/Sub message bus を 1 つ跨ぐ範囲** までは本 ADR と ADR 0021
+で 1 trace に閉じる (gateway 起点の inbound 経路、emitter 起点の outbound
+経路、それぞれ独立した 1 trace)。
+
+範囲外 (別 ADR で扱う):
+
+- **5本柱との連結**: receiver が phonewave outbox に書き込む `.md` の
+  frontmatter に traceparent を埋め、5本柱 (paintress / amadeus 等) が
+  読んで span を再開する file 境界の伝搬。これは 5本柱側の OTel 対応
+  状況依存で、本リポ独立では決められない (関連: ADR 0021 Open questions)
+- **gateway 内 outbound subscriber goroutine と inbound HTTP handler の
+  trace 連結**: ADR 0018 で別 trigger としたので、別 trace になるのが正
+  (publisher 側 emitter が起点)
 
 詳細な調査は `experiments/2026-05-05_otel-cloud-run-pubsub-jaeger.md` を
 参照 (公式 URL 引用付き)。
@@ -36,15 +53,18 @@ file write / notifier、までを 1 trace_id で繋ぐ**。
 
 ### 案 B (Sidecar) の問題点
 
-- Cloud Run multi-container は **`run.googleapis.com/launch-stage: ALPHA`**
-  注釈が現状要る (2026-05 時点で GA でない)。本番運用に ALPHA 依存を
-  入れたくない
-- Cloud Run の cold start にコンテナ 1 つ分の起動時間が乗る。Slack 3 秒
-  ルール (ADR 0002) を満たす予算が削られる
-- アプリと sidecar が落ちる障害ドメインを増やす — sidecar が死ぬと trace が
-  全消しになるが、アプリ側は気付かない
-- 設定要素が増える: service.yaml + Secret Manager + IAM + ALPHA 注釈 vs
-  env 変数 1 つ
+- **本質的な不採用根拠**: Cloud Run の cold start にコンテナ 1 つ分の起動
+  時間が乗る。Slack 3 秒ルール (ADR 0002) を満たす予算が削られる
+- アプリと sidecar が落ちる障害ドメインを増やす — sidecar が死ぬと trace
+  が全消しになるが、アプリ側は気付かない (silent failure)
+- 設定要素が増える: service.yaml + IAM + Collector config 管理 vs env 変数
+  1 つ
+- **Cloud Run multi-container 自体は 2024-09 GA**
+  (https://cloud.google.com/run/docs/deploying#sidecars) なので技術的には
+  使える。ただし Google が公式に提供する `otelcol-google` イメージを
+  使う Cloud Run 専用デプロイ recipe は依然 `launch-stage: ALPHA` 注釈
+  必須 (2026-05 時点、公式 doc 記載)。このため「sidecar を自前管理する
+  /Google 公式の ALPHA recipe に乗る」のどちらも余分な運用負荷を生む
 
 ### 案 C (VM 共用 Collector) の問題点
 
@@ -85,9 +105,9 @@ local Jaeger / prod Cloud Trace の両方に出せる。
   `gcp.NewDetector()` で Cloud Run / VM / dev macOS のどれでも安全に
   自動 detect。`service.name` は `OTEL_SERVICE_NAME` を必須環境変数化
 - Pub/Sub trace context は `pubsub.NewClientWithConfig` の
-  `EnableOpenTelemetryTracing: true` で library 任せにする。ADR 0013 が
-  message attribute schema に記載していた `traceparent` は **新 ADR で
-  supersede して削除** する (library の `googclient_*` prefix と二重
+  `EnableOpenTelemetryTracing: true` で library 任せにする。ADR 0013 の
+  message attribute schema に記載していた `traceparent` は **ADR 0021
+  で supersede して削除** する (library の `googclient_*` prefix と二重
   inject になるため)
 - Sampling は env で実行時切替: prod は
   `OTEL_TRACES_SAMPLER=parentbased_traceidratio` + `OTEL_TRACES_SAMPLER_ARG=0.1`
