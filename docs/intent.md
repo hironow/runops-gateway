@@ -666,11 +666,14 @@ Cloud Run から Coder workspace を毎回起動する必要はない。
 ## 関連 ADR と外部ドキュメント
 
 このリポジトリの `docs/adr/` には 0001-0011 の決定が既に記録されている。
-5本柱統合に伴い以下の ADR を追加予定:
+5本柱統合に伴い以下の ADR を追加した（2026-05-05）:
 
 - ADR 0012: 新しい D-Mail kind は追加しない（決定 A）
 - ADR 0013: outbox 書き込みは Pub/Sub bridge を経由する（決定 B）
 - ADR 0014: Slack 通知は runops-gateway に集約する（決定 C）
+
+以下は今後追加予定:
+
 - ADR 0015: dmail-receiver / dmail-emitter を本リポジトリで管理する責務範囲
 
 外部ドキュメント参照:
