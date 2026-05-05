@@ -239,6 +239,87 @@ go run ./cmd/runops approve service YOUR_SERVICE_NAME \
 
 ---
 
+## パターン C: Pub/Sub bridge (Phase 2a/b/c)
+
+`/agent` Slash Command 経路 → Pub/Sub → phonewave outbox → 5本柱、および
+逆向きの 5本柱 archive → Pub/Sub → gateway 経路を、Firebase Pub/Sub emulator
+で完全にローカル検証する。GCP も Slack も実体は不要。
+
+### C-0. emulator + topic 初期化
+
+```bash
+just pubsub-up        # Firebase Pub/Sub emulator (Docker Compose)
+just pubsub-init      # dmail-inbound / dmail-outbound + DLQ + subscriptions
+```
+
+`http://localhost:9399` (Pub/Sub) と `http://localhost:4000` (Web UI) で生きている
+ことを確認。停止は `just pubsub-down`。
+
+### C-1. 自動 integration test (CI 想定)
+
+```bash
+just test-integration
+```
+
+`PUBSUB_EMULATOR_HOST=localhost:9399` を立てて `tests/integration/` 配下の
+`//go:build integration` テストを走らせる。Phase 2a publish / Phase 2b receiver /
+Phase 2c emitter の 3 ラウンドトリップを 1 行で確認できる。
+
+### C-2. 手動 smoke (Phase 2b 受信側)
+
+```bash
+SMOKE=$(mktemp -d /tmp/runops-smoke-XXXXXX)
+mkdir -p "$SMOKE/outbox"
+
+# 1) receiver を別ターミナルで起動
+PUBSUB_EMULATOR_HOST=localhost:9399 \
+PUBSUB_PROJECT_ID=runops-local \
+PUBSUB_DMAIL_INBOUND_SUB=dmail-receiver-sub \
+PHONEWAVE_OUTBOX_DIR="$SMOKE/outbox" \
+go run ./cmd/dmail-receiver
+
+# 2) もう一つのターミナルから 1 件 publish
+PUBSUB_EMULATOR_HOST=localhost:9399 \
+go run ./scripts/smoke/dispatch.go --target paintress --text "hello phase 2b"
+
+# 3) outbox に .md が atomic write される
+ls "$SMOKE/outbox/"   # → <pubsub_message_id>.md
+```
+
+### C-3. 手動 smoke (Phase 2c 送信側)
+
+```bash
+mkdir -p "$SMOKE/archive"
+
+# 1) emitter を別ターミナルで起動
+PUBSUB_EMULATOR_HOST=localhost:9399 \
+PUBSUB_PROJECT_ID=runops-local \
+PUBSUB_DMAIL_OUTBOUND_TOPIC=dmail-outbound \
+PHONEWAVE_ARCHIVE_DIRS="$SMOKE/archive" \
+go run ./cmd/dmail-emitter
+
+# 2) D-Mail .md を archive に直接 write
+cat > "$SMOKE/archive/report.md" <<'EOF'
+---
+dmail-schema-version: "1"
+id: smoke-001
+kind: report
+target: amadeus
+source: paintress
+idempotency_key: smoke-001
+slack_thread_ts: "1700000000.000050"
+---
+
+PR #42 merged.
+EOF
+
+# 3) outbound subscription から pull して中身を確認
+curl -s -X POST "http://localhost:9399/v1/projects/runops-local/subscriptions/runops-gateway-sub:pull" \
+  -H "Content-Type: application/json" -d '{"maxMessages":5}' | python3 -m json.tool
+```
+
+---
+
 ## トラブルシューティング
 
 ### `SLACK_SIGNING_SECRET is required` で起動しない
@@ -261,4 +342,46 @@ echo $SLACK_SIGNING_SECRET   # test-secret であること
 ```bash
 tailscale status           # Funnel が有効か確認
 tailscale funnel status    # 公開ポートの確認
+```
+
+### `just test-integration` が flaky に fail する (Pub/Sub bridge)
+
+最も多い原因 3 つ。
+
+**(1) stale daemon が subscription を hijack している**
+
+`go run ./cmd/dmail-receiver` や `dmail-emitter` を Ctrl-C / kill した直後でも、
+`go run` が子バイナリに SIGTERM を伝播しないことがある (macOS 上の go ツール
+チェーンの既知挙動)。subscription を背景で pull し続けるプロセスが居ると、
+integration test の subscriber が message を奪われる:
+
+```bash
+pgrep -af "dmail-receiver|dmail-emitter"   # stale プロセスを探す
+pkill -KILL -f "exe/dmail-receiver"        # 子バイナリを直接 kill
+pkill -KILL -f "exe/dmail-emitter"
+```
+
+**(2) 前 run のメッセージが subscription に残っている**
+
+emulator は subscription を再起動しても永続化される。手動 smoke の途中だった
+場合は drain してから再 run する:
+
+```bash
+for sub in dmail-receiver-sub runops-gateway-sub; do
+  curl -s -X POST "http://localhost:9399/v1/projects/runops-local/subscriptions/$sub:pull" \
+    -H "Content-Type: application/json" -d '{"maxMessages":50}' > /tmp/pull-$sub.json
+  ack=$(python3 -c "import json; r=json.load(open('/tmp/pull-$sub.json')); print(','.join(['\"'+m['ackId']+'\"' for m in r.get('receivedMessages',[])]))")
+  [ -n "$ack" ] && curl -s -X POST "http://localhost:9399/v1/projects/runops-local/subscriptions/$sub:acknowledge" \
+    -H "Content-Type: application/json" -d "{\"ackIds\":[$ack]}"
+done
+```
+
+**(3) test cache が古い結果を返している**
+
+`go test` は同じソース + 同じ env で cached PASS を返すため、emulator 状態の
+変化を検知しない。順序依存の flake を即発見するには `-count=1`:
+
+```bash
+PUBSUB_EMULATOR_HOST=localhost:9399 PUBSUB_PROJECT_ID=runops-local \
+  go test -tags=integration -count=1 ./tests/integration/...
 ```
