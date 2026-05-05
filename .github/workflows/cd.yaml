@@ -26,6 +26,28 @@ permissions:
 #   CLOUD_RUN_LOCATION          e.g. asia-northeast1
 #   TOFU_STATE_BUCKET           GCS bucket for OpenTofu remote state
 #   ALLOWED_SLACK_USERS         comma-separated Slack user IDs for approval
+#
+# Optional GitHub repository variables (Phase 4b — runops-gateway own infra):
+#
+#   SLACK_DEFAULT_CHANNEL_ID    fallback channel id for FallbackNotifier
+#                               (ADR 0017). Empty disables the fallback.
+#   OTEL_TRACES_SAMPLER_ARG     OTel parentbased_traceidratio arg
+#                               (ADR 0020). Default 0.1; tune without code.
+#   EXE_CODER_VM_SA_EMAIL       service account email of the exe-coder VM
+#                               that runs dmail-receiver / dmail-emitter
+#                               (managed in hironow/dotfiles). Empty until
+#                               that SA is provisioned; the Pub/Sub IAM
+#                               and Cloud Trace agent grants skip on empty.
+#   DLQ_ALERT_EMAIL             Cloud Monitoring incident destination for
+#                               the D-Mail DLQ forwarding alert. Empty
+#                               disables the channel and policy. See
+#                               docs/runbooks/dlq.md.
+#   CLOUD_RUN_MIN_INSTANCES     runops-gateway Cloud Run min_instance_count.
+#                               Default 0 (cold start ok). Set to 1 when
+#                               enabling Phase 3 outbound StreamingPull
+#                               (ADR 0018).
+#   CLOUD_RUN_MAX_INSTANCES     runops-gateway Cloud Run max_instance_count.
+#                               Default 3.
 # ---------------------------------------------------------------------------
 
 jobs:
@@ -94,6 +116,16 @@ jobs:
           # applies leave the image unchanged (ignore_changes in main.tf).
           TF_VAR_image: >-
             ${{ vars.ARTIFACT_REGISTRY_LOCATION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/runops/runops-gateway:latest
+          # Phase 4b optional vars — empty defaults are accepted by tofu.
+          TF_VAR_slack_default_channel_id: ${{ vars.SLACK_DEFAULT_CHANNEL_ID }}
+          TF_VAR_otel_traces_sampler_arg: ${{ vars.OTEL_TRACES_SAMPLER_ARG }}
+          TF_VAR_exe_coder_vm_sa_email: ${{ vars.EXE_CODER_VM_SA_EMAIL }}
+          TF_VAR_dlq_alert_email: ${{ vars.DLQ_ALERT_EMAIL }}
+          # Cloud Run scaling — empty (variable not set) keeps the tofu code
+          # defaults (0 / 3); set CLOUD_RUN_MIN_INSTANCES=1 when enabling
+          # Phase 3 outbound StreamingPull (ADR 0018).
+          TF_VAR_cloud_run_min_instances: ${{ vars.CLOUD_RUN_MIN_INSTANCES }}
+          TF_VAR_cloud_run_max_instances: ${{ vars.CLOUD_RUN_MAX_INSTANCES }}
 
   # -------------------------------------------------------------------------
   # Build container image and deploy to Cloud Run.
@@ -146,9 +178,57 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Deploy to Cloud Run
+        id: deploy
         uses: google-github-actions/deploy-cloudrun@v2
         with:
           service: runops-gateway
           region: ${{ vars.CLOUD_RUN_LOCATION }}
           image: ${{ env.IMAGE }}:${{ github.sha }}
           # deploy-cloudrun@v2 routes 100% traffic to the new revision by default.
+
+      # Post-deploy smoke: prove that the just-shipped revision is reachable
+      # AND that the basic Slack request-handling pipeline still rejects
+      # spoofed inputs the way it did on the previous revision. Both checks
+      # are read-only — no GCP-side side effects, no Slack API calls.
+      #
+      # If any of these fail, the deploy job fails and the operator should
+      # immediately roll back via:
+      #   gcloud run services update-traffic runops-gateway \
+      #     --region=${{ vars.CLOUD_RUN_LOCATION }} \
+      #     --to-revisions=PREVIOUS_REVISION=100
+      - name: Post-deploy smoke
+        env:
+          SERVICE_URL: ${{ steps.deploy.outputs.url }}
+        run: |
+          set -euo pipefail
+
+          # 1. /healthz は 200 を返す
+          status=$(curl -s -o /dev/null -w "%{http_code}" "${SERVICE_URL}/healthz")
+          if [ "${status}" != "200" ]; then
+            echo "smoke: /healthz returned ${status}, expected 200" >&2
+            exit 1
+          fi
+
+          # 2. /slack/interactive は不正署名で 401 (Phase 0 regression)
+          status=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST "${SERVICE_URL}/slack/interactive" \
+            -H "X-Slack-Signature: v0=invalid" \
+            -H "X-Slack-Request-Timestamp: 1" \
+            --data-raw "payload=%7B%7D")
+          if [ "${status}" != "401" ]; then
+            echo "smoke: /slack/interactive bad-sig returned ${status}, expected 401" >&2
+            exit 1
+          fi
+
+          # 3. /slack/command は不正署名で 401 (Phase 1 regression)
+          status=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST "${SERVICE_URL}/slack/command" \
+            -H "X-Slack-Signature: v0=invalid" \
+            -H "X-Slack-Request-Timestamp: 1" \
+            --data-raw "command=%2Frunops")
+          if [ "${status}" != "401" ]; then
+            echo "smoke: /slack/command bad-sig returned ${status}, expected 401" >&2
+            exit 1
+          fi
+
+          echo "smoke: all checks passed against ${SERVICE_URL}"

@@ -53,3 +53,64 @@ variable "cloud_sql_instance" {
   type        = string
   default     = ""
 }
+
+variable "slack_default_channel_id" {
+  description = <<-EOT
+    Slack channel ID used by FallbackNotifier when the original
+    response_url has expired and no in-thread channel context is
+    available (ADR 0017). Empty disables the fallback (primary errors
+    propagate as before — Phase 0 behaviour).
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "cloud_run_min_instances" {
+  description = <<-EOT
+    runops-gateway Cloud Run service の min_instance_count。
+    ADR 0018 (dmail-outbound StreamingPull) は warm instance を要求するため
+    Phase 3 outbound 機能を本番有効化するときは 1 に上げる。それまでは 0
+    (cold start 許容、コスト最小) が default。
+  EOT
+  type        = number
+  default     = 0
+}
+
+variable "cloud_run_max_instances" {
+  description = "runops-gateway Cloud Run service の max_instance_count"
+  type        = number
+  default     = 3
+}
+
+variable "otel_traces_sampler_arg" {
+  description = <<-EOT
+    OTEL_TRACES_SAMPLER_ARG passed to runops-gateway. Used with
+    'parentbased_traceidratio'. Start at 0.1 and tune as Pub/Sub-driven
+    span volume reveals itself in Cloud Trace quota usage.
+  EOT
+  type        = string
+  default     = "0.1"
+}
+
+variable "dlq_alert_email" {
+  description = <<-EOT
+    Email address that receives Cloud Monitoring incidents when the D-Mail
+    Pub/Sub bridge forwards a message to a DLQ. Empty disables the alert
+    + notification channel (handy for early bootstrap before email routing
+    is decided). See docs/runbooks/dlq.md for the triage workflow.
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "exe_coder_vm_sa_email" {
+  description = <<-EOT
+    Service account email of the exe-coder VM (managed in hironow/dotfiles).
+    Granted pubsub.subscriber on dmail-inbound-receiver and pubsub.publisher on
+    dmail-outbound so the dmail-receiver and dmail-emitter daemons can run
+    against the production topology. Leave empty until the exe-coder VM SA is
+    actually provisioned — IAM bindings are created only when this is set.
+  EOT
+  type        = string
+  default     = ""
+}

@@ -78,6 +78,15 @@ func (s *stubAuthChecker) IsExpired(_ int64) bool     { return false }
 
 var _ port.AuthChecker = (*stubAuthChecker)(nil)
 
+// stubDispatcher implements Dispatcher.
+type stubDispatcher struct{}
+
+func (s *stubDispatcher) Dispatch(_ context.Context, _ domain.DispatchRequest) error {
+	return nil
+}
+
+var _ port.Dispatcher = (*stubDispatcher)(nil)
+
 func TestNotifyTargetSlackMode(t *testing.T) {
 	// given
 	target := port.NotifyTarget{

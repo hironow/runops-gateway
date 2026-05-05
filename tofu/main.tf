@@ -45,6 +45,16 @@ resource "google_secret_manager_secret" "slack_webhook_url" {
   }
 }
 
+# Secret Manager: Slack Bot Token (xoxb-...) per ADR 0017.
+# Enables the FallbackNotifier to drop into chat.postMessage when the
+# response_url has expired or hit its 5-call limit.
+resource "google_secret_manager_secret" "slack_bot_token" {
+  secret_id = "slack-bot-token"
+  replication {
+    auto {}
+  }
+}
+
 # Placeholder secret versions — replace with real values via gcloud after tofu apply:
 #   gcloud secrets versions add slack-signing-secret --data-file=<(echo -n "REAL_VALUE")
 #   gcloud secrets versions add slack-webhook-url --data-file=<(echo -n "REAL_VALUE")
@@ -68,6 +78,15 @@ resource "google_secret_manager_secret_version" "slack_webhook_url_placeholder" 
   }
 }
 
+resource "google_secret_manager_secret_version" "slack_bot_token_placeholder" {
+  secret      = google_secret_manager_secret.slack_bot_token.id
+  secret_data = "placeholder"
+
+  lifecycle {
+    ignore_changes = [secret_data]
+  }
+}
+
 # Allow runtime SA to read both secrets
 resource "google_secret_manager_secret_iam_member" "chatops_signing_secret_accessor" {
   secret_id = google_secret_manager_secret.slack_signing_secret.secret_id
@@ -81,10 +100,16 @@ resource "google_secret_manager_secret_iam_member" "chatops_webhook_url_accessor
   member    = "serviceAccount:${google_service_account.chatops_sa.email}"
 }
 
+resource "google_secret_manager_secret_iam_member" "chatops_bot_token_accessor" {
+  secret_id = google_secret_manager_secret.slack_bot_token.secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.chatops_sa.email}"
+}
+
 # runops-gateway Cloud Run service
 resource "google_cloud_run_v2_service" "runops_gateway" {
-  name               = "runops-gateway"
-  location           = var.region
+  name                = "runops-gateway"
+  location            = var.region
   deletion_protection = true
 
   template {
@@ -120,6 +145,66 @@ resource "google_cloud_run_v2_service" "runops_gateway" {
           }
         }
       }
+      # Phase 4a (ADR 0017): Bot Token enables FallbackNotifier and the
+      # ApprovalRequester chat.postMessage path.
+      env {
+        name = "SLACK_BOT_TOKEN"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.slack_bot_token.secret_id
+            version = "latest"
+          }
+        }
+      }
+      env {
+        name  = "SLACK_DEFAULT_CHANNEL_ID"
+        value = var.slack_default_channel_id
+      }
+      # Phase 2a (ADR 0013): switch DispatchService to the Pub/Sub backend.
+      env {
+        name  = "DISPATCHER_BACKEND"
+        value = "pubsub"
+      }
+      env {
+        name  = "PUBSUB_PROJECT_ID"
+        value = var.project_id
+      }
+      env {
+        name  = "PUBSUB_DMAIL_INBOUND_TOPIC"
+        value = google_pubsub_topic.dmail_inbound.name
+      }
+      # Phase 3 (ADR 0018): in-process StreamingPull on dmail-outbound.
+      env {
+        name  = "PUBSUB_DMAIL_OUTBOUND_SUB"
+        value = google_pubsub_subscription.dmail_outbound_gateway.name
+      }
+      # ADR 0020: direct OTLP gRPC export to Cloud Trace via the Telemetry
+      # API. Sampler defaults pulled from var.otel_traces_sampler_arg so the
+      # ratio can be tuned without a tofu apply once we get prod traffic.
+      env {
+        name  = "OTEL_EXPORTER_OTLP_ENDPOINT"
+        value = "telemetry.googleapis.com:443"
+      }
+      env {
+        name  = "OTEL_EXPORTER_OTLP_PROTOCOL"
+        value = "grpc"
+      }
+      env {
+        name  = "OTEL_SERVICE_NAME"
+        value = "runops-gateway"
+      }
+      env {
+        name  = "OTEL_TRACES_SAMPLER"
+        value = "parentbased_traceidratio"
+      }
+      env {
+        name  = "OTEL_TRACES_SAMPLER_ARG"
+        value = var.otel_traces_sampler_arg
+      }
+      env {
+        name  = "OTEL_BSP_SCHEDULE_DELAY"
+        value = "2000"
+      }
 
       resources {
         limits = {
@@ -130,8 +215,12 @@ resource "google_cloud_run_v2_service" "runops_gateway" {
     }
 
     scaling {
-      min_instance_count = 0
-      max_instance_count = 1
+      # ADR 0018: in-process dmail-outbound StreamingPull needs a warm instance
+      # to keep the gRPC stream alive. To enable Phase 3 outbound in prod, set
+      # var.cloud_run_min_instances = 1; default 0 keeps Cloud Run idle-cost
+      # at zero until outbound traffic actually exists.
+      min_instance_count = var.cloud_run_min_instances
+      max_instance_count = var.cloud_run_max_instances
     }
   }
 

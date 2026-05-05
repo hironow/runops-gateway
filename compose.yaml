@@ -1,0 +1,43 @@
+# Local development services for runops-gateway.
+#
+# Currently runs the Firebase Pub/Sub emulator so Phase 2a/2b/2c integration
+# tests (and manual /agent dispatch flows) can exercise the publish path
+# without touching real GCP. Adapted from /Users/nino/ai-code/async/impl/.
+#
+# Quick start (see docs/local-verification.md):
+#   just pubsub-up      # start emulator + create topics/subscriptions
+#   just test-integration
+#   just pubsub-down
+
+services:
+  # Jaeger v2 all-in-one. OTLP gRPC (4317) is on by default in v2 — no
+  # COLLECTOR_OTLP_ENABLED env required (that was the v1 flag). Image and
+  # port choices follow ADR 0020 + experiments/2026-05-05_otel-cloud-run-pubsub-jaeger.md.
+  jaeger:
+    image: cr.jaegertracing.io/jaegertracing/jaeger:2.17.0
+    container_name: runops-jaeger
+    ports:
+      - "16686:16686" # Jaeger UI
+      - "4317:4317"   # OTLP gRPC (default ingest)
+      - "4318:4318"   # OTLP HTTP
+    restart: unless-stopped
+
+  pubsub-emulator:
+    image: ghcr.io/hironow/firebase-pubsub-emulator:latest
+    build:
+      context: ./docker/firebase-emulator
+      dockerfile: Dockerfile
+    container_name: runops-pubsub-emulator
+    ports:
+      - "9399:9399" # Pub/Sub emulator
+      - "4400:4400" # Emulator hub (used by healthcheck)
+      - "4000:4000" # Emulator UI (optional, browser at http://localhost:4000)
+    environment:
+      - FIREBASE_PROJECT_ID=runops-local
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:4400/emulators"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 30s
+    restart: unless-stopped

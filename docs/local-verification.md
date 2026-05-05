@@ -239,6 +239,268 @@ go run ./cmd/runops approve service YOUR_SERVICE_NAME \
 
 ---
 
+## パターン C: Pub/Sub bridge (Phase 2a/b/c)
+
+`/runops` Slash Command 経路 → Pub/Sub → phonewave outbox → 5本柱、および
+逆向きの 5本柱 archive → Pub/Sub → gateway 経路を、Firebase Pub/Sub emulator
+で完全にローカル検証する。GCP も Slack も実体は不要。
+
+### C-0. emulator + topic 初期化
+
+```bash
+just pubsub-up        # Firebase Pub/Sub emulator (Docker Compose)
+just pubsub-init      # dmail-inbound / dmail-outbound + DLQ + subscriptions
+```
+
+`http://localhost:9399` (Pub/Sub) と `http://localhost:4000` (Web UI) で生きている
+ことを確認。停止は `just pubsub-down`。
+
+### C-1. 自動 integration test (CI 想定)
+
+```bash
+just test-integration
+```
+
+`PUBSUB_EMULATOR_HOST=localhost:9399` を立てて `tests/integration/` 配下の
+`//go:build integration` テストを走らせる。Phase 2a publish / Phase 2b receiver /
+Phase 2c emitter の 3 ラウンドトリップを 1 行で確認できる。
+
+### C-2. 手動 smoke (Phase 2b 受信側)
+
+```bash
+SMOKE=$(mktemp -d /tmp/runops-smoke-XXXXXX)
+mkdir -p "$SMOKE/outbox"
+
+# 1) receiver を別ターミナルで起動
+PUBSUB_EMULATOR_HOST=localhost:9399 \
+PUBSUB_PROJECT_ID=runops-local \
+PUBSUB_DMAIL_INBOUND_SUB=dmail-receiver-sub \
+PHONEWAVE_OUTBOX_DIR="$SMOKE/outbox" \
+go run ./cmd/dmail-receiver
+
+# 2) もう一つのターミナルから 1 件 publish
+PUBSUB_EMULATOR_HOST=localhost:9399 \
+go run ./scripts/smoke/dispatch.go --target paintress --text "hello phase 2b"
+
+# 3) outbox に .md が atomic write される
+ls "$SMOKE/outbox/"   # → <pubsub_message_id>.md
+```
+
+### C-4. 手動 smoke (Phase 3: dmail-outbound → Slack thread reply)
+
+gateway を `PUBSUB_DMAIL_OUTBOUND_SUB=runops-gateway-sub` 込みで起動し、
+mock Slack server (or 実 Slack の test channel) を立てて、emulator に
+publish した結果が thread reply として届くまで確認できる。
+
+```bash
+# 1) mock Slack chat.postMessage receiver (port 18888)
+python3 -c '
+from http.server import HTTPServer, BaseHTTPRequestHandler
+class H(BaseHTTPRequestHandler):
+    def do_POST(self):
+        body = self.rfile.read(int(self.headers["Content-Length"]))
+        print(f"[mock slack] {body.decode()}")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(b"{\"ok\":true,\"ts\":\"1700000000.000100\"}")
+HTTPServer(("0.0.0.0", 18888), H).serve_forever()
+' &
+
+# 2) gateway を Phase 3 設定で起動
+SLACK_SIGNING_SECRET=test-secret \
+SLACK_BOT_TOKEN=xoxb-fake \
+PUBSUB_EMULATOR_HOST=localhost:9399 \
+PUBSUB_PROJECT_ID=runops-local \
+PUBSUB_DMAIL_OUTBOUND_SUB=runops-gateway-sub \
+go run ./cmd/server &
+# (chat.postMessage URL を mock に向けたい場合は cmd/server の slackChatPostMessageURL
+#  定数を一時的に "http://localhost:18888/" に変えてから go run、もしくは
+#  一時的に integration test を直接実行して挙動を確認するのが現実的)
+
+# 3) Phase 2c emitter が無くても、Pub/Sub に直接 publish して経路を確認できる
+# (scripts/smoke/dispatch.go の Target を amadeus 等に変えるなど任意)
+```
+
+### C-3. 手動 smoke (Phase 2c 送信側)
+
+```bash
+mkdir -p "$SMOKE/archive"
+
+# 1) emitter を別ターミナルで起動
+PUBSUB_EMULATOR_HOST=localhost:9399 \
+PUBSUB_PROJECT_ID=runops-local \
+PUBSUB_DMAIL_OUTBOUND_TOPIC=dmail-outbound \
+PHONEWAVE_ARCHIVE_DIRS="$SMOKE/archive" \
+go run ./cmd/dmail-emitter
+
+# 2) D-Mail .md を archive に直接 write
+cat > "$SMOKE/archive/report.md" <<'EOF'
+---
+dmail-schema-version: "1"
+id: smoke-001
+kind: report
+target: amadeus
+source: paintress
+idempotency_key: smoke-001
+slack_thread_ts: "1700000000.000050"
+---
+
+PR #42 merged.
+EOF
+
+# 3) outbound subscription から pull して中身を確認
+curl -s -X POST "http://localhost:9399/v1/projects/runops-local/subscriptions/runops-gateway-sub:pull" \
+  -H "Content-Type: application/json" -d '{"maxMessages":5}' | python3 -m json.tool
+```
+
+---
+
+## パターン D: HIGH severity 4-eyes approval (Phase 4a)
+
+`amadeus` の HIGH severity convergence (ADR 0019) が gateway で
+`approval_approve` / `approval_deny` ボタン付き chat.postMessage に
+化けることを確認する。Slack 実体は不要 (mock receiver で代替)。
+
+### D-1. mock Slack chat.postMessage receiver を立てる
+
+```bash
+# 受信した payload を /tmp/post.json に書き出す簡易 server
+go run - <<'GO' &
+package main
+import (
+  "encoding/json"; "io"; "log"; "net/http"
+)
+func main() {
+  http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+    var body any; _ = json.NewDecoder(r.Body).Decode(&body)
+    f, _ := os.Create("/tmp/post.json"); io.Copy(f, ...)  // 簡略
+    json.NewEncoder(w).Encode(map[string]any{"ok": true, "ts": "1700000000.000100"})
+  })
+  log.Fatal(http.ListenAndServe(":18080", nil))
+}
+GO
+```
+
+(実際は `tests/integration/pubsub_approval_test.go` の httptest セットアップを
+再利用するのが簡単。E-1 の `just test-integration` で同じ経路を
+emulator 込みで通せる)
+
+### D-2. emulator + gateway を Phase 4a 設定で起動
+
+```bash
+just pubsub-up && just pubsub-init
+
+PUBSUB_EMULATOR_HOST=localhost:9399 \
+  PUBSUB_PROJECT_ID=runops-local \
+  PUBSUB_DMAIL_INBOUND_TOPIC=dmail-inbound \
+  PUBSUB_DMAIL_OUTBOUND_SUB=dmail-outbound-sub \
+  DISPATCHER_BACKEND=pubsub \
+  SLACK_SIGNING_SECRET=test-secret \
+  SLACK_BOT_TOKEN=xoxb-mock \
+  SLACK_DEFAULT_CHANNEL_ID=C_LOCAL \
+  go run ./cmd/server
+```
+
+### D-3. HIGH severity convergence を直接 publish
+
+```bash
+gcloud --project runops-local pubsub topics publish dmail-outbound \
+  --message "$(cat <<'EOF'
+---
+schema_version: "1"
+kind: convergence
+target: sightjack
+source: amadeus
+idempotency_key: convergence-test-1
+metadata:
+  parent_idempotency_key: parent-1
+  slack_channel_id: C_LOCAL
+  slack_thread_ts: "1700000000.000050"
+  requester_id: U_ORIG
+  severity: high
+---
+HIGH severity convergence detected: foo bar
+EOF
+)"
+```
+
+mock Slack receiver の log で `approval_approve` ボタン付き Block Kit が
+来ていれば成功。
+
+### D-4. (オプション) integration test で 1 行確認
+
+```bash
+just test-integration   # tests/integration/pubsub_approval_test.go が含まれる
+```
+
+---
+
+## パターン E: OTel trace を Jaeger v2 で確認 (ADR 0020)
+
+3 binary すべてが `OTEL_EXPORTER_OTLP_ENDPOINT` 切替で local Jaeger に
+trace を送れることを確認する。
+
+### E-1. Jaeger を立てる
+
+```bash
+just trace-up           # cr.jaegertracing.io/jaegertracing/jaeger:2.17.0
+# UI: http://localhost:16686, OTLP gRPC: localhost:4317
+```
+
+### E-2. cmd/server を OTel 込みで起動 → Slack POST 1 件
+
+```bash
+SLACK_SIGNING_SECRET=test-secret \
+  OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 \
+  OTEL_SERVICE_NAME=runops-gateway-local \
+  OTEL_TRACES_SAMPLER=parentbased_traceidratio \
+  OTEL_TRACES_SAMPLER_ARG=1.0 \
+  go run ./cmd/server &
+
+curl -sf http://localhost:8080/healthz   # /healthz は trace から除外される
+# pattern A-2 の curl で /slack/interactive を叩く (HMAC 計算込み)
+```
+
+### E-3. Jaeger UI で確認
+
+```
+open http://localhost:16686
+# Service ドロップダウンで 'runops-gateway-local' を選択
+# 'POST /slack/interactive' root span 配下に slack.verify_signature →
+# slack.handle_dispatch_action → usecase.dispatch_agent_task → send dmail-inbound
+# が 1 trace_id で繋がっていることを確認
+```
+
+### E-4. 3 binary 連携 trace (Pub/Sub bridge 込み)
+
+```bash
+just trace-up && just pubsub-up && just pubsub-init
+
+# 3 binary を OTLP endpoint 共通で並走
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 \
+  OTEL_TRACES_SAMPLER=parentbased_always_on \
+  PUBSUB_EMULATOR_HOST=localhost:9399 PUBSUB_PROJECT_ID=runops-local \
+  PHONEWAVE_OUTBOX_DIR=$(mktemp -d) \
+  PUBSUB_DMAIL_INBOUND_SUB=dmail-receiver-sub \
+  go run ./cmd/dmail-receiver &
+
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 \
+  OTEL_TRACES_SAMPLER=parentbased_always_on \
+  PUBSUB_EMULATOR_HOST=localhost:9399 PUBSUB_PROJECT_ID=runops-local \
+  PUBSUB_DMAIL_OUTBOUND_TOPIC=dmail-outbound \
+  PHONEWAVE_ARCHIVE_DIRS=$(mktemp -d) \
+  go run ./cmd/dmail-emitter &
+
+# その後 cmd/server も同様に起動 + 1 dispatch を流す。Jaeger UI に
+# runops-gateway / dmail-receiver / dmail-emitter の 3 service が並び、
+# inbound trace は publish->receive で 1 trace_id、outbound trace も同様
+```
+
+詳細な span tree は `docs/handover.md` の「ハマりどころ 7. trace context propagation」を参照。
+
+---
+
 ## トラブルシューティング
 
 ### `SLACK_SIGNING_SECRET is required` で起動しない
@@ -261,4 +523,46 @@ echo $SLACK_SIGNING_SECRET   # test-secret であること
 ```bash
 tailscale status           # Funnel が有効か確認
 tailscale funnel status    # 公開ポートの確認
+```
+
+### `just test-integration` が flaky に fail する (Pub/Sub bridge)
+
+最も多い原因 3 つ。
+
+**(1) stale daemon が subscription を hijack している**
+
+`go run ./cmd/dmail-receiver` や `dmail-emitter` を Ctrl-C / kill した直後でも、
+`go run` が子バイナリに SIGTERM を伝播しないことがある (macOS 上の go ツール
+チェーンの既知挙動)。subscription を背景で pull し続けるプロセスが居ると、
+integration test の subscriber が message を奪われる:
+
+```bash
+pgrep -af "dmail-receiver|dmail-emitter"   # stale プロセスを探す
+pkill -KILL -f "exe/dmail-receiver"        # 子バイナリを直接 kill
+pkill -KILL -f "exe/dmail-emitter"
+```
+
+**(2) 前 run のメッセージが subscription に残っている**
+
+emulator は subscription を再起動しても永続化される。手動 smoke の途中だった
+場合は drain してから再 run する:
+
+```bash
+for sub in dmail-receiver-sub runops-gateway-sub; do
+  curl -s -X POST "http://localhost:9399/v1/projects/runops-local/subscriptions/$sub:pull" \
+    -H "Content-Type: application/json" -d '{"maxMessages":50}' > /tmp/pull-$sub.json
+  ack=$(python3 -c "import json; r=json.load(open('/tmp/pull-$sub.json')); print(','.join(['\"'+m['ackId']+'\"' for m in r.get('receivedMessages',[])]))")
+  [ -n "$ack" ] && curl -s -X POST "http://localhost:9399/v1/projects/runops-local/subscriptions/$sub:acknowledge" \
+    -H "Content-Type: application/json" -d "{\"ackIds\":[$ack]}"
+done
+```
+
+**(3) test cache が古い結果を返している**
+
+`go test` は同じソース + 同じ env で cached PASS を返すため、emulator 状態の
+変化を検知しない。順序依存の flake を即発見するには `-count=1`:
+
+```bash
+PUBSUB_EMULATOR_HOST=localhost:9399 PUBSUB_PROJECT_ID=runops-local \
+  go test -tags=integration -count=1 ./tests/integration/...
 ```

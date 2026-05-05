@@ -42,9 +42,16 @@ const (
 )
 
 // NotifyTarget describes where and how a notification should be delivered.
+//
+// CallbackURL (Slack response_url) is the primary transport. ChannelID and
+// ThreadTS are populated when the call originates from /slack/interactive so
+// FallbackNotifier (ADR 0017) can fall back to chat.postMessage when the
+// response_url hits its 30-min / 5-call limits.
 type NotifyTarget struct {
 	CallbackURL string
 	Mode        NotifyMode
+	ChannelID   string
+	ThreadTS    string
 }
 
 // Notifier is a secondary port for sending user-facing notifications.
@@ -88,4 +95,56 @@ type StateStore interface {
 func OperationKey(req domain.ApprovalRequest) string {
 	return fmt.Sprintf("%s/%s/%s/%s/%d",
 		req.Project, req.ResourceType, req.ResourceNames, req.Action, req.IssuedAt)
+}
+
+// Dispatcher is a secondary port that delivers a DispatchRequest to its target
+// agent. Phase 1 implementation (StubDispatcher) only logs the request; Phase 2
+// will swap in a Pub/Sub publisher that bridges to phonewave outbox.
+type Dispatcher interface {
+	// Dispatch hands off req to the underlying transport. Returns an error if
+	// the dispatch could not be initiated; the actual agent execution is
+	// asynchronous and reported back through a separate channel.
+	Dispatch(ctx context.Context, req domain.DispatchRequest) error
+}
+
+// ConsumedTokenStore tracks single-use tokens (e.g. dispatch_approve clicks)
+// to defeat button replay. Distinct from StateStore because the lifecycle is
+// "consume forever within TTL" rather than "lock then release".
+//
+// Phase 1 backing implementation is in-memory (per Cloud Run instance). Phase 2
+// will replace it with a Pub/Sub message ID-based dedup that survives autoscale.
+type ConsumedTokenStore interface {
+	// MarkConsumed records token as used. Returns true if this is the first
+	// time the token was seen (caller may proceed), false if already
+	// consumed (caller must reject as a replay).
+	MarkConsumed(token string) bool
+}
+
+// ApprovalRequester posts an interactive Block Kit approval request into a
+// Slack thread. Phase 4a (ADR 0019) uses this for HIGH severity convergence
+// D-Mails that require a 4-eyes human approval before the gateway publishes
+// the convergence acknowledgement back into dmail-inbound.
+//
+// Distinct from Notifier because it carries the full source DMail (so the
+// Block Kit builder can render the producer body + 4-eyes guard text) and
+// posts in_channel rather than ephemeral.
+type ApprovalRequester interface {
+	PostApprovalRequest(ctx context.Context, target NotifyTarget, mail domain.DMail) error
+}
+
+// DMailPublisher hands a DMail to the cross-process transport that delivers
+// it to the destination tool's inbox via phonewave.
+//
+// Phase 2a implementation: Cloud Pub/Sub publisher (publishes to the
+// dmail-inbound topic; an exe-coder VM subscriber receives and atomic-writes
+// the .md file into a phonewave-watched outbox — see ADR 0013).
+//
+// Phase 1 / development uses a stub publisher (StubDispatcher) until the
+// Pub/Sub infrastructure is provisioned.
+type DMailPublisher interface {
+	// PublishDMail returns the publisher-assigned message ID on success and
+	// an error otherwise. Implementations should set Pub/Sub message
+	// attributes per ADR 0013 (kind, target_tool, source,
+	// dmail_schema_version, idempotency_key, traceparent).
+	PublishDMail(ctx context.Context, m domain.DMail) (string, error)
 }

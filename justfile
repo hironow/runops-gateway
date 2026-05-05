@@ -52,6 +52,42 @@ tidy:
 test-runn:
     runn run tests/runn/*.yaml
 
+# Run integration tests (require Pub/Sub emulator: just pubsub-up + just pubsub-init)
+test-integration:
+    PUBSUB_EMULATOR_HOST=localhost:9399 PUBSUB_PROJECT_ID=runops-local \
+        go test -tags=integration ./tests/integration/...
+
+# Start Pub/Sub emulator (Phase 2a/2b/2c local development)
+pubsub-up:
+    docker compose -f compose.yaml up -d pubsub-emulator
+    @echo "waiting for emulator to be healthy (timeout 60s)..."
+    @timeout 60 sh -c 'until docker inspect -f "{{{{.State.Health.Status}}}}" runops-pubsub-emulator | grep -q healthy; do sleep 2; done'
+    @echo "emulator ready: http://localhost:9399 (UI: http://localhost:4000)"
+
+# Initialize topics + subscriptions on the running emulator
+pubsub-init:
+    {{justfile_directory()}}/scripts/init-pubsub.sh
+
+# Stop the emulator
+pubsub-down:
+    docker compose -f compose.yaml stop pubsub-emulator
+
+# Start local Jaeger v2 (OpenTelemetry trace backend, ADR 0020)
+trace-up:
+    docker compose -f compose.yaml up -d jaeger
+    @echo "Jaeger UI: http://localhost:16686"
+    @echo "Set OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 in your shell to ship spans there."
+
+# Stop local Jaeger
+trace-down:
+    docker compose -f compose.yaml stop jaeger
+
+# Open Jaeger UI in browser
+trace-view:
+    @command -v open >/dev/null 2>&1 && open http://localhost:16686 \
+        || command -v xdg-open >/dev/null 2>&1 && xdg-open http://localhost:16686 \
+        || echo "Please open http://localhost:16686 manually"
+
 # Test notify-slack.sh: dry-run payload structure + bash/Go compress_gz round-trip
 # Requires: bash, gzip, base64, jq
 test-scripts:
