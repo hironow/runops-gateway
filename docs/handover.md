@@ -772,12 +772,28 @@ outbound (5 pillars -> Slack):
 - 30分超えたら chat.postMessage 経由
 - 失敗時の通知は両方試す（fallback）
 
+### 8-pre. `/healthz` は Cloud Run / Knative の予約 path
+
+Cloud Run の GFE (Google Front End) は `/healthz` を **system reserved**
+として扱い、container に届く前に 404 (HTML 形式の Google generic error) を
+返す。Phase 0 image 時代から同じだったが、PR #15 の post-deploy smoke で
+初めて顕在化した。
+
+**回避策**: 健全性確認 path は **`/_healthz`** を使う (`cmd/server/main.go`
+で登録、`cd.yaml` の post-deploy smoke も `/_healthz` を叩く)。
+
+判別方法 (再発時):
+- `curl <URL>/<path>` の response が `<title>Error 404 (Not Found)!!1</title>`
+  HTML だったら GFE が返している (container に届いていない)
+- `text/plain; charset=utf-8` + `404 page not found` だったら container 側
+  の Go ServeMux が返している (handler が登録されていないだけ)
+
 ### 9-pre. main promote 時の smoke と rollback
 
 CD pipeline (`.github/workflows/cd.yaml`) の `deploy` job 末尾に
 **post-deploy smoke** が入っている。3 項目を read-only で検査:
 
-1. `/healthz` 200
+1. `/_healthz` 200 (Cloud Run / Knative の予約 path `/healthz` は GFE が intercept するので使わない)
 2. `/slack/interactive` に invalid signature で 401 (Phase 0 regression)
 3. `/slack/command` に invalid signature で 401 (Phase 1 regression)
 

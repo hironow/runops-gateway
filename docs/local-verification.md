@@ -36,7 +36,7 @@ go run ./cmd/server
 起動確認:
 
 ```bash
-curl http://localhost:8080/healthz
+curl http://localhost:8080/_healthz
 # → {"status":"ok"}
 ```
 
@@ -62,7 +62,7 @@ just test-runn
 
 | ファイル | 確認内容 |
 |---|---|
-| `healthz.yaml` | `/healthz` が 200 + `{"status":"ok"}` を返す |
+| `healthz.yaml` | `/_healthz` が 200 + `{"status":"ok"}` を返す |
 | `invalid_signature.yaml` | 署名なしリクエストが 401 になる |
 | `approve_canary.yaml` | 正しい署名の approve ペイロードが 200 になる |
 | `deny_operation.yaml` | 正しい署名の deny ペイロードが 200 になる |
@@ -458,7 +458,7 @@ SLACK_SIGNING_SECRET=test-secret \
   OTEL_TRACES_SAMPLER_ARG=1.0 \
   go run ./cmd/server &
 
-curl -sf http://localhost:8080/healthz   # /healthz は trace から除外される
+curl -sf http://localhost:8080/_healthz   # /_healthz は trace から除外される
 # pattern A-2 の curl で /slack/interactive を叩く (HMAC 計算込み)
 ```
 
