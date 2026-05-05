@@ -60,13 +60,20 @@ jobs:
     outputs:
       tofu: ${{ steps.filter.outputs.tofu }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
-        id: filter
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          filters: |
-            tofu:
-              - 'tofu/**'
+          fetch-depth: 2
+      # Self-impl of dorny/paths-filter (kept out of the action allow list
+      # because it isn't a verified-creator marketplace action). Equivalent
+      # behaviour for our single 'tofu' filter.
+      - id: filter
+        run: |
+          set -euo pipefail
+          if git diff --name-only HEAD~1 HEAD | grep -qE '^tofu/'; then
+            echo "tofu=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "tofu=false" >> "$GITHUB_OUTPUT"
+          fi
 
   # -------------------------------------------------------------------------
   # Apply infrastructure changes.
@@ -87,15 +94,15 @@ jobs:
         working-directory: tofu
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - id: auth
-        uses: google-github-actions/auth@v2
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
         with:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
 
-      - uses: opentofu/setup-opentofu@v1
+      - uses: opentofu/setup-opentofu@fc711fa910b93cba0f3fbecaafc9f42fd0c411cb # v2.0.0
         with:
           tofu_version: latest
 
@@ -121,11 +128,12 @@ jobs:
           TF_VAR_otel_traces_sampler_arg: ${{ vars.OTEL_TRACES_SAMPLER_ARG }}
           TF_VAR_exe_coder_vm_sa_email: ${{ vars.EXE_CODER_VM_SA_EMAIL }}
           TF_VAR_dlq_alert_email: ${{ vars.DLQ_ALERT_EMAIL }}
-          # Cloud Run scaling — empty (variable not set) keeps the tofu code
-          # defaults (0 / 3); set CLOUD_RUN_MIN_INSTANCES=1 when enabling
+          # Cloud Run scaling — fall back to the tofu code defaults when the
+          # GitHub repo variable is unset, because tofu's number type rejects
+          # the empty string. Set CLOUD_RUN_MIN_INSTANCES=1 when enabling
           # Phase 3 outbound StreamingPull (ADR 0018).
-          TF_VAR_cloud_run_min_instances: ${{ vars.CLOUD_RUN_MIN_INSTANCES }}
-          TF_VAR_cloud_run_max_instances: ${{ vars.CLOUD_RUN_MAX_INSTANCES }}
+          TF_VAR_cloud_run_min_instances: ${{ vars.CLOUD_RUN_MIN_INSTANCES || '0' }}
+          TF_VAR_cloud_run_max_instances: ${{ vars.CLOUD_RUN_MAX_INSTANCES || '3' }}
 
   # -------------------------------------------------------------------------
   # Build container image and deploy to Cloud Run.
@@ -148,17 +156,17 @@ jobs:
         ${{ vars.ARTIFACT_REGISTRY_LOCATION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/runops/runops-gateway
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - id: auth
-        uses: google-github-actions/auth@v2
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
         with:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
 
-      - uses: google-github-actions/setup-gcloud@v2
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
 
       - name: Configure Docker for Artifact Registry
         run: |
@@ -166,7 +174,7 @@ jobs:
             ${{ vars.ARTIFACT_REGISTRY_LOCATION }}-docker.pkg.dev --quiet
 
       - name: Build and push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
         with:
           context: .
           push: true
@@ -179,7 +187,7 @@ jobs:
 
       - name: Deploy to Cloud Run
         id: deploy
-        uses: google-github-actions/deploy-cloudrun@v2
+        uses: google-github-actions/deploy-cloudrun@2028e2d7d30a78c6910e0632e48dd561b064884d # v3
         with:
           service: runops-gateway
           region: ${{ vars.CLOUD_RUN_LOCATION }}
