@@ -772,6 +772,25 @@ outbound (5 pillars -> Slack):
 - 30分超えたら chat.postMessage 経由
 - 失敗時の通知は両方試す（fallback）
 
+### 8-prepre. Pub/Sub DLQ は consumer が居ないと発火しない (実体験)
+
+PR #18 直後の prod 動作確認で `/runops sightjack approve-test-1` →
+Approve で Pub/Sub publish 成功 (msg id 取得)。`max_delivery_attempts=5`
+を超えれば DLQ alert が来ると期待したが、**consumer (exe-coder VM の
+dmail-receiver) が deploy されていない**ので message は subscription
+backlog に蓄積されるだけ。DLQ には流れず、`dmail-inbound-dlq-pull` も
+0 件のまま。
+
+これは Pub/Sub の正規仕様 (consumer の pull→nack のサイクルが無いと
+delivery_attempt がカウントされない)。alert は 2 種類で相補的:
+
+- `D-Mail DLQ message forwarded` — consumer 動作中の poison 検知
+- `D-Mail subscription backlog stale` — consumer 不在を `oldest_unacked_message_age`
+  > 1 日で検知 (PR #19 で追加)
+
+retention が 14 日なので 14 日以上 dmail-receiver が deploy されない
+場合は backlog から消失する。docs/runbooks/dlq.md の Trigger 節に詳細。
+
 ### 8-pre. `/healthz` は Cloud Run / Knative の予約 path
 
 Cloud Run の GFE (Google Front End) は `/healthz` を **system reserved**

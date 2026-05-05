@@ -32,9 +32,12 @@ type ApprovalRequest struct {
 // The message is posted in_channel (not ephemeral) so the whole team can see
 // that an approval is pending — that is the entire point of 4-eyes.
 func BuildApprovalRequest(p ApprovalRequest) SlackPayload {
+	// Original Requester は <@U...> mention で表示し、approver が誰を承認
+	// しているのかを @username で目視で確認できるようにする (4-eyes 違反
+	// 防止)。
 	detail := "*Source:* `" + safeTrunc(p.Source, 50) + "`\n" +
 		"*Target:* `" + safeTrunc(p.Target, 50) + "`\n" +
-		"*Original Requester:* `" + safeTrunc(p.OriginalRequesterID, 50) + "` " +
+		"*Original Requester:* <@" + safeTrunc(p.OriginalRequesterID, 50) + "> " +
 		"_(must NOT be the approver — 4-eyes)_" + "\n" +
 		"*Parent ID:* `" + safeTrunc(p.ParentIdempotencyKey, 64) + "`"
 
