@@ -45,7 +45,8 @@ or merge する運用とする。
 | **Phase 2b** | ✅ 完了 (2026-05-05, 同 branch) | `cmd/dmail-receiver` daemon: Pub/Sub StreamingPull → phonewave outbox に atomic write (`OutboxWriter`) |
 | **Phase 2c** | ✅ 完了 (2026-05-05, 同 branch) | `cmd/dmail-emitter` daemon: 5本柱 archive を fsnotify 監視 → Pub/Sub `dmail-outbound` publish (`Watcher` + `Emitter`) |
 | **Phase 3** | ✅ 完了 (2026-05-05, 同 branch) | gateway 内 `OutboundReceiver` (StreamingPull) → `DispatchResultHandler` → FallbackNotifier (chat.postMessage) で Slack thread reply。ADR 0018 (pull subscription)、metadata propagation (parent_idempotency_key / slack_channel_id / slack_thread_ts) |
-| Phase 4 | 📝 draft | HIGH severity approval gate + 本番化 (4-eyes、preempt 解除、Cloud Run min-instances=1、tofu の `slack-bot-token` / Pub/Sub IAM / SA 設定) |
+| **Phase 4a** | ✅ 完了 (2026-05-05, 同 branch) | HIGH severity convergence の 4-eyes approval gate (ADR 0019)。`ApprovalRequester` で Block Kit、`approval_approve` / `approval_deny` action_id を `InteractiveHandler` に追加、ConsumedTokenStore で one-time consume、approver != original_requester 強制、承認後 dmail-inbound に convergence ack を publish |
+| Phase 4b | 📝 draft | 本番化 (tofu で Pub/Sub topic / subscription / IAM、Cloud Run min-instances=1、`slack-bot-token` Secret Manager、preempt 解除) |
 
 「設計済 / 未着手」は intent.md と本ドキュメントに方針が書かれているが
 コードに手がついていない状態。
