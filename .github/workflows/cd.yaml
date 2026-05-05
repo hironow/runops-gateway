@@ -42,6 +42,12 @@ permissions:
 #                               the D-Mail DLQ forwarding alert. Empty
 #                               disables the channel and policy. See
 #                               docs/runbooks/dlq.md.
+#   CLOUD_RUN_MIN_INSTANCES     runops-gateway Cloud Run min_instance_count.
+#                               Default 0 (cold start ok). Set to 1 when
+#                               enabling Phase 3 outbound StreamingPull
+#                               (ADR 0018).
+#   CLOUD_RUN_MAX_INSTANCES     runops-gateway Cloud Run max_instance_count.
+#                               Default 3.
 # ---------------------------------------------------------------------------
 
 jobs:
@@ -115,6 +121,11 @@ jobs:
           TF_VAR_otel_traces_sampler_arg: ${{ vars.OTEL_TRACES_SAMPLER_ARG }}
           TF_VAR_exe_coder_vm_sa_email: ${{ vars.EXE_CODER_VM_SA_EMAIL }}
           TF_VAR_dlq_alert_email: ${{ vars.DLQ_ALERT_EMAIL }}
+          # Cloud Run scaling — empty (variable not set) keeps the tofu code
+          # defaults (0 / 3); set CLOUD_RUN_MIN_INSTANCES=1 when enabling
+          # Phase 3 outbound StreamingPull (ADR 0018).
+          TF_VAR_cloud_run_min_instances: ${{ vars.CLOUD_RUN_MIN_INSTANCES }}
+          TF_VAR_cloud_run_max_instances: ${{ vars.CLOUD_RUN_MAX_INSTANCES }}
 
   # -------------------------------------------------------------------------
   # Build container image and deploy to Cloud Run.

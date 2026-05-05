@@ -65,6 +65,23 @@ variable "slack_default_channel_id" {
   default     = ""
 }
 
+variable "cloud_run_min_instances" {
+  description = <<-EOT
+    runops-gateway Cloud Run service の min_instance_count。
+    ADR 0018 (dmail-outbound StreamingPull) は warm instance を要求するため
+    Phase 3 outbound 機能を本番有効化するときは 1 に上げる。それまでは 0
+    (cold start 許容、コスト最小) が default。
+  EOT
+  type        = number
+  default     = 0
+}
+
+variable "cloud_run_max_instances" {
+  description = "runops-gateway Cloud Run service の max_instance_count"
+  type        = number
+  default     = 3
+}
+
 variable "otel_traces_sampler_arg" {
   description = <<-EOT
     OTEL_TRACES_SAMPLER_ARG passed to runops-gateway. Used with
