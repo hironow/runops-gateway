@@ -1,23 +1,26 @@
 # Issue 0018: シンプルなメッセージ経路を確立する (Phase 1)
 
-> **実装後の差分メモ (2026-05-05, ✅ Phase 1 完了)**:
-> 当初は「Slash Command 受信 → Block Kit 確認ボタン → 承認時に dispatch」の
-> 2 ステップ対話で設計したが、実装では **Slash Command が直接 dispatch する
-> 1 ステップ** に簡略化した。理由:
+> **実装完了 (2026-05-05, ✅ 当初計画通りに着地)**:
+> 一度は「Slash Command が直接 dispatch する 1 ステップ」に簡略化した版で
+> merge しかけたが、Codex Review round 3 で **F-5 (確認ステップ削除) が致命**と
+> 指摘されたため、本 Issue の TDD 計画通りの 2 ステップ構成に戻した。
 >
-> - Slack 3 秒ルール内で「:eyes: dispatch 受け付けました」を即返せる
-> - StubDispatcher は slog のみで副作用なし → 確認ステップに値が薄い
-> - Phase 2 で PubsubDispatcher に差し替えても挙動は同じ
+> 最終的な経路:
 >
-> 「In Scope」の **Block Kit 確認 + Approve/Deny ボタン** および TDD 計画の
-> Test 5/6/7/8 (BlockKit 構造、Approve/Deny 動作、dedup) は **Phase 4 (HIGH severity
-> approval gate)** に移送した。Phase 4 で本物の人間承認を導入するときに、
-> 確認ステップを Phase 1 の dispatch path に挿入する形で実装する。
+> 1. `/agent <role> <text>` (Slash Command) → `POST /slack/command`
+> 2. CommandHandler が Block Kit ephemeral 確認を **同期で返す** (Approve / Deny ボタン)
+> 3. Approve クリック → `POST /slack/interactive` → `dispatch_approve`
+> 4. InteractiveHandler が dispatchActionValue を decode → DispatchAgentTask 実行
+> 5. StubDispatcher が role / text_len / text_sha256 / requester / idempotency_key /
+>    issued_at をログ出力 (text 生値は出さない、F-4 fix)
+> 6. Notifier が "✅ ... に dispatch を受け付けました" を response_url に返す
 >
-> 実装で追加されたのは Test 1/2/3/4 + parseSlashCommandText の単体テスト + UseCase
-> 4 ケース + StubDispatcher 3 ケース + 既存 Handler のリネーム。
-> 詳細は本ブランチのコミット (`refactor(slack)` / `feat(domain)` / `feat(dispatcher)`
-> / `feat(usecase)` / `feat(slack)` / `feat(server)`) を参照。
+> Phase 4 で扱う **HIGH severity 4-eyes 承認** はこの確認ステップを基盤に上乗せする
+> 形になる (今は requester == approver でよい)。
+>
+> 詳細は本ブランチのコミット (特に `feat(slack): add dispatch confirmation
+> building blocks` / `fix(slack): require Block Kit confirmation before
+> dispatch (F-5)`) を参照。
 
 ## Goal
 
