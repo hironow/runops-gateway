@@ -1,8 +1,8 @@
 # Issue 0005: HTTP handler の goroutine 内 span が Cloud Run idle shutdown までに flush されず lost する
 
 **Repo:** `hironow/runops-gateway` (本リポ完結)
-**Status:** 🟡 RED test 起票済 (`internal/adapter/observability/async_flush_test.go`、PR #N で `t.Skip`)、GREEN 実装 + 現行コードへの適用は別 PR
-**Depends on:** OTel goroutine flush ベスプラ調査 (background research、結果は `experiments/` に保存予定)
+**Status:** ✅ GREEN 完了 (PR `fix/async-span-flush-green`、2026-05-06)。 PendingTracker 実装 + handler 配線 + main shutdown 順序 + semgrep rule 全部入り
+**Depends on:** —
 
 ## Why
 
