@@ -37,6 +37,22 @@ func (d *PubsubDispatcher) Dispatch(ctx context.Context, req domain.DispatchRequ
 		return fmt.Errorf("pubsub dispatcher: DispatchRequest.Role is required")
 	}
 
+	metadata := map[string]string{
+		"requester_id": req.RequesterID,
+	}
+	// Phase 3 (ADR 0018) propagates these so the outbound subscriber can
+	// thread-reply into the right Slack message. Empty values are omitted
+	// because the receiver uses presence-of-key as the routing signal.
+	if req.SlackChannelID != "" {
+		metadata["slack_channel_id"] = req.SlackChannelID
+	}
+	if req.SlackThreadTS != "" {
+		metadata["slack_thread_ts"] = req.SlackThreadTS
+	}
+	if req.IdempotencyKey != "" {
+		metadata["parent_idempotency_key"] = req.IdempotencyKey
+	}
+
 	mail := domain.DMail{
 		ID:             newDMailID(),
 		Kind:           domain.DMailKindSpecification,
@@ -44,9 +60,7 @@ func (d *PubsubDispatcher) Dispatch(ctx context.Context, req domain.DispatchRequ
 		Source:         "runops-gateway-slack",
 		IdempotencyKey: req.IdempotencyKey,
 		Body:           req.Text,
-		Metadata: map[string]string{
-			"requester_id": req.RequesterID,
-		},
+		Metadata:       metadata,
 	}
 
 	id, err := d.publisher.PublishDMail(ctx, mail)

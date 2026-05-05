@@ -39,6 +39,69 @@ func (r *recordingDMailPublisher) snapshot() []domain.DMail {
 	return out
 }
 
+func TestPubsubDispatcher_PropagatesSlackThreadMetadataForPhase3(t *testing.T) {
+	// Phase 3 (ADR 0018) needs slack_channel_id / slack_thread_ts /
+	// parent_idempotency_key to travel through Pub/Sub so the outbound
+	// subscriber can route results back to the originating Slack thread.
+	pub := &recordingDMailPublisher{}
+	d := NewPubsubDispatcher(pub)
+
+	req := domain.DispatchRequest{
+		Role:           domain.AgentRolePaintress,
+		Text:           "fix M-42",
+		RequesterID:    "U0123ABCD",
+		IdempotencyKey: "phase3-key",
+		IssuedAt:       1700000000,
+		SlackChannelID: "C0SLACKCH",
+		SlackThreadTS:  "1700000000.000050",
+	}
+	if err := d.Dispatch(context.Background(), req); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	mails := pub.snapshot()
+	if len(mails) != 1 {
+		t.Fatalf("expected 1 publish, got %d", len(mails))
+	}
+	want := map[string]string{
+		"requester_id":           "U0123ABCD",
+		"slack_channel_id":       "C0SLACKCH",
+		"slack_thread_ts":        "1700000000.000050",
+		"parent_idempotency_key": "phase3-key",
+	}
+	for k, v := range want {
+		if mails[0].Metadata[k] != v {
+			t.Errorf("metadata[%s]=%q want %q (full metadata=%v)",
+				k, mails[0].Metadata[k], v, mails[0].Metadata)
+		}
+	}
+}
+
+func TestPubsubDispatcher_OmitsSlackMetadataForCLIDispatch(t *testing.T) {
+	// CLI dispatch (no Slack origin) must not emit empty metadata keys —
+	// the receiver uses presence-of-key as the signal that a message
+	// originated from Slack and should be threaded back.
+	pub := &recordingDMailPublisher{}
+	d := NewPubsubDispatcher(pub)
+
+	req := domain.DispatchRequest{
+		Role:           domain.AgentRoleAmadeus,
+		Text:           "scan",
+		RequesterID:    "operator@example.com",
+		IdempotencyKey: "cli-1",
+		IssuedAt:       1700000000,
+		// SlackChannelID + SlackThreadTS intentionally empty
+	}
+	if err := d.Dispatch(context.Background(), req); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	got := pub.snapshot()[0].Metadata
+	for _, key := range []string{"slack_channel_id", "slack_thread_ts"} {
+		if _, exists := got[key]; exists {
+			t.Errorf("metadata must omit %s for CLI dispatches; got %q", key, got[key])
+		}
+	}
+}
+
 func TestPubsubDispatcher_TranslatesDispatchRequestToDMail(t *testing.T) {
 	pub := &recordingDMailPublisher{}
 	d := NewPubsubDispatcher(pub)

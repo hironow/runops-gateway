@@ -277,6 +277,11 @@ func (h *InteractiveHandler) handleDispatchAction(action interactiveAction, clic
 		RequesterID:    clickerUserID, // trust the clicker, not the payload
 		IdempotencyKey: dv.IdempotencyKey,
 		IssuedAt:       dv.IssuedAt,
+		// Phase 3 (ADR 0018): pass channel + thread through so the Pub/Sub
+		// publish carries them as metadata. The outbound subscriber uses
+		// these to thread-reply when the agent finishes.
+		SlackChannelID: target.ChannelID,
+		SlackThreadTS:  target.ThreadTS,
 	}
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), responseURLTimeout)
