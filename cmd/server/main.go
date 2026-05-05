@@ -133,16 +133,16 @@ func main() {
 	mux := http.NewServeMux()
 	mux.Handle("POST /slack/interactive", slackHandler)
 	mux.Handle("POST /slack/command", commandHandler)
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /_healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintln(w, `{"status":"ok"}`)
 	})
 
 	// otelhttp wraps the mux so every Slack POST gets a root span automatic.
-	// We skip /healthz to avoid drowning Cloud Trace in liveness probe noise.
+	// We skip /_healthz to avoid drowning Cloud Trace in liveness probe noise.
 	otelMux := otelhttp.NewHandler(mux, "runops-gateway",
 		otelhttp.WithFilter(func(r *http.Request) bool {
-			return r.URL.Path != "/healthz"
+			return r.URL.Path != "/_healthz"
 		}),
 		otelhttp.WithSpanNameFormatter(func(_ string, r *http.Request) string {
 			return r.Method + " " + r.URL.Path

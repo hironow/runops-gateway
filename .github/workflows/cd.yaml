@@ -210,10 +210,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          # 1. /healthz は 200 を返す
-          status=$(curl -s -o /dev/null -w "%{http_code}" "${SERVICE_URL}/healthz")
+          # 1. /_healthz は 200 を返す
+          status=$(curl -s -o /dev/null -w "%{http_code}" "${SERVICE_URL}/_healthz")
           if [ "${status}" != "200" ]; then
-            echo "smoke: /healthz returned ${status}, expected 200" >&2
+            echo "smoke: /_healthz returned ${status}, expected 200" >&2
             exit 1
           fi
 
