@@ -119,3 +119,20 @@ type ConsumedTokenStore interface {
 	// consumed (caller must reject as a replay).
 	MarkConsumed(token string) bool
 }
+
+// DMailPublisher hands a DMail to the cross-process transport that delivers
+// it to the destination tool's inbox via phonewave.
+//
+// Phase 2a implementation: Cloud Pub/Sub publisher (publishes to the
+// dmail-inbound topic; an exe-coder VM subscriber receives and atomic-writes
+// the .md file into a phonewave-watched outbox — see ADR 0013).
+//
+// Phase 1 / development uses a stub publisher (StubDispatcher) until the
+// Pub/Sub infrastructure is provisioned.
+type DMailPublisher interface {
+	// PublishDMail returns the publisher-assigned message ID on success and
+	// an error otherwise. Implementations should set Pub/Sub message
+	// attributes per ADR 0013 (kind, target_tool, source,
+	// dmail_schema_version, idempotency_key, traceparent).
+	PublishDMail(ctx context.Context, m domain.DMail) (string, error)
+}
