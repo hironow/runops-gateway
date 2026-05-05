@@ -52,6 +52,26 @@ tidy:
 test-runn:
     runn run tests/runn/*.yaml
 
+# Run integration tests (require Pub/Sub emulator: just pubsub-up + just pubsub-init)
+test-integration:
+    PUBSUB_EMULATOR_HOST=localhost:9399 PUBSUB_PROJECT_ID=runops-local \
+        go test -tags=integration ./tests/integration/...
+
+# Start Pub/Sub emulator (Phase 2a/2b/2c local development)
+pubsub-up:
+    docker compose -f compose.yaml up -d pubsub-emulator
+    @echo "waiting for emulator to be healthy (timeout 60s)..."
+    @timeout 60 sh -c 'until docker inspect -f "{{{{.State.Health.Status}}}}" runops-pubsub-emulator | grep -q healthy; do sleep 2; done'
+    @echo "emulator ready: http://localhost:9399 (UI: http://localhost:4000)"
+
+# Initialize topics + subscriptions on the running emulator
+pubsub-init:
+    {{justfile_directory()}}/scripts/init-pubsub.sh
+
+# Stop the emulator
+pubsub-down:
+    docker compose -f compose.yaml stop pubsub-emulator
+
 # Test notify-slack.sh: dry-run payload structure + bash/Go compress_gz round-trip
 # Requires: bash, gzip, base64, jq
 test-scripts:
