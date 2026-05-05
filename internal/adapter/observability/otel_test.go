@@ -243,6 +243,38 @@ func TestBuildResource_PutsServiceAttributesOnTheResource(t *testing.T) {
 	if got["service.version"] != "v0.4.1+phase4a" {
 		t.Errorf("service.version = %q, want %q", got["service.version"], "v0.4.1+phase4a")
 	}
+	if _, present := got["gcp.project_id"]; present {
+		t.Errorf("gcp.project_id should be absent when cfg.GCPProjectID is empty, got %q", got["gcp.project_id"])
+	}
+}
+
+// TestBuildResource_AppendsGCPProjectIDWhenSet verifies the Cloud Trace OTLP
+// fix: when cfg.GCPProjectID is set, the Resource carries a literal
+// "gcp.project_id" attribute (not semconv cloud.account.id) so the
+// telemetry.googleapis.com endpoint stops returning
+// 'InvalidArgument: Resource is missing required attribute "gcp.project_id"'.
+func TestBuildResource_AppendsGCPProjectIDWhenSet(t *testing.T) {
+	// given
+	ctx := context.Background()
+	cfg := observability.Config{
+		ServiceName:  "runops-gateway",
+		GCPProjectID: "gen-ai-hironow",
+	}
+
+	// when
+	res, err := observability.BuildResource(ctx, cfg)
+	if err != nil {
+		t.Fatalf("BuildResource returned error: %v", err)
+	}
+
+	// then
+	got := map[string]string{}
+	for _, kv := range res.Attributes() {
+		got[string(kv.Key)] = kv.Value.AsString()
+	}
+	if got["gcp.project_id"] != "gen-ai-hironow" {
+		t.Errorf("gcp.project_id = %q, want %q", got["gcp.project_id"], "gen-ai-hironow")
+	}
 }
 
 // TestSetupTracerProvider_NoEndpointReturnsUsableProvider verifies the

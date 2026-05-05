@@ -97,6 +97,7 @@ func main() {
 		ServiceVersion: os.Getenv("OTEL_SERVICE_VERSION"),
 		Sampler:        os.Getenv("OTEL_TRACES_SAMPLER"),
 		SamplerArg:     os.Getenv("OTEL_TRACES_SAMPLER_ARG"),
+		GCPProjectID:   os.Getenv("GOOGLE_CLOUD_PROJECT"),
 	})
 	otelCancel()
 	if err != nil {
