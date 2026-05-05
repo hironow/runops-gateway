@@ -1,5 +1,24 @@
 # Issue 0018: シンプルなメッセージ経路を確立する (Phase 1)
 
+> **実装後の差分メモ (2026-05-05, ✅ Phase 1 完了)**:
+> 当初は「Slash Command 受信 → Block Kit 確認ボタン → 承認時に dispatch」の
+> 2 ステップ対話で設計したが、実装では **Slash Command が直接 dispatch する
+> 1 ステップ** に簡略化した。理由:
+>
+> - Slack 3 秒ルール内で「:eyes: dispatch 受け付けました」を即返せる
+> - StubDispatcher は slog のみで副作用なし → 確認ステップに値が薄い
+> - Phase 2 で PubsubDispatcher に差し替えても挙動は同じ
+>
+> 「In Scope」の **Block Kit 確認 + Approve/Deny ボタン** および TDD 計画の
+> Test 5/6/7/8 (BlockKit 構造、Approve/Deny 動作、dedup) は **Phase 4 (HIGH severity
+> approval gate)** に移送した。Phase 4 で本物の人間承認を導入するときに、
+> 確認ステップを Phase 1 の dispatch path に挿入する形で実装する。
+>
+> 実装で追加されたのは Test 1/2/3/4 + parseSlashCommandText の単体テスト + UseCase
+> 4 ケース + StubDispatcher 3 ケース + 既存 Handler のリネーム。
+> 詳細は本ブランチのコミット (`refactor(slack)` / `feat(domain)` / `feat(dispatcher)`
+> / `feat(usecase)` / `feat(slack)` / `feat(server)`) を参照。
+
 ## Goal
 
 D-Mail / Pub/Sub bridge / 5本柱統合に着手する前に、

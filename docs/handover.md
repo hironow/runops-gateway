@@ -22,7 +22,7 @@
 | Phase | 状態 | 内容 |
 | --- | --- | --- |
 | Phase 0 | ✅ 完了 | 既存 ChatOps（Cloud Run カナリア・DB マイグレ） |
-| **Phase 1 (新)** | 🟡 設計済 / 未着手 | **シンプル経路**: Slash Command 受信 → Block Kit 確認 → thread reply (stub dispatch、D-Mail なし) |
+| **Phase 1 (新)** | ✅ 完了 (2026-05-05) | **シンプル経路**: `/slack/command` で Slash Command 受信 → 直接 dispatch → thread reply (StubDispatcher は slog のみ)。確認ボタン step は Phase 4 に移送 |
 | Phase 2 (旧 Phase 1) | 📝 draft | Pub/Sub topology + dmail-receiver — ADR 0013/0015 が Proposed |
 | Phase 3 (旧 Phase 2) | 📝 draft | `/agent` の stub を Pub/Sub publish に差し替え + `runops dispatch` CLI |
 | Phase 4 (旧 Phase 3) | 📝 draft | dmail-emitter (逆向き) + 5本柱からの結果通知 |
