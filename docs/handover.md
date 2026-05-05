@@ -1017,6 +1017,7 @@ Interactive 両方) を疑う。
 - 既存 ADR: `docs/adr/0001-0022` (0001-0019 は Phase 1〜4a、0020-0022 は OTel + CloudEvents 検討)
 - ローカル検証手順: `docs/local-verification.md`
 - Slack 設定: `docs/slack-setup.md`
+- 残作業 (cross-repo 依存): `docs/issues/`
 - 運用 runbook: `docs/runbooks/`
   - `dlq.md` — DLQ alert 発火時の triage 手順
 - 調査ノート: `experiments/`
