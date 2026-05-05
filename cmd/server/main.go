@@ -47,7 +47,10 @@ func main() {
 	// Phase 2 swaps StubDispatcher for PubsubDispatcher behind the same port.
 	dispatcher := dispatcheradapter.NewStubDispatcher(slog.Default())
 	dispatchSvc := usecase.NewDispatchService(dispatcher, notifier, authChecker, state.NewMemoryStore())
-	slackHandler := slackadapter.NewInteractiveHandler(svc, dispatchSvc, notifier, cfg.slackSigningSecret)
+	// One-time consume guard for dispatch_approve buttons (Codex round 4 #2).
+	// 1-hour TTL covers Slack's 30-min response_url window with margin.
+	consumed := state.NewMemoryConsumedStore(time.Hour)
+	slackHandler := slackadapter.NewInteractiveHandler(svc, dispatchSvc, notifier, consumed, cfg.slackSigningSecret)
 	commandHandler := slackadapter.NewCommandHandler(cfg.slackSigningSecret)
 
 	// Register routes

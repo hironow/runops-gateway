@@ -59,20 +59,24 @@ type interactivePayload struct {
 // InteractiveHandler handles POST /slack/interactive requests
 // (block-kit button clicks: approve / deny / dispatch_approve / dispatch_deny).
 type InteractiveHandler struct {
-	useCase         port.RunOpsUseCase
-	dispatchUseCase DispatchUseCase
-	notifier        port.Notifier
-	signingSecret   string
+	useCase           port.RunOpsUseCase
+	dispatchUseCase   DispatchUseCase
+	notifier          port.Notifier
+	consumedTokens    port.ConsumedTokenStore
+	signingSecret     string
 }
 
 // NewInteractiveHandler creates a new Slack interactive (button click) handler.
 // dispatchUseCase may be nil when the deployment does not enable Phase 1
-// /agent dispatch; dispatch_* actions then no-op.
-func NewInteractiveHandler(useCase port.RunOpsUseCase, dispatchUseCase DispatchUseCase, notifier port.Notifier, signingSecret string) *InteractiveHandler {
+// /agent dispatch; dispatch_* actions then no-op. consumedTokens defends the
+// dispatch_approve path against button replay (Codex round 4 finding 2);
+// when nil the guard is disabled — callers must wire one in production.
+func NewInteractiveHandler(useCase port.RunOpsUseCase, dispatchUseCase DispatchUseCase, notifier port.Notifier, consumedTokens port.ConsumedTokenStore, signingSecret string) *InteractiveHandler {
 	return &InteractiveHandler{
 		useCase:         useCase,
 		dispatchUseCase: dispatchUseCase,
 		notifier:        notifier,
+		consumedTokens:  consumedTokens,
 		signingSecret:   signingSecret,
 	}
 }
@@ -235,6 +239,26 @@ func (h *InteractiveHandler) handleDispatchAction(action interactiveAction, clic
 		slog.Warn("dispatch_approve received but DispatchUseCase is not wired")
 		return
 	}
+
+	// One-time consume guard: a single confirmation button must run the use
+	// case at most once even if Slack retries the click or a network replay
+	// re-fires the same payload (Codex round 4 finding 2).
+	if h.consumedTokens != nil {
+		token := dispatchApproveToken(dv)
+		if !h.consumedTokens.MarkConsumed(token) {
+			slog.Warn("dispatch_approve replay rejected", "token", token, "clicker", clickerUserID)
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				if err := h.notifier.SendEphemeral(ctx, target, clickerUserID,
+					"⚠️ この dispatch は既に処理済みです（重複クリック防止）"); err != nil {
+					slog.Error("dispatch replay ephemeral failed", "error", err)
+				}
+			}()
+			return
+		}
+	}
+
 	req := domain.DispatchRequest{
 		Role:           domain.AgentRole(dv.Role),
 		Text:           dv.Text,
@@ -249,6 +273,15 @@ func (h *InteractiveHandler) handleDispatchAction(action interactiveAction, clic
 			slog.Error("DispatchAgentTask failed", "error", err)
 		}
 	}()
+}
+
+// dispatchApproveToken derives the consumed-token key for a dispatchActionValue.
+// Includes IdempotencyKey + IssuedAt + RequesterID so two distinct /agent
+// invocations from the same operator produce distinct tokens; replay of the
+// exact same button payload always collides on the same key.
+func dispatchApproveToken(dv dispatchActionValue) string {
+	return fmt.Sprintf("dispatch_approve/%s/%s/%d",
+		dv.RequesterID, dv.IdempotencyKey, dv.IssuedAt)
 }
 
 // decodeButtonValue undoes the encoding applied by compressButtonValue. Values
