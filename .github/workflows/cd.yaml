@@ -178,9 +178,57 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Deploy to Cloud Run
+        id: deploy
         uses: google-github-actions/deploy-cloudrun@v2
         with:
           service: runops-gateway
           region: ${{ vars.CLOUD_RUN_LOCATION }}
           image: ${{ env.IMAGE }}:${{ github.sha }}
           # deploy-cloudrun@v2 routes 100% traffic to the new revision by default.
+
+      # Post-deploy smoke: prove that the just-shipped revision is reachable
+      # AND that the basic Slack request-handling pipeline still rejects
+      # spoofed inputs the way it did on the previous revision. Both checks
+      # are read-only — no GCP-side side effects, no Slack API calls.
+      #
+      # If any of these fail, the deploy job fails and the operator should
+      # immediately roll back via:
+      #   gcloud run services update-traffic runops-gateway \
+      #     --region=${{ vars.CLOUD_RUN_LOCATION }} \
+      #     --to-revisions=PREVIOUS_REVISION=100
+      - name: Post-deploy smoke
+        env:
+          SERVICE_URL: ${{ steps.deploy.outputs.url }}
+        run: |
+          set -euo pipefail
+
+          # 1. /healthz は 200 を返す
+          status=$(curl -s -o /dev/null -w "%{http_code}" "${SERVICE_URL}/healthz")
+          if [ "${status}" != "200" ]; then
+            echo "smoke: /healthz returned ${status}, expected 200" >&2
+            exit 1
+          fi
+
+          # 2. /slack/interactive は不正署名で 401 (Phase 0 regression)
+          status=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST "${SERVICE_URL}/slack/interactive" \
+            -H "X-Slack-Signature: v0=invalid" \
+            -H "X-Slack-Request-Timestamp: 1" \
+            --data-raw "payload=%7B%7D")
+          if [ "${status}" != "401" ]; then
+            echo "smoke: /slack/interactive bad-sig returned ${status}, expected 401" >&2
+            exit 1
+          fi
+
+          # 3. /slack/command は不正署名で 401 (Phase 1 regression)
+          status=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST "${SERVICE_URL}/slack/command" \
+            -H "X-Slack-Signature: v0=invalid" \
+            -H "X-Slack-Request-Timestamp: 1" \
+            --data-raw "command=%2Frunops")
+          if [ "${status}" != "401" ]; then
+            echo "smoke: /slack/command bad-sig returned ${status}, expected 401" >&2
+            exit 1
+          fi
+
+          echo "smoke: all checks passed against ${SERVICE_URL}"
