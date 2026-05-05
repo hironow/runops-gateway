@@ -34,7 +34,7 @@ main への promote PR を間違えて squash で merge すると、各 feature 
 3. release PR 本文に「含まれる PR 番号と要約」「本番影響」「rollback 手順」を明記
 4. CI green を確認 (`gh run list --branch develop`)
 5. **`gh pr merge <N> --merge`** で main へ取り込み (CD 発火)
-6. CD pipeline の post-deploy smoke (`/healthz` + `/slack/{interactive,command}` の HMAC 401 regression check) が GREEN であることを確認
+6. CD pipeline の post-deploy smoke (`/_healthz` + `/slack/{interactive,command}` の HMAC 401 regression check) が GREEN であることを確認
 
 post-deploy smoke の詳細と rollback 手順は `docs/handover.md` の
 「ハマりどころ集 9-pre. main promote 時の smoke と rollback」を参照。
