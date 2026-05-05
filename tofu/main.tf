@@ -216,11 +216,11 @@ resource "google_cloud_run_v2_service" "runops_gateway" {
 
     scaling {
       # ADR 0018: in-process dmail-outbound StreamingPull needs a warm instance
-      # to keep the gRPC stream alive. Without min_instance_count=1, every
-      # cold start spins up a new lease and trace gaps appear in the result
-      # path.
-      min_instance_count = 1
-      max_instance_count = 3
+      # to keep the gRPC stream alive. To enable Phase 3 outbound in prod, set
+      # var.cloud_run_min_instances = 1; default 0 keeps Cloud Run idle-cost
+      # at zero until outbound traffic actually exists.
+      min_instance_count = var.cloud_run_min_instances
+      max_instance_count = var.cloud_run_max_instances
     }
   }
 

@@ -80,6 +80,8 @@ tofu apply \
 #   -var="exe_coder_vm_sa_email=dmail-bridge@YOUR_PROJECT.iam.gserviceaccount.com"
 #                                              # exe-coder VM 側 SA 確定後
 #   -var="dlq_alert_email=oncall@example.com"  # Cloud Monitoring 通知先
+#   -var="cloud_run_min_instances=1"           # Phase 3 outbound (ADR 0018) を有効化するとき
+#   -var="cloud_run_max_instances=3"           # default 3 (必要に応じて調整)
 ```
 
 ```bash
