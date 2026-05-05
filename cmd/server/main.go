@@ -15,6 +15,7 @@ import (
 	"github.com/hironow/runops-gateway/internal/adapter/output/auth"
 	dispatcheradapter "github.com/hironow/runops-gateway/internal/adapter/output/dispatcher"
 	gcpadapter "github.com/hironow/runops-gateway/internal/adapter/output/gcp"
+	pubsubadapter "github.com/hironow/runops-gateway/internal/adapter/output/pubsub"
 	slacknotifier "github.com/hironow/runops-gateway/internal/adapter/output/slack"
 	"github.com/hironow/runops-gateway/internal/adapter/output/state"
 	"github.com/hironow/runops-gateway/internal/core/port"
@@ -56,11 +57,18 @@ func main() {
 
 	svc := usecase.NewRunOpsService(gcpCtrl, notifier, authChecker, state.NewMemoryStore())
 
-	// Phase 1: Slash Command path with stub dispatcher (Issue 0018, F-5 fix).
-	// CommandHandler returns a Block Kit confirmation; the Approve click flows
-	// through InteractiveHandler -> DispatchService -> StubDispatcher.
-	// Phase 2 swaps StubDispatcher for PubsubDispatcher behind the same port.
-	dispatcher := dispatcheradapter.NewStubDispatcher(slog.Default())
+	// Phase 1/2a: pick the dispatch backend based on DISPATCHER_BACKEND.
+	// Default ("stub") keeps the Phase 1 logging-only behaviour. "pubsub"
+	// switches to PubsubDispatcher once PUBSUB_PROJECT_ID and
+	// PUBSUB_DMAIL_INBOUND_TOPIC are provisioned (Phase 2a, ADR 0013).
+	dispatcher, dispatcherCloser, err := buildDispatcher(context.Background(), cfg)
+	if err != nil {
+		slog.Error("failed to build dispatcher", "error", err)
+		os.Exit(1)
+	}
+	if dispatcherCloser != nil {
+		defer dispatcherCloser()
+	}
 	dispatchSvc := usecase.NewDispatchService(dispatcher, notifier, authChecker, state.NewMemoryStore())
 	// One-time consume guard for dispatch_approve buttons (Codex round 4 #2).
 	// 1-hour TTL covers Slack's 30-min response_url window with margin.
@@ -110,6 +118,9 @@ type config struct {
 	slackBotToken         string // optional — enables FallbackNotifier (ADR 0017)
 	slackDefaultChannelID string // optional — only used when target.ChannelID is empty
 	port                  string
+	dispatcherBackend     string // "stub" (default) or "pubsub" (Phase 2a)
+	pubsubProjectID       string // required when backend=pubsub
+	pubsubInboundTopic    string // required when backend=pubsub
 }
 
 func loadConfig() (config, error) {
@@ -118,6 +129,9 @@ func loadConfig() (config, error) {
 		slackBotToken:         os.Getenv("SLACK_BOT_TOKEN"),
 		slackDefaultChannelID: os.Getenv("SLACK_DEFAULT_CHANNEL_ID"),
 		port:                  os.Getenv("PORT"),
+		dispatcherBackend:     os.Getenv("DISPATCHER_BACKEND"),
+		pubsubProjectID:       os.Getenv("PUBSUB_PROJECT_ID"),
+		pubsubInboundTopic:    os.Getenv("PUBSUB_DMAIL_INBOUND_TOPIC"),
 	}
 	if cfg.slackSigningSecret == "" {
 		return config{}, fmt.Errorf("SLACK_SIGNING_SECRET is required")
@@ -125,11 +139,45 @@ func loadConfig() (config, error) {
 	if cfg.port == "" {
 		cfg.port = "8080"
 	}
+	if cfg.dispatcherBackend == "" {
+		cfg.dispatcherBackend = "stub"
+	}
+	if cfg.dispatcherBackend == "pubsub" {
+		if cfg.pubsubProjectID == "" || cfg.pubsubInboundTopic == "" {
+			return config{}, fmt.Errorf("DISPATCHER_BACKEND=pubsub requires PUBSUB_PROJECT_ID and PUBSUB_DMAIL_INBOUND_TOPIC")
+		}
+	}
 	// Log config (never log secrets — bot_token presence is logged as a bool)
 	slog.Info("config loaded",
 		"port", cfg.port,
 		"bot_token_present", cfg.slackBotToken != "",
 		"default_channel_id", cfg.slackDefaultChannelID,
+		"dispatcher_backend", cfg.dispatcherBackend,
+		"pubsub_project_id", cfg.pubsubProjectID,
+		"pubsub_inbound_topic", cfg.pubsubInboundTopic,
 	)
 	return cfg, nil
+}
+
+// buildDispatcher returns a port.Dispatcher according to cfg.dispatcherBackend.
+// The closer is non-nil only for backends that own a long-lived resource
+// (the Pub/Sub publisher); main wires it into a defer so shutdown drains
+// in-flight publishes cleanly.
+func buildDispatcher(ctx context.Context, cfg config) (port.Dispatcher, func(), error) {
+	switch cfg.dispatcherBackend {
+	case "stub", "":
+		return dispatcheradapter.NewStubDispatcher(slog.Default()), nil, nil
+	case "pubsub":
+		pub, err := pubsubadapter.NewPublisher(ctx, cfg.pubsubProjectID, cfg.pubsubInboundTopic)
+		if err != nil {
+			return nil, nil, fmt.Errorf("build pubsub publisher: %w", err)
+		}
+		return dispatcheradapter.NewPubsubDispatcher(pub), func() {
+			if err := pub.Close(); err != nil {
+				slog.Error("pubsub publisher close error", "error", err)
+			}
+		}, nil
+	default:
+		return nil, nil, fmt.Errorf("unknown DISPATCHER_BACKEND: %q (want stub|pubsub)", cfg.dispatcherBackend)
+	}
 }
