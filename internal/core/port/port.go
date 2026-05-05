@@ -99,3 +99,16 @@ type Dispatcher interface {
 	// asynchronous and reported back through a separate channel.
 	Dispatch(ctx context.Context, req domain.DispatchRequest) error
 }
+
+// ConsumedTokenStore tracks single-use tokens (e.g. dispatch_approve clicks)
+// to defeat button replay. Distinct from StateStore because the lifecycle is
+// "consume forever within TTL" rather than "lock then release".
+//
+// Phase 1 backing implementation is in-memory (per Cloud Run instance). Phase 2
+// will replace it with a Pub/Sub message ID-based dedup that survives autoscale.
+type ConsumedTokenStore interface {
+	// MarkConsumed records token as used. Returns true if this is the first
+	// time the token was seen (caller may proceed), false if already
+	// consumed (caller must reject as a replay).
+	MarkConsumed(token string) bool
+}
