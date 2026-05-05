@@ -69,6 +69,98 @@ func (m DMail) OperationKey() string {
 	return fmt.Sprintf("dmail/%s/%s/%s", m.Kind, m.Target, m.IdempotencyKey)
 }
 
+// canonicalDMailKeys are the frontmatter keys ParseDMail extracts directly
+// into the DMail struct (everything else lands in Metadata). Mirrors the
+// fixed-order section in RenderMarkdown.
+var canonicalDMailKeys = map[string]struct{}{
+	"dmail-schema-version": {},
+	"id":                   {},
+	"kind":                 {},
+	"target":               {},
+	"source":               {},
+	"idempotency_key":      {},
+}
+
+// ParseDMail parses the on-disk .md document produced by RenderMarkdown back
+// into a DMail value. Frontmatter must be delimited by two `---` lines; the
+// body is whatever follows the closing delimiter (leading blank line stripped).
+// Unknown kinds are rejected so a corrupted file does not propagate as a
+// supposedly valid kind elsewhere.
+func ParseDMail(b []byte) (DMail, error) {
+	s := string(b)
+	if !strings.HasPrefix(s, "---\n") && !strings.HasPrefix(s, "---\r\n") {
+		return DMail{}, fmt.Errorf("dmail: missing opening --- frontmatter delimiter")
+	}
+	// Strip the opening delimiter.
+	rest := strings.TrimPrefix(s, "---\n")
+	rest = strings.TrimPrefix(rest, "---\r\n")
+	closeIdx := strings.Index(rest, "\n---\n")
+	if closeIdx < 0 {
+		closeIdx = strings.Index(rest, "\n---\r\n")
+	}
+	if closeIdx < 0 {
+		// Allow a trailing --- with no body.
+		if strings.HasSuffix(rest, "\n---") {
+			closeIdx = len(rest) - len("\n---")
+		}
+	}
+	if closeIdx < 0 {
+		return DMail{}, fmt.Errorf("dmail: missing closing --- frontmatter delimiter")
+	}
+	frontmatter := rest[:closeIdx]
+	body := rest[closeIdx:]
+	body = strings.TrimPrefix(body, "\n---\n")
+	body = strings.TrimPrefix(body, "\n---\r\n")
+	body = strings.TrimPrefix(body, "\n---")
+	body = strings.TrimPrefix(body, "\n")
+
+	m := DMail{Metadata: map[string]string{}}
+	for _, line := range strings.Split(frontmatter, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		colon := strings.Index(line, ":")
+		if colon < 0 {
+			continue
+		}
+		key := strings.TrimSpace(line[:colon])
+		val := strings.TrimSpace(line[colon+1:])
+		// Strip optional quotes on the value (we render dmail-schema-version as a string).
+		val = strings.Trim(val, "\"")
+		if _, isCanonical := canonicalDMailKeys[key]; isCanonical {
+			switch key {
+			case "id":
+				m.ID = val
+			case "kind":
+				k, err := ParseDMailKind(val)
+				if err != nil {
+					return DMail{}, fmt.Errorf("dmail: %w", err)
+				}
+				m.Kind = k
+			case "target":
+				m.Target = val
+			case "source":
+				m.Source = val
+			case "idempotency_key":
+				m.IdempotencyKey = val
+			case "dmail-schema-version":
+				// Only schema v1 is recognized; refuse anything else loudly.
+				if val != "1" {
+					return DMail{}, fmt.Errorf("dmail: unsupported schema version %q", val)
+				}
+			}
+			continue
+		}
+		m.Metadata[key] = val
+	}
+	if m.Kind == "" {
+		return DMail{}, fmt.Errorf("dmail: kind is required")
+	}
+	m.Body = body
+	return m, nil
+}
+
 // RenderMarkdown produces the on-disk .md document. Schema v1 frontmatter goes
 // between two `---` lines; the canonical fields appear in a fixed order so
 // snapshot tests stay deterministic, and the user-supplied Metadata follows
