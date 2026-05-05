@@ -76,9 +76,14 @@ tofu apply \
   -var="allowed_slack_users=U0123ABCD,U0456EFGH" \
   -var="github_repo=YOUR_ORG/runops-gateway" \
   -var="tofu_state_bucket=YOUR_TOFU_STATE_BUCKET"
+# 任意 (Phase 4b の機能を有効化する場合):
+#   -var="slack_default_channel_id=C0123ABCD"
+#   -var="otel_traces_sampler_arg=0.1"
+#   -var="exe_coder_vm_sa_email=dmail-bridge@YOUR_GATEWAY_PROJECT.iam.gserviceaccount.com"
+#   -var="dlq_alert_email=oncall@example.com"
 ```
 
-Slack App の設定は [docs/slack-setup.md](slack-setup.md) を参照。Slack App は 1 つで全プロジェクトに対応する。
+Slack App の設定は [docs/slack-setup.md](slack-setup.md) を参照。Slack App は 1 つで全プロジェクトに対応する (Slash Command `/runops` + Bot Token Scopes 含む)。Bot Token (`slack-bot-token`) も GATEWAY_PROJECT の Secret Manager に登録する必要がある — `read -rs BOT_TOKEN && printf '%s' "$BOT_TOKEN" | gcloud secrets versions add slack-bot-token --project=YOUR_GATEWAY_PROJECT --data-file=-`。
 
 ### 2. 各 APP_PROJECT のセットアップ（アプリごとに繰り返す）
 

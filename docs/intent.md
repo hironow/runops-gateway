@@ -419,8 +419,10 @@ runops-gateway も同じ Jaeger インスタンスにスパンを送る。
 
 要件を分解すると以下:
 
-1. Slack の `/agent <role> <task>` コマンド、または管理対象アプリの CI/CD（`ci-result`）
-   が gateway 経由で 5本柱の世界に D-Mail を投入できる
+1. Slack の `/runops <role> <task>` コマンド (Phase 1 で実装、本リポは
+   `/runops`、別 workspace 上の Slash Command 名は自由)、または管理対象
+   アプリの CI/CD（`ci-result`）が gateway 経由で 5本柱の世界に D-Mail を
+   投入できる
 2. 投入された D-Mail は phonewave の routing で適切な inbox に配送される
 3. 結果（`report` 等）は逆向きに流れ、Slack thread に **runops-gateway 経由で** 通知される
 4. 既存の ChatOps（Cloud Run カナリア・DB マイグレ）とは衝突せず共存する
@@ -524,7 +526,7 @@ Slack 通知は全て runops-gateway 側で実装する。
 ```
 [ Human / CI/CD ]                          [ 5本柱 (exe-coder VM) ]
         |                                          ^ |
-        | Slack /agent or                          | |
+        | Slack /runops or                         | |
         | CI webhook                               | |
         v                                          | v
 +------------------+                       +-------+--------+
@@ -677,12 +679,19 @@ Cloud Run から Coder workspace を毎回起動する必要はない。
 ## 関連 ADR と外部ドキュメント
 
 このリポジトリの `docs/adr/` には 0001-0011 の決定が既に記録されている。
-5本柱統合に伴い以下の ADR を追加した（2026-05-05）:
+5本柱統合 + Phase 1〜4b 実装に伴い以下の ADR を追加した（2026-05-05）:
 
 - ADR 0012: 新しい D-Mail kind は追加しない（決定 A）
-- ADR 0013: outbox 書き込みは Pub/Sub bridge を経由する（決定 B）
+- ADR 0013: outbox 書き込みは Pub/Sub bridge を経由する（決定 B、ADR 0021 で trace 関連を supersede）
 - ADR 0014: Slack 通知は runops-gateway に集約する（決定 C）
 - ADR 0015: dmail-receiver / dmail-emitter は本リポジトリで管理する
+- ADR 0016: Slack request timestamp 鮮度チェックを必ず行う
+- ADR 0017: Bot Token + chat.postMessage を fallback として導入
+- ADR 0018: dmail-outbound は pull subscription で受ける (gateway 内 goroutine)
+- ADR 0019: HIGH severity convergence は Slack 4-eyes approval を強制
+- ADR 0020: OpenTelemetry trace は直接 OTLP gRPC で export する
+- ADR 0021: Pub/Sub trace context は v2 ライブラリ (`EnableOpenTelemetryTracing`) に委譲
+- ADR 0022: CloudEvents は採用しない (再検討トリガーを明示)
 
 外部ドキュメント参照:
 
@@ -702,7 +711,7 @@ ChatOps と AgentOps を一つの gateway に集約するという判断は、
 表面的には便利さの問題に見えるが、本質は **「人間の指示と AI の指示を区別しない」**
 という Phonewave の設計思想と整合させるためである。
 
-Slack で `/canary frontend 30` と打つのと、`/agent paintress fix M-42` と打つのは、
+Slack で `/canary frontend 30` と打つのと、`/runops paintress fix M-42` と打つのは、
 入口・認証・非同期実行・通知の構造が完全に同型である。
 両者を別の system にすることは、その同型性を捨てることになる。
 

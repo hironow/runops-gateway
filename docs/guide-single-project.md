@@ -56,6 +56,11 @@ tofu apply \
   -var="allowed_slack_users=U0123ABCD,U0456EFGH" \
   -var="github_repo=YOUR_ORG/runops-gateway" \
   -var="tofu_state_bucket=YOUR_TOFU_STATE_BUCKET"
+# 任意 (Phase 4b の機能を有効化する場合、空でも tofu は通る):
+#   -var="slack_default_channel_id=C0123ABCD"
+#   -var="otel_traces_sampler_arg=0.1"
+#   -var="exe_coder_vm_sa_email=dmail-bridge@YOUR_PROJECT.iam.gserviceaccount.com"
+#   -var="dlq_alert_email=oncall@example.com"
 ```
 
 シークレットの実値を登録する:
@@ -68,6 +73,12 @@ read -rs SIGNING_SECRET && printf '%s' "$SIGNING_SECRET" | \
 
 read -rs WEBHOOK_URL && printf '%s' "$WEBHOOK_URL" | \
   gcloud secrets versions add slack-webhook-url \
+    --project=YOUR_PROJECT \
+    --data-file=-
+
+# Bot Token (xoxb-...) — ADR 0017 / 0019 で必須
+read -rs BOT_TOKEN && printf '%s' "$BOT_TOKEN" | \
+  gcloud secrets versions add slack-bot-token \
     --project=YOUR_PROJECT \
     --data-file=-
 ```
