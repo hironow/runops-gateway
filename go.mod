@@ -7,6 +7,7 @@ require (
 	cloud.google.com/go/run v1.16.0
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/spf13/cobra v1.10.2
+	go.opentelemetry.io/otel/sdk v1.43.0
 	google.golang.org/api v0.274.0
 )
 
