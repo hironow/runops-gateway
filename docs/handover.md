@@ -772,6 +772,35 @@ outbound (5 pillars -> Slack):
 - 30分超えたら chat.postMessage 経由
 - 失敗時の通知は両方試す（fallback）
 
+### 9-pre. main promote 時の smoke と rollback
+
+CD pipeline (`.github/workflows/cd.yaml`) の `deploy` job 末尾に
+**post-deploy smoke** が入っている。3 項目を read-only で検査:
+
+1. `/healthz` 200
+2. `/slack/interactive` に invalid signature で 401 (Phase 0 regression)
+3. `/slack/command` に invalid signature で 401 (Phase 1 regression)
+
+どれか fail したら deploy job が fail し、main の HEAD revision は
+古いままになる。Cloud Run の latest が新 revision に切り替わって
+**しまった**直後に smoke が落ちた場合は、operator が手で trafifc を
+戻す:
+
+```bash
+PROJECT=gen-ai-hironow
+REGION=asia-northeast1
+PREV=$(gcloud run revisions list --service=runops-gateway \
+  --project=${PROJECT} --region=${REGION} \
+  --filter='status.conditions.type=Active AND status.conditions.status=True' \
+  --format='value(metadata.name)' --limit=2 --sort-by='~metadata.creationTimestamp' | tail -1)
+gcloud run services update-traffic runops-gateway \
+  --project=${PROJECT} --region=${REGION} --to-revisions=${PREV}=100
+```
+
+main 側の機能 (canary / migrate) を壊していない確認は CD smoke が担う。
+Phase 1+ 機能 (Slash Command / dispatch / 4-eyes / OTel) の通電確認は
+`docs/local-verification.md` の Pattern C/D/E で local 完結できる。
+
 ### 9. emitter は archive イベントだけを watch する (実体験)
 
 Phase 2c で fsnotify Create が file open 完了より先に発火し、parse 失敗 → dedup
