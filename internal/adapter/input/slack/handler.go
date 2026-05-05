@@ -40,30 +40,47 @@ type actionValue struct {
 	BuildInfo        string `json:"build_info"`
 }
 
+// interactiveAction is a single Block Kit action element from a Slack
+// interactive payload (button click, etc.).
+type interactiveAction struct {
+	ActionID string `json:"action_id"`
+	Value    string `json:"value"`
+}
+
 // interactivePayload is a minimal representation of Slack's interactive payload.
 type interactivePayload struct {
 	User struct {
 		ID string `json:"id"`
 	} `json:"user"`
-	ResponseURL string `json:"response_url"`
-	Actions     []struct {
-		ActionID string `json:"action_id"`
-		Value    string `json:"value"`
-	} `json:"actions"`
+	ResponseURL string              `json:"response_url"`
+	Actions     []interactiveAction `json:"actions"`
 }
 
 // InteractiveHandler handles POST /slack/interactive requests
 // (block-kit button clicks: approve / deny / dispatch_approve / dispatch_deny).
 type InteractiveHandler struct {
-	useCase       port.RunOpsUseCase
-	notifier      port.Notifier
-	signingSecret string
+	useCase         port.RunOpsUseCase
+	dispatchUseCase DispatchUseCase
+	notifier        port.Notifier
+	signingSecret   string
 }
 
 // NewInteractiveHandler creates a new Slack interactive (button click) handler.
-func NewInteractiveHandler(useCase port.RunOpsUseCase, notifier port.Notifier, signingSecret string) *InteractiveHandler {
-	return &InteractiveHandler{useCase: useCase, notifier: notifier, signingSecret: signingSecret}
+// dispatchUseCase may be nil when the deployment does not enable Phase 1
+// /agent dispatch; dispatch_* actions then no-op.
+func NewInteractiveHandler(useCase port.RunOpsUseCase, dispatchUseCase DispatchUseCase, notifier port.Notifier, signingSecret string) *InteractiveHandler {
+	return &InteractiveHandler{
+		useCase:         useCase,
+		dispatchUseCase: dispatchUseCase,
+		notifier:        notifier,
+		signingSecret:   signingSecret,
+	}
 }
+
+// responseURLTimeout matches Slack's 30-minute response_url validity, leaving
+// 5 minutes of margin for the final notification POST. Used by every async
+// goroutine in ServeHTTP.
+const responseURLTimeout = 25 * time.Minute
 
 // ServeHTTP implements http.Handler.
 func (h *InteractiveHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -101,6 +118,20 @@ func (h *InteractiveHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	action := slackPayload.Actions[0]
+	target := port.NotifyTarget{
+		CallbackURL: slackPayload.ResponseURL,
+		Mode:        port.ModeSlack,
+	}
+
+	// dispatch_* actions carry a dispatchActionValue payload (Phase 1 / F-5 fix),
+	// not the actionValue used by approve/deny. Branch early so we do not run
+	// the actionValue parser on the wrong shape.
+	if action.ActionID == "dispatch_approve" || action.ActionID == "dispatch_deny" {
+		h.handleDispatchAction(action, slackPayload.User.ID, target)
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
 	av, err := parseActionValue(action.Value)
 	if err != nil {
 		slog.Warn("failed to parse action value", "error", err)
@@ -127,14 +158,7 @@ func (h *InteractiveHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		NextAction:       av.NextAction,
 		BuildInfo:        av.BuildInfo,
 	}
-	target := port.NotifyTarget{
-		CallbackURL: slackPayload.ResponseURL,
-		Mode:        port.ModeSlack,
-	}
 	// 4. Dispatch asynchronously (avoid Slack 3-second timeout).
-	// Use a 25-minute timeout to stay within Slack's 30-minute response_url validity,
-	// leaving 5 minutes of margin for the final notification POST.
-	const responseURLTimeout = 25 * time.Minute
 	switch {
 	case strings.HasPrefix(action.ActionID, "approve"):
 		go func() {
@@ -159,6 +183,53 @@ func (h *InteractiveHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	// 5. Immediately return 200 OK
 	w.WriteHeader(http.StatusOK)
+}
+
+// handleDispatchAction routes the two Slash Command confirmation buttons.
+// dispatch_approve runs the use case asynchronously; dispatch_deny replaces the
+// confirmation message with a cancellation note and never invokes the use case.
+func (h *InteractiveHandler) handleDispatchAction(action interactiveAction, clickerUserID string, target port.NotifyTarget) {
+	dv, err := parseDispatchActionValue(action.Value)
+	if err != nil {
+		slog.Warn("failed to parse dispatch action value", "error", err)
+		return
+	}
+	if dv.Role == "" {
+		slog.Warn("dispatch action value missing role")
+		return
+	}
+
+	if action.ActionID == "dispatch_deny" {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), responseURLTimeout)
+			defer cancel()
+			if err := h.notifier.UpdateMessage(ctx, target, "🚫 Dispatch をキャンセルしました"); err != nil {
+				slog.Error("dispatch_deny notification failed", "error", err)
+			}
+		}()
+		return
+	}
+
+	// dispatch_approve
+	if h.dispatchUseCase == nil {
+		slog.Warn("dispatch_approve received but DispatchUseCase is not wired")
+		return
+	}
+	req := domain.DispatchRequest{
+		Role:           domain.AgentRole(dv.Role),
+		Text:           dv.Text,
+		RequesterID:    dv.RequesterID,
+		IdempotencyKey: dv.IdempotencyKey,
+		IssuedAt:       dv.IssuedAt,
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), responseURLTimeout)
+		defer cancel()
+		if err := h.dispatchUseCase.DispatchAgentTask(ctx, req, target); err != nil {
+			slog.Error("DispatchAgentTask failed", "error", err)
+		}
+		_ = clickerUserID // Phase 1: requester==approver (no 4-eyes); Phase 4 will check.
+	}()
 }
 
 // decodeButtonValue undoes the encoding applied by compressButtonValue. Values

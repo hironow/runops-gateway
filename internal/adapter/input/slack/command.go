@@ -14,6 +14,7 @@ import (
 
 	"github.com/hironow/runops-gateway/internal/core/domain"
 	"github.com/hironow/runops-gateway/internal/core/port"
+	outputslack "github.com/hironow/runops-gateway/internal/adapter/output/slack"
 )
 
 // DispatchUseCase is the primary port driven by the Slash Command handler.
@@ -24,20 +25,24 @@ type DispatchUseCase interface {
 }
 
 // CommandHandler handles POST /slack/command (Slash Command Request URL).
+//
+// F-5 fix (Phase 1 review findings): the handler does NOT execute the dispatch
+// directly. It returns an ephemeral Block Kit confirmation that requires the
+// operator to click Approve before DispatchAgentTask runs. The Approve click
+// arrives at /slack/interactive and is dispatched by InteractiveHandler.
 type CommandHandler struct {
-	useCase       DispatchUseCase
 	signingSecret string
 }
 
 // NewCommandHandler returns a Slash Command handler.
-func NewCommandHandler(useCase DispatchUseCase, signingSecret string) *CommandHandler {
-	return &CommandHandler{useCase: useCase, signingSecret: signingSecret}
+func NewCommandHandler(signingSecret string) *CommandHandler {
+	return &CommandHandler{signingSecret: signingSecret}
 }
 
 // ServeHTTP implements http.Handler. Slack expects 200 within 3 seconds; the
-// dispatch use case runs in a goroutine and the immediate response is either
-// an ephemeral error or an empty 200 (followed by response_url updates from the
-// use case via the Notifier port).
+// confirmation Block Kit is returned synchronously in the response body
+// (response_type: ephemeral). DispatchAgentTask only runs after the operator
+// clicks Approve via /slack/interactive.
 func (h *CommandHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -60,7 +65,6 @@ func (h *CommandHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	cmd := r.PostFormValue("command")
 	text := strings.TrimSpace(r.PostFormValue("text"))
 	userID := r.PostFormValue("user_id")
-	responseURL := r.PostFormValue("response_url")
 
 	if cmd == "" {
 		writeEphemeral(w, "❌ command が空です")
@@ -79,24 +83,50 @@ func (h *CommandHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = cmd // command field is validated above; not echoed back to avoid reflecting user input
 
-	req := domain.DispatchRequest{
-		Role:           role,
+	idempotencyKey := newIdempotencyKey()
+	issuedAt := time.Now().Unix()
+
+	approveValue, denyValue, err := buildDispatchButtonValues(role, freeText, userID, idempotencyKey, issuedAt)
+	if err != nil {
+		slog.Error("failed to build dispatch button values", "err", err)
+		writeEphemeral(w, "❌ 確認メッセージの組み立てに失敗しました")
+		return
+	}
+
+	confirmation := outputslack.BuildDispatchConfirmation(outputslack.DispatchConfirmation{
+		Role:           string(role),
 		Text:           freeText,
 		RequesterID:    userID,
-		IdempotencyKey: newIdempotencyKey(),
-		IssuedAt:       time.Now().Unix(),
-	}
-	target := port.NotifyTarget{CallbackURL: responseURL, Mode: port.ModeSlack}
+		IdempotencyKey: idempotencyKey,
+		ApproveValue:   approveValue,
+		DenyValue:      denyValue,
+	})
 
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Minute)
-		defer cancel()
-		if err := h.useCase.DispatchAgentTask(ctx, req, target); err != nil {
-			slog.Error("DispatchAgentTask failed", "error", err)
-		}
-	}()
-
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(w).Encode(confirmation); err != nil {
+		slog.Error("failed to encode confirmation payload", "err", err)
+	}
+}
+
+// buildDispatchButtonValues returns the compressed payloads to embed in the
+// Approve and Deny buttons of the dispatch confirmation. Both carry the same
+// dispatchActionValue so InteractiveHandler can rebuild a DispatchRequest
+// regardless of which button is clicked.
+func buildDispatchButtonValues(role domain.AgentRole, text, requesterID, idempotencyKey string, issuedAt int64) (approve, deny string, err error) {
+	dv := dispatchActionValue{
+		Role:           string(role),
+		Text:           text,
+		RequesterID:    requesterID,
+		IdempotencyKey: idempotencyKey,
+		IssuedAt:       issuedAt,
+	}
+	raw, err := marshalDispatchActionValue(dv)
+	if err != nil {
+		return "", "", fmt.Errorf("marshal dispatch action value: %w", err)
+	}
+	encoded := outputslack.CompressButtonValue(string(raw))
+	return encoded, encoded, nil
 }
 
 // parseSlashCommandText splits "<role> <free text>" into the two parts.

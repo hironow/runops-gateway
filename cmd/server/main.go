@@ -40,13 +40,15 @@ func main() {
 	authChecker := auth.NewEnvAuthChecker()
 
 	svc := usecase.NewRunOpsService(gcpCtrl, notifier, authChecker, state.NewMemoryStore())
-	slackHandler := slackadapter.NewInteractiveHandler(svc, notifier, cfg.slackSigningSecret)
 
-	// Phase 1: Slash Command path with stub dispatcher (Issue 0018).
+	// Phase 1: Slash Command path with stub dispatcher (Issue 0018, F-5 fix).
+	// CommandHandler returns a Block Kit confirmation; the Approve click flows
+	// through InteractiveHandler -> DispatchService -> StubDispatcher.
 	// Phase 2 swaps StubDispatcher for PubsubDispatcher behind the same port.
 	dispatcher := dispatcheradapter.NewStubDispatcher(slog.Default())
 	dispatchSvc := usecase.NewDispatchService(dispatcher, notifier, authChecker, state.NewMemoryStore())
-	commandHandler := slackadapter.NewCommandHandler(dispatchSvc, cfg.slackSigningSecret)
+	slackHandler := slackadapter.NewInteractiveHandler(svc, dispatchSvc, notifier, cfg.slackSigningSecret)
+	commandHandler := slackadapter.NewCommandHandler(cfg.slackSigningSecret)
 
 	// Register routes
 	mux := http.NewServeMux()
