@@ -671,10 +671,7 @@ Cloud Run から Coder workspace を毎回起動する必要はない。
 - ADR 0012: 新しい D-Mail kind は追加しない（決定 A）
 - ADR 0013: outbox 書き込みは Pub/Sub bridge を経由する（決定 B）
 - ADR 0014: Slack 通知は runops-gateway に集約する（決定 C）
-
-以下は今後追加予定:
-
-- ADR 0015: dmail-receiver / dmail-emitter を本リポジトリで管理する責務範囲
+- ADR 0015: dmail-receiver / dmail-emitter は本リポジトリで管理する
 
 外部ドキュメント参照:
 
