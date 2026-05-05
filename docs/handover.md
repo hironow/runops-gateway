@@ -40,7 +40,7 @@ or merge する運用とする。
 | Phase | 状態 | 内容 |
 | --- | --- | --- |
 | Phase 0 | ✅ 完了 | 既存 ChatOps（Cloud Run カナリア・DB マイグレ） |
-| **Phase 1 (新)** | ✅ 完了 (2026-05-05) | **シンプル経路**: `/slack/command` で Slash Command 受信 → **Block Kit 確認 → Approve クリック (`/slack/interactive`)** → DispatchAgentTask → thread reply (StubDispatcher は length+SHA256 のみログ、text 生値は出さない)。Codex Review round 2/3 の致命指摘 3 件 (replay / text leak / missing confirmation) は同 PR 内で修正済み |
+| **Phase 1 (新)** | ✅ 完了 (2026-05-05) | **シンプル経路**: `/slack/command` → **Block Kit 確認 → Approve クリック (`/slack/interactive`)** → DispatchAgentTask → thread reply。Codex Review round 2/3/4 の致命指摘 **5 件** (F-1 replay sig / F-4 text leak / F-5 missing confirmation / F-7 clicker hijack / F-8 button replay) はすべて同 PR 内で修正済み |
 | Phase 2 (旧 Phase 1) | 📝 draft | Pub/Sub topology + dmail-receiver — ADR 0013/0015 が Proposed |
 | Phase 3 (旧 Phase 2) | 📝 draft | `/agent` の stub を Pub/Sub publish に差し替え + `runops dispatch` CLI |
 | Phase 4 (旧 Phase 3) | 📝 draft | dmail-emitter (逆向き) + 5本柱からの結果通知 |
@@ -270,6 +270,43 @@ d.logger.LogAttrs(ctx, slog.LevelInfo, "dispatched stub",
 
 将来の追加: dispatch text 全体に対するサイズ上限・サニタイズポリシーは
 Issue 0020 (Phase 4 起票予定) で扱う。
+
+### F-7: dispatch_* で clicker 本人性未検証 ✅ 解決済み (2026-05-05)
+
+Codex Review round 4 が **致命と指摘** したため、**本 PR 内で修正完了**。
+
+修正内容:
+
+- `handleDispatchAction` で `clickerUserID != dv.RequesterID` の場合、
+  ephemeral message で reject (UseCase は呼ばれない)
+- `dispatch_deny` も同じ guard を適用 (griefer による横やり cancel を防ぐ)
+- DispatchRequest.RequesterID には **clicker 本人の Slack user.id** を入れ、
+  payload 値を信頼しない (defense in depth)
+- 関連コミット: `5c1fa5d fix(slack): require clicker == original requester on dispatch_*`
+
+Phase 4 の HIGH severity 4-eyes フローは「clicker ≠ requester が intended」なので、
+本 guard を **flag で disable できる形** に拡張する設計余地がある。
+
+### F-8: dispatch_approve の button replay ✅ 解決済み (2026-05-05)
+
+Codex Review round 4 が **致命と指摘** したため、**本 PR 内で修正完了**。
+
+修正内容:
+
+- 新規 port `port.ConsumedTokenStore` を導入
+- `state.MemoryConsumedStore` (TTL 付き sync.Map ベース、in-process) で実装
+- `dispatchApproveToken(dv)` を作って `RequesterID/IdempotencyKey/IssuedAt`
+  ベースの consumed key を生成
+- 同一 token を 2 回 MarkConsumed すると 2 回目は false → ephemeral reject
+- TTL は cmd/server で 1 時間 (Slack response_url 30 分窓に余裕を持たせた値)
+- 関連コミット:
+  - `64d7b07 feat(state): add ConsumedTokenStore port + MemoryConsumedStore`
+  - `e467b2b fix(slack): one-time consume guard on dispatch_approve`
+
+**注意**: in-process なので Cloud Run autoscale 下では instance ごとに別の
+consumed set。1 instance 内で再クリック → 防げる、別 instance に当たった retry →
+防げない。Phase 2 で Pub/Sub message ID dedup に置き換える前提 (intent.md の
+best-effort 規約に沿った Phase 1 段階の実装)。
 
 ### F-5: Phase 1 で Block Kit 確認ステップ ✅ 解決済み (2026-05-05)
 
