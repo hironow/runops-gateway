@@ -97,6 +97,25 @@ test-scripts:
 # Run all checks (used before commit)
 check: fmt lint lint-md test
 
+# ------------------------------
+# prek (j178/prek) — Rust reimplementation of pre-commit
+# Install:   just install-hooks  (== prek install)
+# Run all:   just pre-commit     (== prek run --all-files)
+# Push gate: just check-all      (== prek + check + test)
+# ------------------------------
+
+# Install prek-managed git hooks once per clone
+install-hooks:
+    prek install
+
+# Run every prek hook against all files
+pre-commit:
+    prek run --all-files
+
+# CI-equivalent gate: prek hooks + check + full test suite
+check-all: pre-commit check test
+    @echo "✅ all checks passed"
+
 # Copy initial setup files to a managed app repository.
 # Usage: just init-app ../my-app my-project my-service,my-other-service my-migrate-job [asia-northeast1] [my-artifact-repo] [gateway-project]
 init-app target app_project service_names migration_job region="asia-northeast1" artifact_repo="" gateway_project="":

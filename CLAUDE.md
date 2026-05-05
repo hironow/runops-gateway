@@ -112,3 +112,38 @@ unchecked 箇所を `_ = ...` か `if err != nil { ... }` に直す。
 2. ローカルで `just lint` を走らせ、issues が増えるなら同 PR で fix
 3. `tools/go.mod` の golangci-lint version を上げたいときは
    `go get -tool github.com/golangci/golangci-lint/v2/cmd/golangci-lint@vX.Y.Z`
+
+## pre-commit (prek)
+
+[j178/prek](https://github.com/j178/prek) (Rust 製の pre-commit
+互換ランナー) を採用。本家 pre-commit より起動が速く、Rust-native の
+builtin hook が使える。設定: `.pre-commit-config.yaml`。
+
+### Install (1 度だけ)
+
+```bash
+# どれか 1 つ
+brew install prek                      # macOS
+cargo install prek                     # Rust toolchain あり
+mise use -g prek                       # mise 経由
+
+just install-hooks                     # git hook を ~/.git/hooks/ に書き込む
+```
+
+### 日常運用
+
+```bash
+just pre-commit    # prek run --all-files (commit 前 / push 前 manual)
+just check-all     # prek run + just check + just test (CI 同等の gate)
+```
+
+### 設定の方針
+
+- **builtin hooks** (trailing-whitespace / end-of-file-fixer / check-yaml /
+  check-toml / check-json / check-added-large-files / check-merge-conflict /
+  detect-private-key)
+- **local hooks** は `just fmt` / `just lint` / `tofu fmt -recursive tofu`
+  を delegate するので、CLI と prek で同じ check が走る (二重定義を避ける)
+- `go test` は重いので pre-commit には入れず `check-all` 段の `just test`
+  でカバー
+- 除外 path: `output/` / `node_modules/` / `.venv/` / `tofu/.terraform/`
