@@ -13,6 +13,7 @@ import (
 
 	slackadapter "github.com/hironow/runops-gateway/internal/adapter/input/slack"
 	"github.com/hironow/runops-gateway/internal/adapter/output/auth"
+	dispatcheradapter "github.com/hironow/runops-gateway/internal/adapter/output/dispatcher"
 	gcpadapter "github.com/hironow/runops-gateway/internal/adapter/output/gcp"
 	slacknotifier "github.com/hironow/runops-gateway/internal/adapter/output/slack"
 	"github.com/hironow/runops-gateway/internal/adapter/output/state"
@@ -41,9 +42,16 @@ func main() {
 	svc := usecase.NewRunOpsService(gcpCtrl, notifier, authChecker, state.NewMemoryStore())
 	slackHandler := slackadapter.NewInteractiveHandler(svc, notifier, cfg.slackSigningSecret)
 
+	// Phase 1: Slash Command path with stub dispatcher (Issue 0018).
+	// Phase 2 swaps StubDispatcher for PubsubDispatcher behind the same port.
+	dispatcher := dispatcheradapter.NewStubDispatcher(slog.Default())
+	dispatchSvc := usecase.NewDispatchService(dispatcher, notifier, authChecker, state.NewMemoryStore())
+	commandHandler := slackadapter.NewCommandHandler(dispatchSvc, cfg.slackSigningSecret)
+
 	// Register routes
 	mux := http.NewServeMux()
 	mux.Handle("POST /slack/interactive", slackHandler)
+	mux.Handle("POST /slack/command", commandHandler)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintln(w, `{"status":"ok"}`)
