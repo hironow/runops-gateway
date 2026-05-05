@@ -12,9 +12,13 @@ import (
 	"time"
 
 	gpubsub "cloud.google.com/go/pubsub/v2"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
 	pubsubinput "github.com/hironow/runops-gateway/internal/adapter/input/pubsub"
 	slackadapter "github.com/hironow/runops-gateway/internal/adapter/input/slack"
+	"github.com/hironow/runops-gateway/internal/adapter/observability"
 	"github.com/hironow/runops-gateway/internal/adapter/output/auth"
 	dispatcheradapter "github.com/hironow/runops-gateway/internal/adapter/output/dispatcher"
 	gcpadapter "github.com/hironow/runops-gateway/internal/adapter/output/gcp"
@@ -34,6 +38,29 @@ func main() {
 		slog.Error("configuration error", "error", err)
 		os.Exit(1)
 	}
+
+	// OpenTelemetry tracing (ADR 0020). Setup is best-effort: if it fails, we
+	// fall back to a no-op TracerProvider rather than blocking the binary
+	// from booting (the "binary always boots" invariant from ADR 0020).
+	otelCtx, otelCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	tp, err := observability.SetupTracerProvider(otelCtx, observability.Config{
+		Endpoint:       os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
+		ServiceName:    otelServiceName(),
+		ServiceVersion: os.Getenv("OTEL_SERVICE_VERSION"),
+	})
+	otelCancel()
+	if err != nil {
+		slog.Warn("OTel TracerProvider setup failed; telemetry disabled", "error", err)
+		tp = sdktrace.NewTracerProvider()
+	}
+	otel.SetTracerProvider(tp)
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := tp.Shutdown(shutdownCtx); err != nil {
+			slog.Error("OTel TracerProvider shutdown error", "error", err)
+		}
+	}()
 
 	// Wire adapters
 	gcpCtrl, err := gcpadapter.NewController(context.Background())
@@ -109,10 +136,21 @@ func main() {
 		fmt.Fprintln(w, `{"status":"ok"}`)
 	})
 
+	// otelhttp wraps the mux so every Slack POST gets a root span automatic.
+	// We skip /healthz to avoid drowning Cloud Trace in liveness probe noise.
+	otelMux := otelhttp.NewHandler(mux, "runops-gateway",
+		otelhttp.WithFilter(func(r *http.Request) bool {
+			return r.URL.Path != "/healthz"
+		}),
+		otelhttp.WithSpanNameFormatter(func(_ string, r *http.Request) string {
+			return r.Method + " " + r.URL.Path
+		}),
+	)
+
 	// Start server with graceful shutdown
 	srv := &http.Server{
 		Addr:    ":" + cfg.port,
-		Handler: mux,
+		Handler: otelMux,
 	}
 
 	// Phase 3 (ADR 0018): if PUBSUB_DMAIL_OUTBOUND_SUB is set, start an
@@ -256,6 +294,15 @@ func loadConfig() (config, error) {
 		"pubsub_outbound_sub", cfg.pubsubOutboundSub,
 	)
 	return cfg, nil
+}
+
+// otelServiceName returns OTEL_SERVICE_NAME with a sensible default. Required
+// by ADR 0020; the OTel SDK warns when the resource lacks service.name.
+func otelServiceName() string {
+	if v := os.Getenv("OTEL_SERVICE_NAME"); v != "" {
+		return v
+	}
+	return "runops-gateway"
 }
 
 // buildApprovalPublisher returns a DMailPublisher dedicated to the Phase 4a
