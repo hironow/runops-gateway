@@ -38,6 +38,15 @@ type DispatchRequest struct {
 	IdempotencyKey string
 	// IssuedAt is the Unix timestamp at which the request was created.
 	IssuedAt int64
+	// SlackChannelID is the Slack channel.id of the originating /agent
+	// invocation. Phase 3 carries this through Pub/Sub metadata so the
+	// outbound subscriber can chat.postMessage thread-replies into the
+	// right channel without consulting external state.
+	// Empty for CLI dispatches.
+	SlackChannelID string
+	// SlackThreadTS is the Slack message.ts to thread reply onto. Empty
+	// for CLI dispatches.
+	SlackThreadTS string
 }
 
 // OperationKey returns a canonical deduplication key for a DispatchRequest.

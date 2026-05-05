@@ -1,12 +1,14 @@
 # 0015. dmail-receiver / dmail-emitter は本リポジトリで管理する
 
 **Date:** 2026-05-05
-**Status:** Proposed (Phase 2 以降で再評価)
+**Status:** Accepted (Phase 2b/2c 実装で昇格、2026-05-05)
 
-> **Draft notice (2026-05-05)**: 本 ADR は ADR 0013 の Pub/Sub bridge を構成する
-> 2 daemon の責務範囲を定める判断であり、Phase 2 以降の議論である。Phase 1
-> （Issue 0018: シンプル経路）では receiver / emitter は実装しない。Phase 1 完了後、
-> Phase 2 着手時に本 ADR を Accepted に昇格するか再評価する。
+> **2026-05-05 update**: Phase 2b で `cmd/dmail-receiver` が、Phase 2c で
+> `cmd/dmail-emitter` が本リポジトリ内に実装され、emulator integration test
+> も含めて動作確認済み。ADR 通り `internal/core/domain/dmail.go` を共有して
+> attribute schema が単一情報源化されている (publisher / receiver / emitter
+> いずれもコンパイル時に整合する)。本番デプロイ (exe-coder VM の systemd unit)
+> は別 PR (infra) で実施。
 
 ## Context
 

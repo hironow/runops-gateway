@@ -42,9 +42,16 @@ const (
 )
 
 // NotifyTarget describes where and how a notification should be delivered.
+//
+// CallbackURL (Slack response_url) is the primary transport. ChannelID and
+// ThreadTS are populated when the call originates from /slack/interactive so
+// FallbackNotifier (ADR 0017) can fall back to chat.postMessage when the
+// response_url hits its 30-min / 5-call limits.
 type NotifyTarget struct {
 	CallbackURL string
 	Mode        NotifyMode
+	ChannelID   string
+	ThreadTS    string
 }
 
 // Notifier is a secondary port for sending user-facing notifications.
@@ -111,4 +118,33 @@ type ConsumedTokenStore interface {
 	// time the token was seen (caller may proceed), false if already
 	// consumed (caller must reject as a replay).
 	MarkConsumed(token string) bool
+}
+
+// ApprovalRequester posts an interactive Block Kit approval request into a
+// Slack thread. Phase 4a (ADR 0019) uses this for HIGH severity convergence
+// D-Mails that require a 4-eyes human approval before the gateway publishes
+// the convergence acknowledgement back into dmail-inbound.
+//
+// Distinct from Notifier because it carries the full source DMail (so the
+// Block Kit builder can render the producer body + 4-eyes guard text) and
+// posts in_channel rather than ephemeral.
+type ApprovalRequester interface {
+	PostApprovalRequest(ctx context.Context, target NotifyTarget, mail domain.DMail) error
+}
+
+// DMailPublisher hands a DMail to the cross-process transport that delivers
+// it to the destination tool's inbox via phonewave.
+//
+// Phase 2a implementation: Cloud Pub/Sub publisher (publishes to the
+// dmail-inbound topic; an exe-coder VM subscriber receives and atomic-writes
+// the .md file into a phonewave-watched outbox — see ADR 0013).
+//
+// Phase 1 / development uses a stub publisher (StubDispatcher) until the
+// Pub/Sub infrastructure is provisioned.
+type DMailPublisher interface {
+	// PublishDMail returns the publisher-assigned message ID on success and
+	// an error otherwise. Implementations should set Pub/Sub message
+	// attributes per ADR 0013 (kind, target_tool, source,
+	// dmail_schema_version, idempotency_key, traceparent).
+	PublishDMail(ctx context.Context, m domain.DMail) (string, error)
 }

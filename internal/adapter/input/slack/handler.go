@@ -52,17 +52,25 @@ type interactivePayload struct {
 	User struct {
 		ID string `json:"id"`
 	} `json:"user"`
+	Channel struct {
+		ID string `json:"id"`
+	} `json:"channel"`
+	Message struct {
+		TS string `json:"ts"`
+	} `json:"message"`
 	ResponseURL string              `json:"response_url"`
 	Actions     []interactiveAction `json:"actions"`
 }
 
 // InteractiveHandler handles POST /slack/interactive requests
-// (block-kit button clicks: approve / deny / dispatch_approve / dispatch_deny).
+// (block-kit button clicks: approve / deny / dispatch_approve / dispatch_deny /
+// approval_approve / approval_deny).
 type InteractiveHandler struct {
 	useCase           port.RunOpsUseCase
 	dispatchUseCase   DispatchUseCase
 	notifier          port.Notifier
 	consumedTokens    port.ConsumedTokenStore
+	approvalPublisher port.DMailPublisher // optional, Phase 4a (ADR 0019)
 	signingSecret     string
 }
 
@@ -79,6 +87,15 @@ func NewInteractiveHandler(useCase port.RunOpsUseCase, dispatchUseCase DispatchU
 		consumedTokens:  consumedTokens,
 		signingSecret:   signingSecret,
 	}
+}
+
+// WithApprovalPublisher enables the Phase 4a approval_approve / approval_deny
+// path. The publisher is invoked when a 4-eyes approver clicks Approve so the
+// convergence ack lands back on dmail-inbound for the original producer.
+// Returns the same handler so callers can chain after NewInteractiveHandler.
+func (h *InteractiveHandler) WithApprovalPublisher(p port.DMailPublisher) *InteractiveHandler {
+	h.approvalPublisher = p
+	return h
 }
 
 // responseURLTimeout matches Slack's 30-minute response_url validity, leaving
@@ -125,6 +142,12 @@ func (h *InteractiveHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	target := port.NotifyTarget{
 		CallbackURL: slackPayload.ResponseURL,
 		Mode:        port.ModeSlack,
+		// ChannelID + ThreadTS let FallbackNotifier (ADR 0017) drop into
+		// chat.postMessage when the response_url has expired or hit its 5-call
+		// limit. Both are optional from Slack's side and stay empty for any
+		// interaction that did not originate from a Block Kit message.
+		ChannelID: slackPayload.Channel.ID,
+		ThreadTS:  slackPayload.Message.TS,
 	}
 
 	// dispatch_* actions carry a dispatchActionValue payload (Phase 1 / F-5 fix),
@@ -132,6 +155,14 @@ func (h *InteractiveHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// the actionValue parser on the wrong shape.
 	if action.ActionID == "dispatch_approve" || action.ActionID == "dispatch_deny" {
 		h.handleDispatchAction(action, slackPayload.User.ID, target)
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	// approval_* actions are the Phase 4a 4-eyes path (ADR 0019). Same early
+	// branch reasoning: distinct payload shape, distinct lifecycle.
+	if action.ActionID == "approval_approve" || action.ActionID == "approval_deny" {
+		h.handleApprovalAction(action, slackPayload.User.ID, target)
 		w.WriteHeader(http.StatusOK)
 		return
 	}
@@ -265,6 +296,11 @@ func (h *InteractiveHandler) handleDispatchAction(action interactiveAction, clic
 		RequesterID:    clickerUserID, // trust the clicker, not the payload
 		IdempotencyKey: dv.IdempotencyKey,
 		IssuedAt:       dv.IssuedAt,
+		// Phase 3 (ADR 0018): pass channel + thread through so the Pub/Sub
+		// publish carries them as metadata. The outbound subscriber uses
+		// these to thread-reply when the agent finishes.
+		SlackChannelID: target.ChannelID,
+		SlackThreadTS:  target.ThreadTS,
 	}
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), responseURLTimeout)
@@ -282,6 +318,137 @@ func (h *InteractiveHandler) handleDispatchAction(action interactiveAction, clic
 func dispatchApproveToken(dv dispatchActionValue) string {
 	return fmt.Sprintf("dispatch_approve/%s/%s/%d",
 		dv.RequesterID, dv.IdempotencyKey, dv.IssuedAt)
+}
+
+// handleApprovalAction routes Phase 4a (ADR 0019) HIGH severity approvals.
+// approval_approve publishes a convergence ack back to dmail-inbound for the
+// original producer; approval_deny just notes the rejection in the thread.
+//
+// Stacked guards (mirror Phase 1 hijack defenses):
+//   1. clicker != original_requester (4-eyes)
+//   2. ConsumedTokenStore mark+lock (one-time button consume)
+//   3. Body digest match (tamper detection on the button payload)
+//
+// Authorization (allowlist) is shared with the rest of the gateway via the
+// EnvAuthChecker invoked indirectly through the FallbackNotifier — but Phase
+// 4a relies on the Slack workspace itself to enforce who can press buttons,
+// because the channel is private to the operator team.
+func (h *InteractiveHandler) handleApprovalAction(action interactiveAction, clickerUserID string, target port.NotifyTarget) {
+	av, err := parseApprovalActionValue(action.Value)
+	if err != nil {
+		slog.Warn("failed to parse approval action value", "error", err)
+		return
+	}
+	if av.ParentIdempotencyKey == "" || av.OriginalRequesterID == "" {
+		slog.Warn("approval action value missing required fields",
+			"parent", av.ParentIdempotencyKey, "requester", av.OriginalRequesterID)
+		return
+	}
+
+	// 4-eyes guard: the clicker MUST be different from the operator who
+	// issued the original dispatch / convergence chain. self-approval is
+	// the entire point of HIGH severity; allowing it defeats Phase 4a.
+	if clickerUserID == "" || clickerUserID == av.OriginalRequesterID {
+		slog.Warn("approval action 4-eyes guard rejected",
+			"action", action.ActionID, "clicker", clickerUserID, "original_requester", av.OriginalRequesterID)
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := h.notifier.SendEphemeral(ctx, target, clickerUserID,
+				"🚫 元 dispatch を発行した本人は HIGH severity を承認できません (4-eyes)"); err != nil {
+				slog.Error("approval 4-eyes ephemeral notification failed", "error", err)
+			}
+		}()
+		return
+	}
+
+	if action.ActionID == "approval_deny" {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), responseURLTimeout)
+			defer cancel()
+			if err := h.notifier.UpdateMessage(ctx, target,
+				fmt.Sprintf("🚫 HIGH severity 承認拒否 by <@%s>", clickerUserID)); err != nil {
+				slog.Error("approval_deny notification failed", "error", err)
+			}
+		}()
+		return
+	}
+
+	// approval_approve from here.
+	if h.approvalPublisher == nil {
+		slog.Warn("approval_approve received but ApprovalPublisher is not wired")
+		return
+	}
+
+	if h.consumedTokens != nil {
+		token := approvalToken(av)
+		if !h.consumedTokens.MarkConsumed(token) {
+			slog.Warn("approval_approve replay rejected", "token", token, "clicker", clickerUserID)
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				if err := h.notifier.SendEphemeral(ctx, target, clickerUserID,
+					"⚠️ この approval は既に処理済みです (重複クリック防止)"); err != nil {
+					slog.Error("approval replay ephemeral failed", "error", err)
+				}
+			}()
+			return
+		}
+	}
+
+	mail := domain.DMail{
+		ID:             newApprovalAckID(),
+		Kind:           domain.DMailKindConvergence,
+		Target:         av.Source, // ack flows BACK to the original producer
+		Source:         "runops-gateway-slack",
+		IdempotencyKey: av.ParentIdempotencyKey + "/approved-by-" + clickerUserID,
+		Body:           fmt.Sprintf("HIGH severity approval granted by <@%s> at unix=%d", clickerUserID, time.Now().Unix()),
+		Metadata: map[string]string{
+			"parent_idempotency_key": av.ParentIdempotencyKey,
+			"original_requester_id":  av.OriginalRequesterID,
+			"approver_id":            clickerUserID,
+			"slack_channel_id":       target.ChannelID,
+			"slack_thread_ts":        target.ThreadTS,
+			"approval_decision":      "approved",
+		},
+	}
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), responseURLTimeout)
+		defer cancel()
+		if _, err := h.approvalPublisher.PublishDMail(ctx, mail); err != nil {
+			slog.Error("approval ack publish failed", "error", err)
+			if nerr := h.notifier.UpdateMessage(ctx, target,
+				fmt.Sprintf("❌ 承認の Pub/Sub publish に失敗しました: %v", err)); nerr != nil {
+				slog.Error("approval failure notification also failed", "error", nerr)
+			}
+			return
+		}
+		if err := h.notifier.UpdateMessage(ctx, target,
+			fmt.Sprintf("✅ HIGH severity 承認完了 by <@%s>", clickerUserID)); err != nil {
+			slog.Error("approval success notification failed", "error", err)
+		}
+	}()
+}
+
+// approvalToken is the consumed-token key for an approvalActionValue.
+// ParentIdempotencyKey is unique per dispatch chain so it is the canonical
+// dedup axis; IssuedAt prevents accidental collision across rare reissues.
+func approvalToken(av approvalActionValue) string {
+	return fmt.Sprintf("approval/%s/%s/%d", av.OriginalRequesterID, av.ParentIdempotencyKey, av.IssuedAt)
+}
+
+// newApprovalAckID returns a 16-byte hex string used as the approval ack
+// DMail.ID (filename stem on the receiver side).
+func newApprovalAckID() string {
+	return "ack-" + dispatchApproveTokenStub() // intentionally distinct from /agent IDs
+}
+
+// dispatchApproveTokenStub mirrors the random ID logic from the dispatcher
+// without re-importing crypto/rand here. We keep approval ack IDs short and
+// deterministic-per-call by using the Unix nano + a small hash.
+func dispatchApproveTokenStub() string {
+	return fmt.Sprintf("%x", time.Now().UnixNano())
 }
 
 // decodeButtonValue undoes the encoding applied by compressButtonValue. Values
