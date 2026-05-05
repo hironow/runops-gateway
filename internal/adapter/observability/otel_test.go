@@ -77,6 +77,44 @@ func TestNormalizeEndpoint_StripsSchemeAndDecidesInsecure(t *testing.T) {
 	}
 }
 
+// TestBuildResource_PutsServiceAttributesOnTheResource verifies the resource
+// builder embeds the configured service identification (service.name,
+// service.namespace, service.version) so every span the provider emits is
+// attributable to the right binary.
+//
+// We deliberately skip the GCP detector here — that one calls into the
+// metadata server and is exercised separately. This test isolates the part
+// the caller controls (Config -> resource attributes).
+func TestBuildResource_PutsServiceAttributesOnTheResource(t *testing.T) {
+	// given
+	ctx := context.Background()
+	cfg := observability.Config{
+		ServiceName:    "runops-gateway",
+		ServiceVersion: "v0.4.1+phase4a",
+	}
+
+	// when
+	res, err := observability.BuildResource(ctx, cfg)
+	if err != nil {
+		t.Fatalf("BuildResource returned error: %v", err)
+	}
+
+	// then
+	got := map[string]string{}
+	for _, kv := range res.Attributes() {
+		got[string(kv.Key)] = kv.Value.AsString()
+	}
+	if got["service.name"] != "runops-gateway" {
+		t.Errorf("service.name = %q, want %q", got["service.name"], "runops-gateway")
+	}
+	if got["service.namespace"] != "runops" {
+		t.Errorf("service.namespace = %q, want %q", got["service.namespace"], "runops")
+	}
+	if got["service.version"] != "v0.4.1+phase4a" {
+		t.Errorf("service.version = %q, want %q", got["service.version"], "v0.4.1+phase4a")
+	}
+}
+
 // TestSetupTracerProvider_NoEndpointReturnsUsableProvider verifies the
 // "binary always boots" guarantee from ADR 0020: when OTEL_EXPORTER_OTLP_ENDPOINT
 // is unset (empty Config.Endpoint), SetupTracerProvider must still succeed and

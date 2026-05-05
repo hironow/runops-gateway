@@ -14,7 +14,9 @@ import (
 	"context"
 	"strings"
 
+	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 )
 
 // Config carries the runtime configuration SetupTracerProvider needs. It is a
@@ -31,6 +33,30 @@ type Config struct {
 	// ServiceName populates resource attribute service.name. It is the
 	// minimum identification any backend needs.
 	ServiceName string
+
+	// ServiceVersion populates resource attribute service.version. Useful
+	// for distinguishing canary vs stable revisions in a single trace
+	// view. Build pipelines pass this via -ldflags '-X main.version=...'.
+	ServiceVersion string
+}
+
+// serviceNamespace is the org-level grouping every binary in this repo
+// reports. Hard-coded because there is one organization-style answer.
+const serviceNamespace = "runops"
+
+// BuildResource composes the OTel Resource that every span produced by this
+// binary should carry. service.namespace is hard-coded; service.name and
+// service.version come from cfg. The GCP resource detector is intentionally
+// not wired here yet — it lives behind its own helper so unit tests do not
+// hit the GCP metadata server.
+func BuildResource(ctx context.Context, cfg Config) (*resource.Resource, error) {
+	return resource.New(ctx,
+		resource.WithAttributes(
+			semconv.ServiceName(cfg.ServiceName),
+			semconv.ServiceNamespace(serviceNamespace),
+			semconv.ServiceVersion(cfg.ServiceVersion),
+		),
+	)
 }
 
 // SetupTracerProvider returns a TracerProvider that the caller is responsible
