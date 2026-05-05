@@ -161,27 +161,38 @@ func (h *InteractiveHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+// decodeButtonValue undoes the encoding applied by compressButtonValue. Values
+// with the "gz:" prefix are gzip + base64url decoded; legacy raw JSON values
+// pass through. Shared by parseActionValue and parseDispatchActionValue so the
+// two payload shapes use exactly the same transport.
+func decodeButtonValue(s string) ([]byte, error) {
+	if !strings.HasPrefix(s, "gz:") {
+		return []byte(s), nil
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(s[3:])
+	if err != nil {
+		return nil, fmt.Errorf("base64 decode button value: %w", err)
+	}
+	r, err := gzip.NewReader(bytes.NewReader(decoded))
+	if err != nil {
+		return nil, fmt.Errorf("gzip reader for button value: %w", err)
+	}
+	defer r.Close()
+	expanded, err := io.ReadAll(r)
+	if err != nil {
+		return nil, fmt.Errorf("decompress button value: %w", err)
+	}
+	return expanded, nil
+}
+
 // parseActionValue parses a Slack button value into an actionValue.
 // Values with the "gz:" prefix are decompressed (gzip + base64url) before JSON parsing.
 // This is the counterpart of compressButtonValue in adapter/output/slack/blockkit.go.
 func parseActionValue(s string) (actionValue, error) {
 	var av actionValue
-	data := []byte(s)
-	if strings.HasPrefix(s, "gz:") {
-		decoded, err := base64.RawURLEncoding.DecodeString(s[3:])
-		if err != nil {
-			return av, fmt.Errorf("base64 decode button value: %w", err)
-		}
-		r, err := gzip.NewReader(bytes.NewReader(decoded))
-		if err != nil {
-			return av, fmt.Errorf("gzip reader for button value: %w", err)
-		}
-		defer r.Close()
-		expanded, err := io.ReadAll(r)
-		if err != nil {
-			return av, fmt.Errorf("decompress button value: %w", err)
-		}
-		data = expanded
+	data, err := decodeButtonValue(s)
+	if err != nil {
+		return av, err
 	}
 	if err := json.Unmarshal(data, &av); err != nil {
 		return av, err
