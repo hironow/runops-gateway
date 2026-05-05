@@ -10,6 +10,24 @@
 
 最終更新: 2026-05-05
 
+## ブランチ運用ポリシー (重要)
+
+**`main` は production の稼働中ブランチ**。Cloud Run に自動デプロイ (`cd.yaml`) される。
+
+**全ての feature / fix / docs PR は `develop` を base にする**。
+2026-05-05 時点の合意事項。`gh pr create` 時に `-B develop` を必ず指定する。
+
+| 役割 | branch | base への merge |
+|---|---|---|
+| 開発 PR | `feat/*` `fix/*` `docs/*` `refactor/*` 等 | → `develop` |
+| Release PR | `release/*` | `develop` → `main` |
+| Hotfix | `hotfix/*` | `main` + `develop` 両方 cherry-pick |
+
+理由: `main` は production 稼働中のため、開発中の Phase 1 (シンプル経路) や
+今後の Phase 2 以降の実装が中途半端な状態で `main` に積まれることを避ける。
+`develop` を統合ブランチとし、phase 単位 (or リリース単位) で `main` に rebase
+or merge する運用とする。
+
 ---
 
 ## 全体ステータス
