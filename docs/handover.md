@@ -55,7 +55,7 @@ or merge する運用とする。
 | **OTel 配線** | ✅ 完了 (2026-05-05, `feat/otel-direct-otlp` PR #8 draft) | ADR 0020 (Direct OTLP) + ADR 0021 (Pub/Sub trace 委譲) + ADR 0022 (CloudEvents 不採用)。`internal/adapter/observability` に SetupTracerProvider / NormalizeEndpoint / BuildResource / 自動 noop fallback。3 binary に TracerProvider + otelhttp wrap、Pub/Sub 3 client に `EnableOpenTelemetryTracing: true`、`compose.yaml` に Jaeger v2.17、`just trace-up/down/view`。手動 span: `slack.verify_signature` / `slack.handle_dispatch_action` / `slack.handle_approval_action` / `usecase.dispatch_agent_task` / `usecase.dispatch_result_handle` / `dmail.receiver.on_message` / `dmail.outbound.on_message` / `dmail.emitter.publish_file`。goroutine 跨ぎは `context.WithoutCancel` で trace context 引き継ぎ |
 | **Phase 4b (tofu コード)** | ✅ develop merged (2026-05-05, PR #8) | 本番化用 tofu: `tofu/pubsub.tf` (dmail-inbound / dmail-outbound + 各 DLQ)、`tofu/subscriptions.tf` (dmail-inbound-receiver / dmail-outbound-gateway + Pub/Sub service agent IAM)、`tofu/iam_pubsub.tf` (chatops_sa + 任意の exe-coder VM SA)、`tofu/telemetry.tf` (cloudtrace + telemetry API enable + tracesWriter)。`main.tf` の Cloud Run service に `SLACK_BOT_TOKEN` / `DISPATCHER_BACKEND=pubsub` / `PUBSUB_DMAIL_INBOUND_TOPIC` / `PUBSUB_DMAIL_OUTBOUND_SUB` / OTEL 一式の env を注入。`slack-bot-token` Secret Manager + accessor も追加。**scaling は `var.cloud_run_min_instances` (default 0) / `var.cloud_run_max_instances` (default 3) で制御**。Phase 3 outbound (ADR 0018) を有効化する際は `cloud_run_min_instances=1` に上げる |
 | **DLQ terminal sink** | ✅ tofu コード完了 (2026-05-05, `chore/dlq-terminal-sink`) | PR #8 後追い。`tofu/subscriptions.tf` に `dmail-inbound-dlq-pull` / `dmail-outbound-dlq-pull` を追加 (DLQ topic に subscription が無いと message が retention で蒸発する公式アンチパターン解消)。`tofu/monitoring.tf` (新設) に `subscription/dead_letter_message_count` の Cloud Monitoring alert + email notification channel (`dlq_alert_email` 空なら count=0 で skip)。`docs/runbooks/dlq.md` (新設) に triage 手順と republish snippet。詳細: `experiments/2026-05-05_pubsub-dlq-terminal-sink.md` |
-| Phase 4b (実 apply) | 📝 未実施 | `tofu apply` は別フロー (Cloud Run image deploy は main push トリガーの CD pipeline)。事前準備: `terraform.tfvars` に `slack_default_channel_id` / `otel_traces_sampler_arg` (任意、default 0.1) / `exe_coder_vm_sa_email` (hironow/dotfiles 側 SA 確定後) / `dlq_alert_email` (空なら DLQ alert は skip) を設定。Secret Manager の `slack-bot-token` を `gcloud secrets versions add slack-bot-token --data-file=<(echo -n xoxb-...)` で実値投入。apply 後 `gcloud run services describe runops-gateway --region asia-northeast1` で env 反映を確認、必要なら `docs/runbooks/dlq.md` の "First-time setup" の seek を実行 |
+| **Phase 4b (実 apply)** | ✅ 完了 (2026-05-05, gen-ai-hironow) | ローカル `tofu apply -var-file=tofu/gen-ai-hironow.tfvars` で **25 add + 2 change** が成功。Pub/Sub 4 topic + 4 subscription (working 2 + DLQ pull 2)、IAM 一式 (chatops_sa publisher/subscriber + exe-coder VM SA + Pub/Sub service agent + tracesWriter)、`slack-bot-token` secret + accessor、Cloud Monitoring DLQ alert (`hironow365@gmail.com` 通知)、Cloud Run env 12 個追加 (Phase 1-4a + OTel) を反映。`slack-bot-token` の実値 (xoxb-...) は v2 として登録済、Cloud Run revision `runops-gateway-00048-gdj` で latest 参照を v2 に再 pin 済み。**image は依然 `bd57b416` (Phase 0) のまま** で、Slash Command `/runops` や OTel 配線が動くのは main promote 後の CD pipeline で新 image deploy された時点 |
 
 「設計済 / 未着手」は intent.md と本ドキュメントに方針が書かれているが
 コードに手がついていない状態。
@@ -899,10 +899,10 @@ Interactive 両方) を疑う。
 
 ## 次にこのドキュメントを更新するタイミング
 
-- `tofu apply` が走って prod の Pub/Sub topic / IAM / Cloud Run env が
-  更新されたら、Phase 4b (実 apply) 行を「✅ 完了 (YYYY-MM-DD)」に格上げ
-  して apply 時の所感 (cold start / Pub/Sub レイテンシ / Cloud Trace
-  への span 到達確認) をハマりどころ集に追記
+- `develop → main` promote が走って CD pipeline で新 image (Phase 1-4b
+  対応) が Cloud Run に deploy されたら、apply 時の実体験 (cold start /
+  OTel span 到達 / Slash Command 起動確認 / 4-eyes approval 動作)
+  をハマりどころ集に追記
 - 5本柱本体が D-Mail frontmatter から traceparent を読んで span を再開する
   対応を入れたら、ハマりどころ 7 の「5本柱との連結」を解消済に書き直す
 - 5本柱までの完全 e2e (パターン F/G/H) を 1 度通したら、その手順を
