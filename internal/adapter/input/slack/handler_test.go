@@ -13,9 +13,11 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/hironow/runops-gateway/internal/adapter/output/state"
 	"github.com/hironow/runops-gateway/internal/core/domain"
 	"github.com/hironow/runops-gateway/internal/core/port"
 )
@@ -81,10 +83,10 @@ func newMockUseCase() *mockUseCase {
 	}
 }
 
-func TestHandler_InvalidSignature(t *testing.T) {
+func TestInteractiveHandler_InvalidSignature(t *testing.T) {
 	// given
 	mock := newMockUseCase()
-	handler := NewHandler(mock, testNotifier, "correct-secret")
+	handler := NewInteractiveHandler(mock, nil, testNotifier, nil, "correct-secret")
 
 	body := []byte("payload=test")
 	req := httptest.NewRequest(http.MethodPost, "/slack/interactive", bytes.NewBuffer(body))
@@ -102,11 +104,11 @@ func TestHandler_InvalidSignature(t *testing.T) {
 	}
 }
 
-func TestHandler_ValidApprove(t *testing.T) {
+func TestInteractiveHandler_ValidApprove(t *testing.T) {
 	// given
 	secret := "test-secret"
 	mock := newMockUseCase()
-	handler := NewHandler(mock, testNotifier, secret)
+	handler := NewInteractiveHandler(mock, nil, testNotifier, nil, secret)
 
 	av := actionValue{
 		Project:       "test-project",
@@ -122,10 +124,7 @@ func TestHandler_ValidApprove(t *testing.T) {
 	payload := interactivePayload{}
 	payload.User.ID = "U123"
 	payload.ResponseURL = "https://hooks.slack.com/response"
-	payload.Actions = []struct {
-		ActionID string `json:"action_id"`
-		Value    string `json:"value"`
-	}{
+	payload.Actions = []interactiveAction{
 		{ActionID: "approve", Value: string(avBytes)},
 	}
 	payloadBytes, _ := json.Marshal(payload)
@@ -159,11 +158,11 @@ func TestHandler_ValidApprove(t *testing.T) {
 	}
 }
 
-func TestHandler_ValidDeny(t *testing.T) {
+func TestInteractiveHandler_ValidDeny(t *testing.T) {
 	// given
 	secret := "test-secret"
 	mock := newMockUseCase()
-	handler := NewHandler(mock, testNotifier, secret)
+	handler := NewInteractiveHandler(mock, nil, testNotifier, nil, secret)
 
 	av := actionValue{
 		Project:       "test-project",
@@ -179,10 +178,7 @@ func TestHandler_ValidDeny(t *testing.T) {
 	payload := interactivePayload{}
 	payload.User.ID = "U456"
 	payload.ResponseURL = "https://hooks.slack.com/response"
-	payload.Actions = []struct {
-		ActionID string `json:"action_id"`
-		Value    string `json:"value"`
-	}{
+	payload.Actions = []interactiveAction{
 		{ActionID: "deny", Value: string(avBytes)},
 	}
 	payloadBytes, _ := json.Marshal(payload)
@@ -207,18 +203,15 @@ func TestHandler_ValidDeny(t *testing.T) {
 	}
 }
 
-func TestHandler_EmptyActions(t *testing.T) {
+func TestInteractiveHandler_EmptyActions(t *testing.T) {
 	// given
 	secret := "test-secret"
 	mock := newMockUseCase()
-	handler := NewHandler(mock, testNotifier, secret)
+	handler := NewInteractiveHandler(mock, nil, testNotifier, nil, secret)
 
 	payload := interactivePayload{}
 	payload.User.ID = "U789"
-	payload.Actions = []struct {
-		ActionID string `json:"action_id"`
-		Value    string `json:"value"`
-	}{}
+	payload.Actions = []interactiveAction{}
 	payloadBytes, _ := json.Marshal(payload)
 
 	req := buildValidRequest(t, secret, string(payloadBytes))
@@ -233,21 +226,18 @@ func TestHandler_EmptyActions(t *testing.T) {
 	}
 }
 
-func TestHandler_UnknownActionID(t *testing.T) {
+func TestInteractiveHandler_UnknownActionID(t *testing.T) {
 	// given
 	secret := "test-secret"
 	mock := newMockUseCase()
-	handler := NewHandler(mock, testNotifier, secret)
+	handler := NewInteractiveHandler(mock, nil, testNotifier, nil, secret)
 
 	av := actionValue{Project: "test-project", Location: "asia-northeast1", ResourceType: "service", ResourceNames: "svc", IssuedAt: time.Now().Unix()}
 	avBytes, _ := json.Marshal(av)
 
 	payload := interactivePayload{}
 	payload.User.ID = "U999"
-	payload.Actions = []struct {
-		ActionID string `json:"action_id"`
-		Value    string `json:"value"`
-	}{
+	payload.Actions = []interactiveAction{
 		{ActionID: "unknown_action", Value: string(avBytes)},
 	}
 	payloadBytes, _ := json.Marshal(payload)
@@ -264,18 +254,323 @@ func TestHandler_UnknownActionID(t *testing.T) {
 	}
 }
 
-func TestHandler_MalformedActionValue(t *testing.T) {
+// --- Phase 1 / F-5 dispatch_* routing tests (DispatchUseCase wiring) ---
+
+type recordedDispatchUseCase struct {
+	mu    sync.Mutex
+	calls []domain.DispatchRequest
+}
+
+func (r *recordedDispatchUseCase) DispatchAgentTask(_ context.Context, req domain.DispatchRequest, _ port.NotifyTarget) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, req)
+	return nil
+}
+
+func (r *recordedDispatchUseCase) snapshot() []domain.DispatchRequest {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]domain.DispatchRequest, len(r.calls))
+	copy(out, r.calls)
+	return out
+}
+
+func TestInteractiveHandler_DispatchApprove_CallsDispatchUseCase(t *testing.T) {
+	// given
+	secret := "test-secret"
+	mock := newMockUseCase()
+	disp := &recordedDispatchUseCase{}
+	handler := NewInteractiveHandler(mock, disp, testNotifier, nil, secret)
+
+	// Approve button payload — what CommandHandler embeds in dispatch_approve.
+	dv := dispatchActionValue{
+		Role:           "paintress",
+		Text:           "fix M-42",
+		RequesterID:    "U0123ABCD",
+		IdempotencyKey: "k-001",
+		IssuedAt:       time.Now().Unix(),
+	}
+	dvBytes, _ := json.Marshal(dv)
+
+	payload := interactivePayload{}
+	payload.User.ID = "U0123ABCD"
+	payload.ResponseURL = "https://hooks.slack.com/x"
+	payload.Actions = []interactiveAction{
+		{ActionID: "dispatch_approve", Value: string(dvBytes)},
+	}
+	payloadBytes, _ := json.Marshal(payload)
+
+	req := buildValidRequest(t, secret, string(payloadBytes))
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	// then
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) && len(disp.snapshot()) == 0 {
+		time.Sleep(10 * time.Millisecond)
+	}
+	calls := disp.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 DispatchAgentTask call, got %d", len(calls))
+	}
+	if calls[0].Role != domain.AgentRolePaintress {
+		t.Errorf("Role=%q", calls[0].Role)
+	}
+	if calls[0].Text != "fix M-42" {
+		t.Errorf("Text=%q", calls[0].Text)
+	}
+	if calls[0].RequesterID != "U0123ABCD" {
+		t.Errorf("RequesterID=%q", calls[0].RequesterID)
+	}
+	if calls[0].IdempotencyKey != "k-001" {
+		t.Errorf("IdempotencyKey=%q", calls[0].IdempotencyKey)
+	}
+	// And ApproveAction / DenyAction must NOT have been called.
+	select {
+	case <-mock.approveCh:
+		t.Error("ApproveAction must not be called for dispatch_approve")
+	case <-mock.denyCh:
+		t.Error("DenyAction must not be called for dispatch_approve")
+	default:
+	}
+}
+
+func TestInteractiveHandler_DispatchApprove_RejectsReplay(t *testing.T) {
+	// given — same dispatchActionValue clicked twice (button replay or
+	// re-fired by a network retry). Second click must NOT trigger a second
+	// DispatchAgentTask invocation.
+	secret := "test-secret"
+	mock := newMockUseCase()
+	disp := &recordedDispatchUseCase{}
+	consumed := state.NewMemoryConsumedStore(time.Hour)
+	handler := NewInteractiveHandler(mock, disp, testNotifier, consumed, secret)
+
+	dv := dispatchActionValue{
+		Role:           "paintress",
+		Text:           "fix M-42",
+		RequesterID:    "U0123ABCD",
+		IdempotencyKey: "k-once",
+		IssuedAt:       time.Now().Unix(),
+	}
+	dvBytes, _ := json.Marshal(dv)
+
+	build := func() *http.Request {
+		payload := interactivePayload{}
+		payload.User.ID = "U0123ABCD"
+		payload.ResponseURL = "https://hooks.slack.com/x"
+		payload.Actions = []interactiveAction{
+			{ActionID: "dispatch_approve", Value: string(dvBytes)},
+		}
+		payloadBytes, _ := json.Marshal(payload)
+		return buildValidRequest(t, secret, string(payloadBytes))
+	}
+
+	// First click — accepted.
+	rr1 := httptest.NewRecorder()
+	handler.ServeHTTP(rr1, build())
+	if rr1.Code != http.StatusOK {
+		t.Fatalf("first click: expected 200, got %d", rr1.Code)
+	}
+
+	// Second click — must be rejected by the consumed-token guard.
+	rr2 := httptest.NewRecorder()
+	handler.ServeHTTP(rr2, build())
+	if rr2.Code != http.StatusOK {
+		t.Fatalf("second click: expected 200, got %d", rr2.Code)
+	}
+
+	// give both goroutines a chance to run
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) && len(disp.snapshot()) == 0 {
+		time.Sleep(10 * time.Millisecond)
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	calls := disp.snapshot()
+	if len(calls) != 1 {
+		t.Errorf("DispatchAgentTask must run exactly once for the same approve token; got %d calls", len(calls))
+	}
+}
+
+func TestInteractiveHandler_DispatchApprove_RejectsImpersonation(t *testing.T) {
+	// given — clicker (U_other) is NOT the original requester (U0123ABCD)
+	secret := "test-secret"
+	mock := newMockUseCase()
+	disp := &recordedDispatchUseCase{}
+	handler := NewInteractiveHandler(mock, disp, testNotifier, nil, secret)
+
+	dv := dispatchActionValue{
+		Role:           "paintress",
+		Text:           "fix M-42",
+		RequesterID:    "U0123ABCD", // payload-bound original requester
+		IdempotencyKey: "k-impersonate",
+		IssuedAt:       time.Now().Unix(),
+	}
+	dvBytes, _ := json.Marshal(dv)
+
+	payload := interactivePayload{}
+	payload.User.ID = "U_other" // clicker is someone else
+	payload.ResponseURL = "https://hooks.slack.com/x"
+	payload.Actions = []interactiveAction{
+		{ActionID: "dispatch_approve", Value: string(dvBytes)},
+	}
+	payloadBytes, _ := json.Marshal(payload)
+
+	req := buildValidRequest(t, secret, string(payloadBytes))
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	// give the goroutine a chance to NOT run
+	time.Sleep(50 * time.Millisecond)
+	if got := disp.snapshot(); len(got) != 0 {
+		t.Errorf("DispatchAgentTask must not be called when clicker != requester; got %d calls (%+v)", len(got), got)
+	}
+}
+
+func TestInteractiveHandler_DispatchDeny_RejectsImpersonation(t *testing.T) {
+	// given — Deny is also restricted to the original requester to prevent
+	// griefers from dismissing other people's pending confirmations.
+	secret := "test-secret"
+	mock := newMockUseCase()
+	disp := &recordedDispatchUseCase{}
+	handler := NewInteractiveHandler(mock, disp, testNotifier, nil, secret)
+
+	dv := dispatchActionValue{
+		Role:        "paintress",
+		Text:        "fix M-42",
+		RequesterID: "U0123ABCD",
+	}
+	dvBytes, _ := json.Marshal(dv)
+
+	payload := interactivePayload{}
+	payload.User.ID = "U_other" // clicker is someone else
+	payload.ResponseURL = "https://hooks.slack.com/x"
+	payload.Actions = []interactiveAction{
+		{ActionID: "dispatch_deny", Value: string(dvBytes)},
+	}
+	payloadBytes, _ := json.Marshal(payload)
+
+	req := buildValidRequest(t, secret, string(payloadBytes))
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	// no use case is invoked either way; this test mainly asserts no panic
+	// and silent rejection. The full verification of "impersonation rejected"
+	// lives in the approve test above.
+	time.Sleep(50 * time.Millisecond)
+	if got := disp.snapshot(); len(got) != 0 {
+		t.Errorf("DispatchAgentTask must not be called via dispatch_deny; got %d calls", len(got))
+	}
+}
+
+func TestInteractiveHandler_DispatchDeny_DoesNotInvokeDispatchUseCase(t *testing.T) {
+	// given
+	secret := "test-secret"
+	mock := newMockUseCase()
+	disp := &recordedDispatchUseCase{}
+	handler := NewInteractiveHandler(mock, disp, testNotifier, nil, secret)
+
+	dv := dispatchActionValue{
+		Role:        "paintress",
+		Text:        "fix M-42",
+		RequesterID: "U0123ABCD",
+	}
+	dvBytes, _ := json.Marshal(dv)
+
+	payload := interactivePayload{}
+	payload.User.ID = "U0123ABCD"
+	payload.ResponseURL = "https://hooks.slack.com/x"
+	payload.Actions = []interactiveAction{
+		{ActionID: "dispatch_deny", Value: string(dvBytes)},
+	}
+	payloadBytes, _ := json.Marshal(payload)
+
+	req := buildValidRequest(t, secret, string(payloadBytes))
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	// give the goroutine a chance to NOT run
+	time.Sleep(50 * time.Millisecond)
+	if len(disp.snapshot()) != 0 {
+		t.Errorf("DispatchAgentTask must not be called for dispatch_deny; got %d calls", len(disp.snapshot()))
+	}
+}
+
+// TestInteractiveHandler_DispatchActionIDsDoNotRouteToApprove is a regression
+// guard for Phase 0 ChatOps. Phase 1 introduced dispatch_approve / dispatch_deny
+// action_ids on the same /slack/interactive endpoint, and we verify here that
+// these IDs do NOT trigger the existing ApproveAction / DenyAction use case
+// (they go through DispatchUseCase via the handleDispatchAction branch).
+//
+// If a future change rewrites the matcher to e.g. strings.Contains(... "approve")
+// or HasPrefix(... "dispatch_approve"), this test will catch the resulting
+// silent dispatch of an existing ApproveAction.
+func TestInteractiveHandler_DispatchActionIDsDoNotRouteToApprove(t *testing.T) {
+	cases := []string{"dispatch_approve", "dispatch_deny"}
+	for _, actionID := range cases {
+		t.Run(actionID, func(t *testing.T) {
+			secret := "test-secret"
+			mock := newMockUseCase()
+			handler := NewInteractiveHandler(mock, nil, testNotifier, nil, secret)
+
+			av := actionValue{
+				Project:       "test-project",
+				Location:      "asia-northeast1",
+				ResourceType:  "service",
+				ResourceNames: "svc",
+				IssuedAt:      time.Now().Unix(),
+			}
+			avBytes, _ := json.Marshal(av)
+
+			payload := interactivePayload{}
+			payload.User.ID = "U999"
+			payload.Actions = []interactiveAction{
+				{ActionID: actionID, Value: string(avBytes)},
+			}
+			payloadBytes, _ := json.Marshal(payload)
+
+			req := buildValidRequest(t, secret, string(payloadBytes))
+			rr := httptest.NewRecorder()
+			handler.ServeHTTP(rr, req)
+
+			if rr.Code != http.StatusOK {
+				t.Errorf("expected 200, got %d", rr.Code)
+			}
+			// ApproveAction MUST NOT be called for dispatch_* IDs.
+			select {
+			case req := <-mock.approveCh:
+				t.Errorf("ApproveAction was called for action_id=%q with req=%+v — Phase 4 routing leaked into Phase 0 ChatOps", actionID, req)
+			case req := <-mock.denyCh:
+				t.Errorf("DenyAction was called for action_id=%q with req=%+v — Phase 4 routing leaked into Phase 0 ChatOps", actionID, req)
+			case <-time.After(50 * time.Millisecond):
+				// expected: no use case invocation
+			}
+		})
+	}
+}
+
+func TestInteractiveHandler_MalformedActionValue(t *testing.T) {
 	// given — action_id is valid but Value is not parseable JSON
 	secret := "test-secret"
 	mock := newMockUseCase()
-	handler := NewHandler(mock, testNotifier, secret)
+	handler := NewInteractiveHandler(mock, nil, testNotifier, nil, secret)
 
 	payload := interactivePayload{}
 	payload.User.ID = "U123"
-	payload.Actions = []struct {
-		ActionID string `json:"action_id"`
-		Value    string `json:"value"`
-	}{
+	payload.Actions = []interactiveAction{
 		{ActionID: "approve", Value: "not-valid-json"},
 	}
 	payloadBytes, _ := json.Marshal(payload)
@@ -298,21 +593,18 @@ func TestHandler_MalformedActionValue(t *testing.T) {
 	}
 }
 
-func TestHandler_MultipleActions_OnlyFirstProcessed(t *testing.T) {
+func TestInteractiveHandler_MultipleActions_OnlyFirstProcessed(t *testing.T) {
 	// given — two actions in the payload; only the first must be dispatched
 	secret := "test-secret"
 	mock := newMockUseCase()
-	handler := NewHandler(mock, testNotifier, secret)
+	handler := NewInteractiveHandler(mock, nil, testNotifier, nil, secret)
 
 	av := actionValue{Project: "test-project", Location: "asia-northeast1", ResourceType: "service", ResourceNames: "svc", IssuedAt: time.Now().Unix()}
 	avBytes, _ := json.Marshal(av)
 
 	payload := interactivePayload{}
 	payload.User.ID = "U123"
-	payload.Actions = []struct {
-		ActionID string `json:"action_id"`
-		Value    string `json:"value"`
-	}{
+	payload.Actions = []interactiveAction{
 		{ActionID: "approve", Value: string(avBytes)},
 		{ActionID: "deny", Value: string(avBytes)},
 	}
@@ -411,11 +703,11 @@ func TestParseActionValue_GzPrefixed_DecompressedCorrectly(t *testing.T) {
 	}
 }
 
-func TestHandler_CompressedButtonValue_Dispatched(t *testing.T) {
+func TestInteractiveHandler_CompressedButtonValue_Dispatched(t *testing.T) {
 	// given — button value is gz: compressed (simulates large multi-service bundle)
 	secret := "test-secret"
 	mock := newMockUseCase()
-	handler := NewHandler(mock, testNotifier, secret)
+	handler := NewInteractiveHandler(mock, nil, testNotifier, nil, secret)
 
 	av := actionValue{
 		Project:       "test-project",
@@ -431,10 +723,7 @@ func TestHandler_CompressedButtonValue_Dispatched(t *testing.T) {
 	payload := interactivePayload{}
 	payload.User.ID = "U123"
 	payload.ResponseURL = "https://hooks.slack.com/response"
-	payload.Actions = []struct {
-		ActionID string `json:"action_id"`
-		Value    string `json:"value"`
-	}{
+	payload.Actions = []interactiveAction{
 		{ActionID: "approve", Value: gzipBase64(t, string(b))},
 	}
 	payloadBytes, _ := json.Marshal(payload)
@@ -511,11 +800,11 @@ func TestParseActionValue_CorruptGzip_ReturnsError(t *testing.T) {
 	}
 }
 
-func TestHandler_MissingProjectOrLocation_RejectsGracefully(t *testing.T) {
+func TestInteractiveHandler_MissingProjectOrLocation_RejectsGracefully(t *testing.T) {
 	// given — action value has no project/location; handler must return 200 without dispatching
 	secret := "test-secret"
 	mock := newMockUseCase()
-	handler := NewHandler(mock, testNotifier, secret)
+	handler := NewInteractiveHandler(mock, nil, testNotifier, nil, secret)
 
 	av := actionValue{
 		ResourceType:  "service",
@@ -530,10 +819,7 @@ func TestHandler_MissingProjectOrLocation_RejectsGracefully(t *testing.T) {
 	payload := interactivePayload{}
 	payload.User.ID = "U123"
 	payload.ResponseURL = "https://hooks.slack.com/response"
-	payload.Actions = []struct {
-		ActionID string `json:"action_id"`
-		Value    string `json:"value"`
-	}{
+	payload.Actions = []interactiveAction{
 		{ActionID: "approve", Value: string(avBytes)},
 	}
 	payloadBytes, _ := json.Marshal(payload)
@@ -555,11 +841,11 @@ func TestHandler_MissingProjectOrLocation_RejectsGracefully(t *testing.T) {
 	}
 }
 
-func TestHandler_MalformedPayloadJSON(t *testing.T) {
+func TestInteractiveHandler_MalformedPayloadJSON(t *testing.T) {
 	// given
 	secret := "test-secret"
 	mock := newMockUseCase()
-	handler := NewHandler(mock, testNotifier, secret)
+	handler := NewInteractiveHandler(mock, nil, testNotifier, nil, secret)
 
 	req := buildValidRequest(t, secret, `{not valid json}`)
 	rr := httptest.NewRecorder()
@@ -573,13 +859,13 @@ func TestHandler_MalformedPayloadJSON(t *testing.T) {
 	}
 }
 
-func TestHandler_ButtonValueBuildInfo_PropagatesToApprovalRequest(t *testing.T) {
+func TestInteractiveHandler_ButtonValueBuildInfo_PropagatesToApprovalRequest(t *testing.T) {
 	// given — Slack interactive payload whose action value carries build_info.
 	// The handler must surface it on domain.ApprovalRequest so the usecase
 	// (and downstream rebuild/progress messages) can show it.
 	secret := "test-secret"
 	mock := newMockUseCase()
-	handler := NewHandler(mock, testNotifier, secret)
+	handler := NewInteractiveHandler(mock, nil, testNotifier, nil, secret)
 
 	av := actionValue{
 		Project: "test-project", Location: "asia-northeast1",
@@ -592,10 +878,7 @@ func TestHandler_ButtonValueBuildInfo_PropagatesToApprovalRequest(t *testing.T) 
 	payload := interactivePayload{}
 	payload.User.ID = "U123"
 	payload.ResponseURL = "https://hooks.slack.com/response"
-	payload.Actions = []struct {
-		ActionID string `json:"action_id"`
-		Value    string `json:"value"`
-	}{
+	payload.Actions = []interactiveAction{
 		{ActionID: "approve", Value: string(avBytes)},
 	}
 	payloadBytes, _ := json.Marshal(payload)

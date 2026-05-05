@@ -20,11 +20,14 @@ const (
 	maxButtonLabel = 75   // button element text.text
 )
 
-// compressButtonValue always compresses s with gzip + base64url (prefix "gz:").
+// CompressButtonValue always compresses s with gzip + base64url (prefix "gz:").
 // Compression is unconditional so that parseActionValue in the handler is exercised
 // on every button click — bugs in the round-trip are caught immediately in tests and
 // production rather than only when the bundle size happens to exceed maxButtonValue.
-func compressButtonValue(s string) string {
+//
+// Exported so the input/slack package (Slash Command handler) can reuse the
+// exact same encoding for dispatch confirmation buttons (Phase 1 / F-5 fix).
+func CompressButtonValue(s string) string {
 	var buf bytes.Buffer
 	w := gzip.NewWriter(&buf)
 	if _, err := w.Write([]byte(s)); err != nil {
@@ -296,5 +299,5 @@ func marshalActionValue(req *domain.ApprovalRequest) string {
 		BuildInfo:        req.BuildInfo,
 	}
 	b, _ := json.Marshal(v)
-	return compressButtonValue(string(b))
+	return CompressButtonValue(string(b))
 }

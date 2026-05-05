@@ -1,0 +1,67 @@
+desc: "Operator dispatches an agent task via /agent Slack Slash Command"
+labels:
+  - dispatch
+  - slack
+  - phase1
+runners:
+  req: "{{vars.endpoint}}"
+vars:
+  endpoint: http://localhost:8080
+  # Signing secret must match SLACK_SIGNING_SECRET env var of the running server.
+  # Signatures are pre-computed for timestamp=1700000000 with secret=test-secret.
+  timestamp: "1700000000"
+  valid_body: "command=%2Fagent&text=paintress+fix+M-42&user_id=U0123ABCD&response_url=http%3A%2F%2Flocalhost%2Fcallback"
+  valid_sig: "v0=9ba3a3e6a493c79dcf6474386e8d421295841b4a4e571d208a128b18bc1b2a86"
+  unknown_role_body: "command=%2Fagent&text=phonewave+do+something&user_id=U0123ABCD&response_url=http%3A%2F%2Flocalhost%2Fcallback"
+  unknown_role_sig: "v0=4f68eacdf8defe5b652a973b22b38b9753464c9f0afc33b26d8d3bfacd594573"
+  empty_text_body: "command=%2Fagent&text=&user_id=U0123ABCD&response_url=http%3A%2F%2Flocalhost%2Fcallback"
+  empty_text_sig: "v0=5001e29eef2c1e39095b424ad4d98434e3cca9e14e04a6a653615b66c07917e3"
+steps:
+  - desc: "Operator dispatches /agent paintress fix M-42 — accepted, empty 200"
+    req:
+      /slack/command:
+        post:
+          headers:
+            Content-Type: application/x-www-form-urlencoded
+            X-Slack-Request-Timestamp: "{{vars.timestamp}}"
+            X-Slack-Signature: "{{vars.valid_sig}}"
+          body:
+            string: "{{vars.valid_body}}"
+    test: |
+      current.res.status == 200
+      && string(current.res.body) == ""
+  - desc: "Operator dispatches with unknown role 'phonewave' — ephemeral error"
+    req:
+      /slack/command:
+        post:
+          headers:
+            Content-Type: application/x-www-form-urlencoded
+            X-Slack-Request-Timestamp: "{{vars.timestamp}}"
+            X-Slack-Signature: "{{vars.unknown_role_sig}}"
+          body:
+            string: "{{vars.unknown_role_body}}"
+    test: |
+      current.res.status == 200
+      && current.res.body.response_type == "ephemeral"
+  - desc: "Operator dispatches with role only (empty text) — ephemeral usage hint"
+    req:
+      /slack/command:
+        post:
+          headers:
+            Content-Type: application/x-www-form-urlencoded
+            X-Slack-Request-Timestamp: "{{vars.timestamp}}"
+            X-Slack-Signature: "{{vars.empty_text_sig}}"
+          body:
+            string: "{{vars.empty_text_body}}"
+    test: |
+      current.res.status == 200
+      && current.res.body.response_type == "ephemeral"
+  - desc: "Unsigned /slack/command request is rejected with 401"
+    req:
+      /slack/command:
+        post:
+          headers:
+            Content-Type: application/x-www-form-urlencoded
+          body:
+            string: "{{vars.valid_body}}"
+    test: current.res.status == 401

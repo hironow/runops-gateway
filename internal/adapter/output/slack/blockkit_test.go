@@ -343,7 +343,7 @@ func TestBuildApprovalMessage_LongResourceName_SectionTextWithinLimit(t *testing
 
 func TestCompressButtonValue_AlwaysGzPrefix(t *testing.T) {
 	s := `{"resource_type":"service","resource_names":"svc","action":"canary_10","issued_at":1700000000}`
-	got := compressButtonValue(s)
+	got := CompressButtonValue(s)
 	if !strings.HasPrefix(got, "gz:") {
 		t.Errorf("expected gz: prefix, got %q", got[:min(20, len(got))])
 	}
@@ -351,7 +351,7 @@ func TestCompressButtonValue_AlwaysGzPrefix(t *testing.T) {
 
 func TestCompressButtonValue_Roundtrip(t *testing.T) {
 	original := `{"resource_type":"service","resource_names":"frontend,backend","targets":"rev-001,rev-002","action":"canary_10","issued_at":1700000000,"migration_done":false}`
-	compressed := compressButtonValue(original)
+	compressed := CompressButtonValue(original)
 	if !strings.HasPrefix(compressed, "gz:") {
 		t.Fatalf("expected gz: prefix, got %q", compressed[:min(20, len(compressed))])
 	}

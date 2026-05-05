@@ -89,3 +89,26 @@ func OperationKey(req domain.ApprovalRequest) string {
 	return fmt.Sprintf("%s/%s/%s/%s/%d",
 		req.Project, req.ResourceType, req.ResourceNames, req.Action, req.IssuedAt)
 }
+
+// Dispatcher is a secondary port that delivers a DispatchRequest to its target
+// agent. Phase 1 implementation (StubDispatcher) only logs the request; Phase 2
+// will swap in a Pub/Sub publisher that bridges to phonewave outbox.
+type Dispatcher interface {
+	// Dispatch hands off req to the underlying transport. Returns an error if
+	// the dispatch could not be initiated; the actual agent execution is
+	// asynchronous and reported back through a separate channel.
+	Dispatch(ctx context.Context, req domain.DispatchRequest) error
+}
+
+// ConsumedTokenStore tracks single-use tokens (e.g. dispatch_approve clicks)
+// to defeat button replay. Distinct from StateStore because the lifecycle is
+// "consume forever within TTL" rather than "lock then release".
+//
+// Phase 1 backing implementation is in-memory (per Cloud Run instance). Phase 2
+// will replace it with a Pub/Sub message ID-based dedup that survives autoscale.
+type ConsumedTokenStore interface {
+	// MarkConsumed records token as used. Returns true if this is the first
+	// time the token was seen (caller may proceed), false if already
+	// consumed (caller must reject as a replay).
+	MarkConsumed(token string) bool
+}
