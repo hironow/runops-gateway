@@ -15,10 +15,18 @@ D-Mail Pub/Sub bridge (ADR 0013 / 0018) で `max_delivery_attempts=5` を
 
 Cloud Monitoring が以下のいずれかで発火:
 
-- alert policy 名: **D-Mail DLQ message forwarded**
-- metric: `pubsub.googleapis.com/subscription/dead_letter_message_count`
-- 監視対象 subscription: `dmail-inbound-receiver` / `dmail-outbound-gateway`
-- 5 分間に 1 件でも DLQ 転送が起きたら即発火
+- **D-Mail DLQ message forwarded** — `dead_letter_message_count` の 5 分 delta が 1 件超えで即発火 (consumer が pull → nack を 5 回繰り返した結果)
+- **D-Mail subscription backlog stale** — `oldest_unacked_message_age` が **1 日** 超で発火 (consumer が居ない / 止まっている時の検知。DLQ に流れずに backlog に残る場合をカバー)
+
+> **重要な仕様**: Pub/Sub の `max_delivery_attempts=5` は consumer が pull
+> → nack を 5 回繰り返した時に DLQ 転送される。**consumer が居ないと backlog
+> に蓄積されるだけで DLQ には行かない**。そのため 2 つの alert が相補的:
+>
+> - DLQ alert: consumer 動作中に poison message を検知
+> - backlog alert: consumer 不在 / 停止を検知
+
+監視対象 subscription はどちらも `dmail-inbound-receiver` /
+`dmail-outbound-gateway` (working subscription)。
 
 ## Triage (5 min 以内)
 

@@ -34,8 +34,10 @@ type DispatchConfirmation struct {
 // /agent input and actual agent execution, so that a misclick or paste cannot
 // directly trigger a destructive operation.
 func BuildDispatchConfirmation(p DispatchConfirmation) SlackPayload {
+	// 依頼者は <@U...> 形式で出力すると Slack が @username に展開する。
+	// 他のフィールドは識別子なので code-formatted (バッククォート) で残す。
 	detail := "*エージェント:* `" + safeTrunc(p.Role, 50) + "`\n" +
-		"*依頼者:* `" + safeTrunc(p.RequesterID, 50) + "`\n" +
+		"*依頼者:* <@" + safeTrunc(p.RequesterID, 50) + ">\n" +
 		"*指示内容:* `" + safeTrunc(p.Text, 500) + "`\n" +
 		"*依頼ID:* `" + safeTrunc(p.IdempotencyKey, 64) + "`"
 
