@@ -985,17 +985,26 @@ Interactive 両方) を疑う。
 
 ## 次にこのドキュメントを更新するタイミング
 
-- `develop → main` promote が走って CD pipeline で新 image (Phase 1-4b
-  対応) が Cloud Run に deploy されたら、apply 時の実体験 (cold start /
-  OTel span 到達 / Slash Command 起動確認 / 4-eyes approval 動作)
-  をハマりどころ集に追記
-- 5本柱本体が D-Mail frontmatter から traceparent を読んで span を再開する
-  対応を入れたら、ハマりどころ 7 の「5本柱との連結」を解消済に書き直す
+- **dmail-receiver / dmail-emitter** が `hironow/dotfiles` で systemd
+  unit として deploy されたら、本番 Pub/Sub backlog が消化されることを
+  確認 → ハマりどころ集 8-prepre (DLQ は consumer 必須) に「実際に DLQ
+  に流れるパターンを観察した時の所感」を追記
+- **Phase 3 outbound StreamingPull** を実運用化したら
+  (`gh variable set CLOUD_RUN_MIN_INSTANCES 1`)、 cold start / 課金 /
+  trace の繋がりの実体験を追記
+- **5本柱本体** が D-Mail frontmatter の `traceparent` を読んで span を
+  再開する対応を入れたら、ハマりどころ 7 の「5本柱との連結」を解消済に
+  書き直す
 - 5本柱までの完全 e2e (パターン F/G/H) を 1 度通したら、その手順を
   `docs/local-verification.md` に昇格させ、ここからは削る
 - handler/receiver/emitter 内の細かい span (handleDispatchAction,
-  receiver.OnMessage, atomic write 等) を追加したら、span 配置一覧を
-  `docs/local-verification.md` か experiments 側に書き出す
+  receiver.OnMessage, atomic write 等) は既に PR #8 で追加済。新規 span
+  を増やしたら本セクションでなく `docs/local-verification.md` の
+  Pattern E-2/3/4 に追記
+- **Cloud Trace の実 trace 検証** が完了したら (gcp.project_id 修正後の
+  PR #22 deploy 直後の時点では Cloud Trace UI に反映前)、span tree の
+  実スクショを `experiments/2026-05-05_otel-cloud-run-pubsub-jaeger.md`
+  か本ファイルに 1 件添付
 - リポジトリリネームの判断が出たら「全体ステータス」の冒頭に決定を書く
 
 更新は破壊的でよい（過去の状態を残さない）。Git 履歴がそれを担う。
