@@ -75,6 +75,17 @@ variable "otel_traces_sampler_arg" {
   default     = "0.1"
 }
 
+variable "dlq_alert_email" {
+  description = <<-EOT
+    Email address that receives Cloud Monitoring incidents when the D-Mail
+    Pub/Sub bridge forwards a message to a DLQ. Empty disables the alert
+    + notification channel (handy for early bootstrap before email routing
+    is decided). See docs/runbooks/dlq.md for the triage workflow.
+  EOT
+  type        = string
+  default     = ""
+}
+
 variable "exe_coder_vm_sa_email" {
   description = <<-EOT
     Service account email of the exe-coder VM (managed in hironow/dotfiles).
