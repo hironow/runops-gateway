@@ -13,9 +13,16 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
+
 	"github.com/hironow/runops-gateway/internal/core/domain"
 	"github.com/hironow/runops-gateway/internal/core/port"
 )
+
+// handlerTracerName identifies this package as the OTel instrumentation
+// library so all Slack adapter spans group together in a span browser.
+const handlerTracerName = "github.com/hironow/runops-gateway/internal/adapter/input/slack"
 
 // actionValue is the JSON embedded in Slack button's value field.
 // Plural fields (ResourceNames, Targets, NextServiceNames, NextRevisions) are the
@@ -105,18 +112,26 @@ const responseURLTimeout = 25 * time.Minute
 
 // ServeHTTP implements http.Handler.
 func (h *InteractiveHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	// 1. Read body
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	// 2. Verify Slack signature
+	// 2. Verify Slack signature (manual span — failure tracking is operational
+	//    gold here; an unverified payload means either Slack secret rotation
+	//    failed or someone is replaying old captures).
+	_, verifySpan := otel.Tracer(handlerTracerName).Start(ctx, "slack.verify_signature")
 	if err := VerifySignature(r.Header, body, h.signingSecret); err != nil {
+		verifySpan.RecordError(err)
+		verifySpan.SetStatus(codes.Error, "signature verification failed")
+		verifySpan.End()
 		slog.Warn("slack signature verification failed", "error", err)
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+	verifySpan.End()
 	// 3. Parse form payload
 	r.Body = io.NopCloser(bytes.NewBuffer(body))
 	if err := r.ParseForm(); err != nil {
