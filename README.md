@@ -1,560 +1,68 @@
 # runops-gateway
 
-Slack ChatOps gateway for GCP operations.
-
-管理対象アプリの CI/CD パイプラインが新しいリビジョンをデプロイした後、
-Slack のボタンを押すだけでカナリアリリースや DB マイグレーションを安全に実行できる。
-
-runops-gateway 自体は GitHub Actions (`cd.yaml`) で自動デプロイされる。
-
-## 概要
+Slack ChatOps + AgentOps gateway for GCP。 管理対象アプリの CI/CD パイプラインが新リビジョンを deploy した後、 Slack のボタンでカナリアリリース / Cloud SQL マイグレーション / 5 本柱 (paintress / amadeus / sightjack / dominator) への D-Mail dispatch を安全に実行する。
 
 ```
 [ 管理対象アプリの CI/CD (Cloud Build 等) ]
-    |  1. イメージビルド & デプロイ (traffic 0%)
+    |  1. イメージビルド & deploy (traffic 0%)
     |  2. Slack に Block Kit ボタンを通知
     v
-[ Slack ワークスペース ]
-    |  承認者がボタンをクリック
+[ Slack ワークスペース ]                       承認者がボタンをクリック
     v
-[ runops-gateway (Cloud Run) ]  <- このリポジトリ
-    |  署名検証 -> 認可 -> 非同期実行
+[ runops-gateway (Cloud Run) ]  ← このリポジトリ
+    |  署名検証 → 認可 → 非同期実行
     v
-[ GCP (Cloud Run / Cloud SQL) ]
-    トラフィック切り替え / DB マイグレーション
+[ GCP (Cloud Run / Cloud SQL) ] / [ workspace VM (5 本柱 + dmail container) ]
 ```
 
-対応オペレーション:
+## 対応オペレーション
 
 | リソース | アクション | 内容 |
 |---|---|---|
 | `service` | `canary_N` | Cloud Run Service のトラフィックを N% へ切り替え |
 | `job` | `migrate_apply` | Cloud SQL バックアップ取得 → Cloud Run Jobs でマイグレーション実行 |
 | `worker-pool` | `canary_N` | Cloud Run Worker Pool のインスタンス割り当てを N% へ切り替え |
-| 5 本柱 dispatch (Phase 1+) | `/runops <request>` | Slack で `/runops paintress ...` 等を投げて 5 本柱 (sightjack / paintress / amadeus / dominator) に D-Mail を発行。Block Kit 確認 → Approve で実行 |
-| HIGH severity convergence (Phase 4a) | 4-eyes approval | `amadeus` の HIGH severity convergence は **元 dispatch を発行した本人以外** が Slack の Approve ボタンを押すまで実行されない (ADR 0019) |
+| 5 本柱 dispatch | `/runops <request>` | Slack で `/runops paintress ...` を投げて 5 本柱に D-Mail を発行。 Block Kit 確認 → Approve で実行 |
+| HIGH severity convergence | 4-eyes approval | `amadeus` の HIGH severity convergence は **元 dispatch 発行者以外** が Approve を押すまで実行されない (ADR 0019) |
 
-## 本番状態 (gen-ai-hironow, 最終更新 2026-05-05)
+## 状態 (production)
 
-| 項目 | 状態 |
-|---|---|
-| Cloud Run image | Phase 1-4b 全部入り (release PR #12 → #15 → #18 → #20 → #22 を main へ promote 済) |
-| Pub/Sub topology | dmail-inbound / dmail-outbound + 各 DLQ + DLQ pull subscription を tofu で本番 apply 済 |
-| Cloud Monitoring alert | `D-Mail DLQ message forwarded` + `D-Mail subscription backlog stale` (consumer 不在検知) — 通知先 hironow365@gmail.com |
-| Cloud Trace OTel | 3 binary とも `OTEL_EXPORTER_OTLP_ENDPOINT=telemetry.googleapis.com:443` で export、`gcp.project_id` resource attribute 付与済 (PR #21) |
-| Slash Command `/runops` | Slack workspace 設定済、`*依頼者:* @username` mention 表示 |
-| Slack Bot Token | `slack-bot-token` Secret Manager 実値投入済 (4-eyes approval / chat.postMessage fallback で使用) |
-| dmail-receiver / dmail-emitter | OCI image を AR (`<region>-docker.pkg.dev/<project>/runops/dmail-{receiver,emitter}`) に publish 済 (Issue 0001 Phase 2 / ADR 0023)。 deploy は `hironow/dotfiles` の workspace VM template が host-OS systemd + `docker run` で host (= ADR 0023 で exe-coder VM から workspace VM に確定)。 受入基準 verify は Issue 0001 で進行中 |
-| Phase 3 outbound StreamingPull | 無効化中 (`var.cloud_run_min_instances=0`)。consumer (5本柱) deploy 後に `gh variable set CLOUD_RUN_MIN_INSTANCES 1` で有効化 |
-
-CD pipeline (`.github/workflows/cd.yaml`) の **post-deploy smoke** が `/_healthz` 200 + `/slack/{interactive,command}` invalid-sig 401 を毎回検証する。失敗時は `gcloud run services update-traffic ... --to-revisions=PREVIOUS=100` でロールバック (`docs/handover.md` の ハマりどころ集 9-pre 参照)。
-
----
-
-## 1. runops-gateway 自体のセットアップと更新
-
-このセクションは **runops-gateway を動かすための作業** です。
-管理対象アプリのデプロイ設定は「[2. 管理対象アプリのデプロイ設定](#2-管理対象アプリのデプロイ設定)」を参照してください。
-
-### 1-1. 初回セットアップ
-
-> **前提**: `gcloud` CLI がログイン済みで、対象 GCP プロジェクトのオーナー相当の権限があること。
-
-```bash
-# (1) OpenTofu リモートステート用 GCS バケットを作成
-#     tofu init の前に存在している必要があるため手動で作成する (bootstrap constraint)
-gcloud storage buckets create gs://YOUR_TOFU_STATE_BUCKET \
-  --project=YOUR_PROJECT \
-  --location=asia-northeast1 \
-  --uniform-bucket-level-access
-```
-
-```bash
-# (2) OpenTofu でインフラを一括構築
-#     作成されるリソース:
-#       - Artifact Registry リポジトリ (runops)
-#       - Workload Identity Federation + github-deployer SA (GitHub Actions 用)
-#       - slack-chatops-sa (Cloud Run ランタイム用)
-#       - Secret Manager シークレット (slack-signing-secret, slack-webhook-url, slack-bot-token)
-#       - Cloud Run サービス (runops-gateway)
-#       - Pub/Sub topic / subscription (dmail-inbound, dmail-outbound, 各 DLQ + DLQ pull subscription)
-#       - Cloud Trace + telemetry API enable + roles/cloudtrace.agent
-#       - Cloud Monitoring alert (DLQ forwarding) — DLQ_ALERT_EMAIL 設定時のみ
-#       - 各種 IAM バインディング
-cd tofu
-tofu init -backend-config="bucket=YOUR_TOFU_STATE_BUCKET"
-tofu apply \
-  -var="project_id=YOUR_PROJECT" \
-  -var="image=asia-northeast1-docker.pkg.dev/YOUR_PROJECT/runops/runops-gateway:latest" \
-  -var="allowed_slack_users=U0123ABCD,U0456EFGH" \
-  -var="github_repo=YOUR_ORG/runops-gateway" \
-  -var="tofu_state_bucket=YOUR_TOFU_STATE_BUCKET"
-# 任意 (Phase 4b 機能を有効化する場合):
-#   -var="slack_default_channel_id=C0123ABCD"  # FallbackNotifier (ADR 0017)
-#   -var="otel_traces_sampler_arg=0.1"         # OTEL_TRACES_SAMPLER_ARG (ADR 0020)
-#   -var="exe_coder_vm_sa_email=exe-workspace@YOUR_PROJECT.iam.gserviceaccount.com"
-#                                              # 値は workspace VM SA (ADR 0023)。
-#                                              # 変数名は ADR 0015 era から維持しているが
-#                                              # 中身は workspace SA を入れる。 validation
-#                                              # block が pattern を強制 (ADR 0024)
-#   -var="dlq_alert_email=oncall@example.com"  # Cloud Monitoring 通知先
-#   -var="cloud_run_min_instances=1"           # Phase 3 outbound (ADR 0018) を有効化するとき
-#   -var="cloud_run_max_instances=3"           # default 3 (必要に応じて調整)
-```
-
-```bash
-# (3) シークレットの実値を登録 (tofu はリソースのみ作成 — 値は手動で追加)
-gcloud secrets versions add slack-signing-secret \
-  --data-file=<(echo -n "YOUR_SLACK_SIGNING_SECRET") \
-  --project=YOUR_PROJECT
-
-gcloud secrets versions add slack-webhook-url \
-  --data-file=<(echo -n "https://hooks.slack.com/services/YOUR/WEBHOOK/URL") \
-  --project=YOUR_PROJECT
-
-# Bot Token (xoxb-...) — ADR 0017 (FallbackNotifier) / ADR 0019 (HIGH severity 4-eyes approval)
-gcloud secrets versions add slack-bot-token \
-  --data-file=<(echo -n "xoxb-YOUR-BOT-TOKEN") \
-  --project=YOUR_PROJECT
-```
-
-```bash
-# (4) 初回イメージをビルドして Artifact Registry に push
-#     (2 の tofu apply 時点では Cloud Run はプレースホルダーイメージで起動)
-IMAGE=$(cd tofu && tofu output -raw artifact_registry_repository)/runops-gateway
-docker build -t ${IMAGE}:latest .
-docker push ${IMAGE}:latest
-
-# Cloud Run に初回イメージをデプロイ
-gcloud run deploy runops-gateway \
-  --image=${IMAGE}:latest \
-  --region=asia-northeast1 \
-  --project=YOUR_PROJECT
-```
-
-```bash
-# (5) GitHub リポジトリ変数を設定 (GitHub Actions CD パイプラインが使用)
-#     tofu output の値を gh CLI で直接流し込む (tofu/ ディレクトリで実行)
-cd tofu
-REPO="YOUR_ORG/runops-gateway"
-
-gh variable set GCP_PROJECT_ID                 --body "YOUR_PROJECT"                              --repo "${REPO}"
-gh variable set GCP_WORKLOAD_IDENTITY_PROVIDER --body "$(tofu output -raw workload_identity_provider)"   --repo "${REPO}"
-gh variable set GCP_SERVICE_ACCOUNT            --body "$(tofu output -raw github_deployer_sa_email)"     --repo "${REPO}"
-gh variable set ARTIFACT_REGISTRY_LOCATION     --body "asia-northeast1"                           --repo "${REPO}"
-gh variable set TOFU_STATE_BUCKET              --body "YOUR_TOFU_STATE_BUCKET"                    --repo "${REPO}"
-gh variable set CLOUD_RUN_LOCATION             --body "asia-northeast1"                           --repo "${REPO}"
-# ALLOWED_SLACK_USERS は空文字非対応のため、実際の Slack ユーザー ID が確定してから設定:
-# gh variable set ALLOWED_SLACK_USERS          --body "U0123ABCD,U0456EFGH"                       --repo "${REPO}"
-
-# 任意の Phase 4b 機能を CD で有効化したい場合 (cd.yaml 上部コメント参照):
-# gh variable set SLACK_DEFAULT_CHANNEL_ID     --body "C0123ABCD"                                 --repo "${REPO}"
-# gh variable set OTEL_TRACES_SAMPLER_ARG      --body "0.1"                                       --repo "${REPO}"
-# gh variable set EXE_CODER_VM_SA_EMAIL        --body "exe-workspace@${PROJECT}.iam.gserviceaccount.com" --repo "${REPO}"
-# gh variable set DLQ_ALERT_EMAIL              --body "oncall@example.com"                        --repo "${REPO}"
-
-# 設定確認:
-gh variable list --repo "${REPO}"
-```
-
-```bash
-# (6) Slack App の設定
-#     詳細は docs/slack-setup.md を参照。最低限の設定:
-#       - Interactivity & Shortcuts > Request URL: https://<URL>/slack/interactive
-#       - Slash Commands: /runops -> https://<URL>/slack/command
-#       - OAuth Bot Token Scopes: commands, chat:write
-#
-#     URL は tofu output で確認:
-cd tofu && tofu output runops_gateway_url
-```
-
-### 1-2. gateway 自体の更新デプロイ
-
-通常は `main` ブランチへの push で GitHub Actions (`cd.yaml`) が自動実行されます。
-インフラ変更 (`tofu/` 配下のファイル変更) も同一パイプラインで検知して `tofu apply` まで実行します。
-
-手動でデプロイしたい場合:
-
-```bash
-# イメージを再ビルドして push
-IMAGE=asia-northeast1-docker.pkg.dev/YOUR_PROJECT/runops/runops-gateway
-SHA=$(git rev-parse --short HEAD)
-
-docker build -t ${IMAGE}:${SHA} -t ${IMAGE}:latest .
-docker push --all-tags ${IMAGE}
-
-# Cloud Run に新リビジョンをデプロイ (即時 100% トラフィック)
-gcloud run deploy runops-gateway \
-  --image=${IMAGE}:${SHA} \
-  --region=asia-northeast1 \
-  --project=YOUR_PROJECT
-```
-
----
-
-## 2. 管理対象アプリのデプロイ設定
-
-このセクションは **runops-gateway を使って自分のアプリをデプロイする** ための作業です。
-runops-gateway 自体のセットアップは完了している前提です。
-
-### 2-0. プロジェクト構成と権限設定
-
-runops-gateway は以下の3つの構成をサポートしています。構成に応じたセットアップガイドを参照してください。
-
-| 構成 | ガイド | 概要 |
-|---|---|---|
-| 同一プロジェクト | [guide-single-project.md](docs/guide-single-project.md) | gateway と管理対象アプリが同じ GCP プロジェクト |
-| 2プロジェクト | [guide-two-projects.md](docs/guide-two-projects.md) | gateway と管理対象アプリが別プロジェクト（1:1） |
-| マルチプロジェクト | [guide-multi-project.md](docs/guide-multi-project.md) | gateway 1つ + 管理対象アプリ複数（1:N） |
-
-各ガイドに IAM 設定、`just init-app` の実行例、Cloud Build トリガーの設定方法が記載されています。
-
-### 2-1. 初回設定（アプリごとに1回）
-
-#### ファイルの配置
-
-`just init-app` で管理対象アプリのリポジトリに CI/CD ファイルをコピーします。
-サービス名・ジョブ名・リージョンは引数で指定し、`cloudbuild.yaml` の substitutions が自動的に置換されます。
-
-```bash
-# 基本（同一プロジェクト）
-just init-app /path/to/your-app your-project your-service your-migrate-job
-
-# クロスプロジェクト（gateway と別プロジェクト）
-just init-app /path/to/your-app app-project your-service your-migrate-job asia-northeast1 "" gateway-project
-
-# 複数サービス
-just init-app /path/to/your-app your-project "frontend,backend" db-migrate
-```
-
-生成されるファイル:
-
-| ファイル | 内容 |
-|---|---|
-| `cloudbuild.yaml` | ビルド・デプロイ・Slack 通知パイプライン（substitutions 置換済み） |
-| `scripts/notify-slack.sh` | Block Kit メッセージ送信スクリプト（実行権限付き） |
-
-#### Cloud Build のトリガー方法
-
-Cloud Build パイプラインを起動する方法は2つあります。
-
-**方法 A: Cloud Build 2nd gen トリガー（GitHub App 接続）**
-
-Cloud Console で GitHub リポジトリを Cloud Build に接続し、トリガーを作成します。
-
-```bash
-gcloud builds triggers create github \
-  --repo-name=YOUR_REPO \
-  --repo-owner=YOUR_ORG \
-  --branch-pattern=^main$ \
-  --build-config=cloudbuild.yaml \
-  --region=asia-northeast1
-```
-
-**方法 B: GitHub Actions から `gcloud builds submit`（推奨）**
-
-GitHub Actions を薄いランチャーとして使い、`gcloud builds submit` で Cloud Build を起動します。
-Cloud Build GitHub App 接続が不要で、設定がコード（`.github/workflows/`）で完結します。
-
-WIF（Workload Identity Federation）と deployer SA が必要です。
-runops-gateway の `tofu/github.tf` を参考に、管理対象アプリの GCP プロジェクトに作成してください。
-
-```yaml
-# .github/workflows/cd.yaml
-name: CD
-on:
-  push:
-    branches: [main]
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
-permissions:
-  contents: read
-  id-token: write
-jobs:
-  deploy:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v6
-      - uses: google-github-actions/auth@v3
-        with:
-          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
-      - uses: google-github-actions/setup-gcloud@v3
-      - run: |
-          gcloud builds submit \
-            --config=cloudbuild.yaml \
-            --region=${{ vars.CLOUD_BUILD_REGION }} \
-            --project=${{ vars.GCP_PROJECT_ID }} \
-            --substitutions=COMMIT_SHA=${{ github.sha }},BRANCH_NAME=${{ github.ref_name }},_REGION=${{ vars.CLOUD_BUILD_REGION }}
-```
-
-必要な GitHub リポジトリ変数（`tofu output` で取得）:
-
-| 変数 | 値 |
-|---|---|
-| `GCP_WORKLOAD_IDENTITY_PROVIDER` | `tofu output -raw workload_identity_provider` |
-| `GCP_SERVICE_ACCOUNT` | `tofu output -raw github_deployer_sa_email` |
-| `GCP_PROJECT_ID` | APP_PROJECT の ID |
-| `CLOUD_BUILD_REGION` | `asia-northeast1` 等 |
-
-#### Secret Accessor 権限の付与
-
-runops-gateway の Secret Manager に Webhook URL が登録済みであることを確認し、
-Cloud Build のサービスアカウントに Secret Accessor 権限を付与します:
-
-```bash
-APP_PROJECT_NUMBER=$(gcloud projects describe APP_PROJECT --format="value(projectNumber)")
-gcloud secrets add-iam-policy-binding slack-webhook-url \
-  --project=GATEWAY_PROJECT \
-  --member="serviceAccount:${APP_PROJECT_NUMBER}@cloudbuild.gserviceaccount.com" \
-  --role="roles/secretmanager.secretAccessor"
-```
-
-### 2-2. 通常デプロイ（アプリ更新のたびに）
-
-`main` ブランチへの push で Cloud Build が自動実行されます。以降の手順は:
-
-1. Cloud Build が完了すると Slack にボタン付きメッセージが届く
-2. 承認者がボタンをクリック
-3. runops-gateway がトラフィック切り替え or DB マイグレーションを実行
-4. 完了後 Slack メッセージが更新され、次の段階（canary_30 など）のボタンが表示される
-
-```
-[ git push → Cloud Build 完了 ]
-        |
-        v
-[ Slack: "1. DBマイグレーション → Canary" | "2. Canary (skip migration)" | "Deny" ]
-        | クリック
-        v
-[ runops-gateway: ShiftTraffic(10%) ]
-        |
-        v
-[ Slack: "canary_30 に昇格" | "停止・ロールバック" ]
-        | クリック
-        v
-[ runops-gateway: ShiftTraffic(30%) ]
-        ...
-        v
-[ runops-gateway: ShiftTraffic(100%) → デプロイ完了 ]
-```
-
-#### 手動トリガー（テスト・緊急時）
-
-```bash
-# 単一サービス
-gcloud builds submit --config=cloudbuild.yaml \
-  --substitutions="_SERVICE_NAMES=your-service,_REGION=asia-northeast1"
-
-# 複数サービス同時デプロイ
-gcloud builds submit --config=cloudbuild.yaml \
-  --substitutions="_SERVICE_NAMES=frontend-service,backend-service,_REGION=asia-northeast1"
-```
-
-#### CLI での緊急操作（Slack ダウン時）
-
-Slack が使えない場合は `runops` CLI で直接操作できます:
-
-```bash
-export ALLOWED_SLACK_USERS=your-email@example.com
-
-# カナリアリリース (10%)
-runops approve service your-service \
-  --project=your-project --location=asia-northeast1 \
-  --action=canary_10 --target=YOUR_REVISION_NAME --no-slack
-
-# 複数サービス同時カナリア
-runops approve service "frontend-service,backend-service" \
-  --project=your-project --location=asia-northeast1 \
-  --action=canary_10 --target="frontend-v2,backend-v2" --no-slack
-
-# DB マイグレーション
-runops approve job db-migrate-job \
-  --project=your-project --location=asia-northeast1 \
-  --action=migrate_apply --no-slack
-
-# 拒否 (デプロイ中断)
-runops deny service your-service \
-  --project=your-project --location=asia-northeast1 --no-slack
-```
-
-`--no-slack` を指定すると Slack 通知なしで stdout へ出力します。
-
----
-
-## アーキテクチャ
-
-Ports and Adapters (Hexagonal Architecture) を採用。コアドメイン・ユースケースは外部依存ゼロ。
-
-```
-                                                    [ workspace VM ]
-                                                      host-OS systemd:
-cmd/server                              cmd/runops      - dmail-receiver  (docker run)
-    |  HTTP                                 |  CLI      - dmail-emitter   (docker run)
-    |  /slack/{command,interactive}         |          (ADR 0023)
-    +-------- [ UseCase ] -------+----------+              ^
-                  |                                        |
-                  | (RunOps + Dispatch + DispatchResult)   | Pub/Sub
-                  v                                        v
-       +------+------+------+------+------+        +-------------------+
-       | GCP  Slack Auth State Pubsub Phonewave|   | dmail-inbound     |
-       +------+------+------+------+------+    +-->| dmail-outbound    |
-                                                   | + DLQ * 2         |
-                  ^                                +-------------------+
-                  |       OTLP gRPC (ADR 0020)
-                  +------> Jaeger v2 (local) / telemetry.googleapis.com (prod)
-```
-
-Legend / 凡例:
-- UseCase: コアユースケース層 (RunOpsService, DispatchService, DispatchResultHandler)
-- Phonewave: 5 本柱への file 受け渡し (atomic write + fsnotify)
-- Pubsub: Cloud Pub/Sub bridge (ADR 0013/0018, EnableOpenTelemetryTracing 有効)
-- OTLP gRPC: OpenTelemetry trace export (ADR 0020/0021)
-- workspace VM: Coder workspace の GCE VM (per-user); dmail container は host-OS systemd unit から `docker run --rm` で起動 (= 5 本柱と同 VM。 ADR 0023)
-
-- **Driving adapters**: Slack HTTP Handler (Slash + Interactive), Cobra CLI, Pub/Sub StreamingPull (gateway 内 OutboundReceiver / dmail-receiver / dmail-emitter)
-- **Driven adapters**: GCP Controller, Slack Notifier (response_url + chat.postMessage fallback / ApprovalRequester), EnvAuthChecker, MemoryStore + ConsumedTokenStore, Pub/Sub Publisher, OutboxWriter (phonewave)
-- **Cross-cutting**: `internal/adapter/observability` (OTel TracerProvider + ADC + sampler)
-
-## ディレクトリ構成
-
-```
-runops-gateway/
-├── cmd/
-│   ├── server/             # HTTP サーバー (Slack /slack/{command,interactive} 受信)
-│   ├── runops/             # CLI ツール (Cobra)
-│   ├── dmail-receiver/     # workspace VM 上の docker run: Pub/Sub -> phonewave outbox (ADR 0023)
-│   └── dmail-emitter/      # workspace VM 上の docker run: 5 本柱 archive watch -> Pub/Sub (ADR 0023)
-├── internal/
-│   ├── core/
-│   │   ├── domain/         # ResourceType, Action, ApprovalRequest, DMail (外部依存なし)
-│   │   └── port/           # インターフェース定義 (Dispatcher / DMailPublisher / Notifier 等)
-│   ├── usecase/            # ApproveAction / DenyAction / DispatchAgentTask / DispatchResultHandler
-│   └── adapter/
-│       ├── input/
-│       │   ├── slack/      # HTTP Handler + HMAC 署名検証 + dispatch_/approval_ action 分岐
-│       │   ├── cli/        # Cobra コマンド (approve / deny)
-│       │   ├── pubsub/     # Pub/Sub Receiver (dmail-receiver 用) / OutboundReceiver (gateway 内)
-│       │   └── phonewave/  # fsnotify Watcher + Emitter (dmail-emitter 用)
-│       ├── output/
-│       │   ├── gcp/        # Cloud Run + Cloud SQL API クライアント
-│       │   ├── slack/      # FallbackNotifier (response_url + chat.postMessage) + ApprovalRequester
-│       │   ├── auth/       # EnvAuthChecker (allowlist + 有効期限)
-│       │   ├── state/      # MemoryStore + ConsumedTokenStore (4-eyes one-time)
-│       │   ├── dispatcher/ # StubDispatcher / PubsubDispatcher (DISPATCHER_BACKEND で切替)
-│       │   ├── pubsub/     # Pub/Sub Publisher (EnableOpenTelemetryTracing on)
-│       │   └── phonewave/  # OutboxWriter (atomic temp+rename)
-│       └── observability/  # OTel TracerProvider + ADC + Sampler (ADR 0020)
-├── scripts/
-│   ├── notify-slack.sh     # Cloud Build から呼ばれる Slack 通知スクリプト
-│   ├── init-pubsub.sh      # local emulator 用 topic/subscription 初期化
-│   └── smoke/              # Pub/Sub 手動 smoke スクリプト
-├── tofu/                   # GCP インフラ定義 (OpenTofu) ← gateway 自体のインフラ
-│   ├── pubsub.tf           # dmail-* topics + DLQ
-│   ├── subscriptions.tf    # working subscriptions + DLQ pull subscriptions
-│   ├── iam_pubsub.tf       # chatops_sa + exe-coder VM SA への IAM
-│   ├── telemetry.tf        # Cloud Trace API + tracesWriter
-│   └── monitoring.tf       # DLQ forwarding alert
-├── docs/
-│   ├── adr/                # Architecture Decision Records (0001-0022)
-│   ├── runbooks/           # 運用 runbook (dlq.md 等)
-│   └── ...
-├── experiments/            # 設計判断の調査ノート (OTel / CloudEvents / DLQ)
-├── tests/
-│   ├── integration/        # Pub/Sub emulator + httptest を使う e2e 寄り (build tag: integration)
-│   └── runn/               # シナリオテスト (runn)
-├── compose.yaml            # local: Pub/Sub emulator + Jaeger v2
-├── cloudbuild.yaml         # 管理対象アプリ用 CI/CD パイプラインのテンプレート
-├── Dockerfile              # multi-stage build (distroless)
-└── justfile                # タスクランナー (test / pubsub-up / trace-up / etc.)
-```
-
-## 環境変数
-
-### サーバー (`cmd/server`)
-
-| 変数 | 必須 | デフォルト | 説明 |
-|---|---|---|---|
-| `SLACK_SIGNING_SECRET` | ✓ | — | Slack App の Signing Secret |
-| `PORT` | — | `8080` | HTTP ポート |
-| `ALLOWED_SLACK_USERS` | — | `""` (全拒否) | 承認許可ユーザーの Slack ID (カンマ区切り) |
-| `BUTTON_EXPIRY_SECONDS` | — | `7200` | ボタン有効期限（秒） |
-| `SLACK_BOT_TOKEN` | △ | — | `xoxb-...`、ADR 0017 (FallbackNotifier) と ADR 0019 (4-eyes approval) で必須。空なら fallback 無効 |
-| `SLACK_DEFAULT_CHANNEL_ID` | — | `""` | response_url 切れ時の `chat.postMessage` 既定チャンネル |
-| `DISPATCHER_BACKEND` | — | `stub` | `stub` (Phase 1 Slack 内完結) / `pubsub` (Phase 2a 以降、5 本柱と Pub/Sub bridge) |
-| `PUBSUB_PROJECT_ID` | △ | — | `DISPATCHER_BACKEND=pubsub` 時に必須 |
-| `PUBSUB_DMAIL_INBOUND_TOPIC` | △ | — | 同上 |
-| `PUBSUB_DMAIL_OUTBOUND_SUB` | — | `""` | 設定すると Phase 3 OutboundReceiver を gateway 内 goroutine で起動 (ADR 0018) |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | — | `""` | 空なら no-op TracerProvider。`http://localhost:4317` (Jaeger v2 local) / `telemetry.googleapis.com:443` (prod Cloud Trace) |
-| `OTEL_SERVICE_NAME` | — | `runops-gateway` | resource attribute `service.name` |
-| `OTEL_SERVICE_VERSION` | — | — | resource attribute `service.version` (build pipeline で `-ldflags` 経由) |
-| `OTEL_TRACES_SAMPLER` | — | `parentbased_always_on` | `parentbased_always_on` / `parentbased_traceidratio` |
-| `OTEL_TRACES_SAMPLER_ARG` | — | — | ratio 値 (例 `0.1`) |
-| `OTEL_BSP_SCHEDULE_DELAY` | — | — | BatchSpanProcessor flush 間隔 (ms)。Cloud Run の SIGTERM ロス対策で `2000` 推奨 |
-| `GOOGLE_CLOUD_PROJECT` | △ | — | Cloud Run が自動セット。OTel resource attribute `gcp.project_id` に転用される (PR #21)。**Cloud Trace OTLP 必須** で、空だと `InvalidArgument` で span が reject される。Local Jaeger では空で OK |
-
-### dmail-receiver / dmail-emitter
-
-| 変数 | 必須 | 説明 |
-|---|---|---|
-| `PUBSUB_PROJECT_ID` | ✓ | GCP project (emulator 時は `runops-local`) |
-| `PUBSUB_DMAIL_INBOUND_SUB` (receiver) / `PUBSUB_DMAIL_OUTBOUND_TOPIC` (emitter) | ✓ | subscription / topic 名 |
-| `PHONEWAVE_OUTBOX_DIR` (receiver) / `PHONEWAVE_ARCHIVE_DIRS` (emitter) | ✓ | watch / write 対象のローカル dir (emitter は `:` 区切り複数可) |
-| `PUBSUB_EMULATOR_HOST` | — | `localhost:9399` で local emulator に向ける |
-| `OTEL_*` | — | サーバーと同じ env で OTel 配線 (`OTEL_SERVICE_NAME` の default は `dmail-receiver` / `dmail-emitter`) |
-| `GOOGLE_CLOUD_PROJECT` | △ | OTel resource attribute `gcp.project_id` に転用 (PR #21)。Cloud Trace OTLP 利用時必須 |
-
-### CLI (`cmd/runops`)
-
-| 変数 | 必須 | 説明 |
-|---|---|---|
-| `ALLOWED_SLACK_USERS` | — | 承認許可ユーザー (CLI ではメールアドレスを使用) |
-
-プロジェクト ID とリージョンは `--project` / `--location` フラグで指定します。
-
-## 開発
-
-```bash
-# テスト
-just test
-
-# リント
-just lint
-
-# フォーマット
-just fmt
-
-# ビルド
-just build
-
-# シナリオテスト (要サーバー起動)
-just test-runn
-
-# notify-slack.sh のペイロード構造テスト (bash/Go 圧縮ラウンドトリップ確認)
-# 必要ツール: bash, gzip, base64, jq, curl
-just test-scripts
-```
-
-## シナリオテスト
-
-`tests/runn/` に runn シナリオが5本ある。`SLACK_SIGNING_SECRET=test-secret` でサーバーを起動して実行する。
-
-```bash
-# 全シナリオ実行
-SLACK_SIGNING_SECRET=test-secret PORT=8080 just run &
-just test-runn
-```
+最新の deploy 状況・進行中の作業・受入基準は [docs/handover.md](docs/handover.md) に集約する (= session-level の SoT)。 残作業の cross-repo タスクは [docs/issues/README.md](docs/issues/README.md)。
 
 ## ドキュメント
 
-- [`docs/guide-single-project.md`](docs/guide-single-project.md) — 同一プロジェクト構成のセットアップガイド
-- [`docs/guide-two-projects.md`](docs/guide-two-projects.md) — 2プロジェクト構成のセットアップガイド
-- [`docs/guide-multi-project.md`](docs/guide-multi-project.md) — マルチプロジェクト構成のセットアップガイド
-- [`docs/local-verification.md`](docs/local-verification.md) — ローカル動作確認ガイド（GCP なし / Tailscale Funnel E2E / Pub/Sub emulator / Jaeger v2）
-- [`docs/intent.md`](docs/intent.md) — 設計意図・アーキテクチャ詳細・5 本柱 D-Mail Dispatcher 化の前提
-- [`docs/slack-setup.md`](docs/slack-setup.md) — Slack App セットアップ (Slash Command `/runops` + Bot Token Scopes 含む)
-- [`docs/env-vars-and-config.md`](docs/env-vars-and-config.md) — 管理対象アプリの env 管理方針
-- [`docs/handover.md`](docs/handover.md) — 実装状況・テストカバレッジ・ハマりどころ
-- [`docs/adr/`](docs/adr/) — Architecture Decision Records (0001-0022)
-- [`docs/runbooks/`](docs/runbooks/) — 運用 runbook (例: `dlq.md` — DLQ alert triage)
-- [`experiments/`](experiments/) — 設計判断の調査ノート (OTel / CloudEvents / DLQ)
+| 目的 | 文書 |
+|---|---|
+| **何のサービスか / 設計意図** | [docs/intent.md](docs/intent.md) |
+| **アーキテクチャ + ディレクトリ構成** | [docs/architecture.md](docs/architecture.md) |
+| **セットアップ + 更新 deploy** | [docs/setup.md](docs/setup.md) |
+| **runops-gateway 自身の env vars** | [docs/runops-gateway-env-vars.md](docs/runops-gateway-env-vars.md) |
+| **管理対象アプリの env 管理方針** | [docs/env-vars-and-config.md](docs/env-vars-and-config.md) |
+| **Slack App セットアップ** | [docs/slack-setup.md](docs/slack-setup.md) |
+| **ローカル動作確認** | [docs/local-verification.md](docs/local-verification.md) |
+| **管理対象アプリ deploy guide (同一 GCP project)** | [docs/guide-single-project.md](docs/guide-single-project.md) |
+| **同 (gateway と app が別 project / 1:1)** | [docs/guide-two-projects.md](docs/guide-two-projects.md) |
+| **同 (gateway 1 + app 複数 / 1:N)** | [docs/guide-multi-project.md](docs/guide-multi-project.md) |
+| **DLQ alert triage** | [docs/runbooks/dlq.md](docs/runbooks/dlq.md) |
+| **ADR (決定の history)** | [docs/adr/](docs/adr/) |
+| **Issue tracker (未着手 work)** | [docs/issues/README.md](docs/issues/README.md) |
+| **設計判断の調査ノート** | [experiments/README.md](experiments/README.md) |
+| **引継ぎ (現セッション)** | [docs/handover.md](docs/handover.md) |
+| **AI agent 向け project 規約** | [CLAUDE.md](CLAUDE.md) |
+
+## 開発 quickstart
+
+```bash
+just                      # task list
+just test                 # go test ./...
+just lint                 # go vet + golangci-lint + semgrep + tofu test
+just check-all            # CI 同等 gate (prek hooks + check + test)
+
+just pubsub-up            # Pub/Sub emulator (local)
+just trace-up             # Jaeger v2 (local OTel viewer)
+
+# 管理対象アプリ用 ファイルのコピー (init-app)
+just init-app /path/to/your-app your-project your-service your-migrate-job
+```
+
+詳細は [justfile](justfile) と [docs/setup.md](docs/setup.md) を参照。
