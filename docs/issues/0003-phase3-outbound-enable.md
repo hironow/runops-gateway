@@ -1,8 +1,8 @@
 # Issue 0003: Phase 3 outbound StreamingPull を実運用化する
 
 **Repo:** `hironow/runops-gateway` (本リポ完結) + `hironow/dotfiles` (Issue 0001 完了が前提)
-**Status:** 📝 未着手 (Issue 0001 Phase 3 受入基準 verify 完了待ち)
-**Depends on:** Issue 0001 Phase 3 (= dmail-emitter が production workspace VM 上で稼働し、 `dmail-outbound` topic に publish が始まること)。 Issue 0001 自体は 2026-05-06 時点で Phase 1 + 2 + 3 (IAM apply / templates push / workspace 起動) 完了済、 outbox permission denied fix を出した段階 (dotfiles PR #90 / runops-gateway PR #37)。 fix merge → 受入基準 verify が完了次第 Issue 0003 へ進む
+**Status:** 📝 未着手 (= unblocked、 着手可能)
+**Depends on:** ~~Issue 0001~~ (✅ 2026-05-06 完了済)。 dmail-emitter は production workspace VM 上で稼働し `dmail-outbound` topic に publish 開始済 (Issue 0001 受入基準 1〜5 verify 完了)。 本 issue へ進める前提条件は揃った
 
 ## Why
 

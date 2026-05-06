@@ -9,7 +9,7 @@
 
 | # | Title | Repo / Owner | Status | Blocks |
 |---|---|---|---|---|
-| [0001](0001-dotfiles-dmail-receiver-systemd.md) | workspace VM に dmail-receiver / dmail-emitter を systemd unit + docker run として deploy | `hironow/dotfiles` + 本リポ Phase 2 | 🟡 Phase 1+2+3 完了 (IAM apply / templates push / workspace 起動)、 outbox permission denied fix 出した (PR #37 / dotfiles #90)、 fix merge → 受入基準 verify が残 | 0002, 0003 |
+| [0001](0001-dotfiles-dmail-receiver-systemd.md) | workspace VM に dmail-receiver / dmail-emitter を systemd unit + docker run として deploy | `hironow/dotfiles` + 本リポ Phase 2 | ✅ 完了 (2026-05-06、 受入基準 1〜5 全 verify、 PR #38 / dotfiles #91 chain) | (unblocks 0002, 0003) |
 | [0002](0002-five-pillars-frontmatter-trace.md) | 5本柱が D-Mail frontmatter から traceparent を読み span を再開 | 5本柱 4 リポ | 📝 未着手 | — |
 | [0003](0003-phase3-outbound-enable.md) | Phase 3 outbound StreamingPull を実運用化 (`CLOUD_RUN_MIN_INSTANCES=1`) | `hironow/runops-gateway` + 0001 完了 | 📝 未着手 | — |
 | [0004](0004-cloud-trace-span-verification.md) | Cloud Trace UI で実 span tree を確認 + 添付 | `hironow/runops-gateway` | 📝 未着手 | — |
