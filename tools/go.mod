@@ -218,3 +218,5 @@ require (
 	mvdan.cc/gofumpt v0.9.2 // indirect
 	mvdan.cc/unparam v0.0.0-20251027182757-5beb8c8f8f15 // indirect
 )
+
+replace github.com/fsnotify/fsnotify => github.com/hironow/fsnotify v0.0.0-20260504103917-76b01a6e8f50
