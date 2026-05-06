@@ -109,8 +109,9 @@ variable "exe_coder_vm_sa_email" {
     (managed in hironow/dotfiles). Variable name is preserved from the
     ADR 0015 era when the daemons were targeted at the exe-coder control-
     plane VM; per ADR 0023 the daemons now run on each workspace VM, so
-    the *value* should be the workspace-VM SA (e.g. exe-workspace@…) not
-    the control-plane VM SA. Granted:
+    the *value* MUST be the workspace-VM SA (e.g. exe-workspace@…) not
+    the control-plane VM SA. The pattern is enforced by the validation
+    block below. Granted:
 
       - pubsub.subscriber  on dmail-inbound-receiver
       - pubsub.publisher   on dmail-outbound topic
@@ -124,4 +125,25 @@ variable "exe_coder_vm_sa_email" {
   EOT
   type        = string
   default     = ""
+
+  # Codex pre-push review #4 (2026-05-06) flagged this variable as a
+  # cross-repo single point of failure: the legacy variable name
+  # ('exe_coder_*') invites the operator to plug in the control-plane
+  # SA, but per ADR 0023 the daemons now run on the workspace VM and
+  # need the workspace SA. A misroute here causes the dmail daemons to
+  # come up against production Pub/Sub with the wrong identity and fail
+  # immediately on permissions — the fastest possible production failure
+  # mode after deploy. We block this at the tofu validate / plan layer:
+  # the empty default is allowed (initial bootstrap, before the SA exists),
+  # and any non-empty value must look like a workspace-VM SA (i.e. start
+  # with 'exe-workspace@' and end with '.iam.gserviceaccount.com'). Renaming
+  # the variable itself is preferable but requires a co-ordinated GitHub
+  # variable + dotfiles handoff that sits outside this commit.
+  validation {
+    condition = var.exe_coder_vm_sa_email == "" || (
+      can(regex("^exe-workspace@[a-z0-9-]+\\.iam\\.gserviceaccount\\.com$",
+      var.exe_coder_vm_sa_email))
+    )
+    error_message = "exe_coder_vm_sa_email must be the workspace VM SA (per ADR 0023): an email of the form 'exe-workspace@<project>.iam.gserviceaccount.com', or empty during bootstrap. Plugging in the control-plane SA (exe-coder@…) would let the daemons start with the wrong identity and fail at first Pub/Sub call. If you really need a different naming convention, rename the variable in tofu/variables.tf and update this validation."
+  }
 }
