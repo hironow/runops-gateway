@@ -55,3 +55,5 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260427160629-7cedc36a6bc4 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 )
+
+replace github.com/fsnotify/fsnotify => github.com/hironow/fsnotify v0.0.0-20260504103917-76b01a6e8f50
