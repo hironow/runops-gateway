@@ -36,3 +36,25 @@ jobs:
 
       - name: Build
         run: go build ./cmd/...
+
+  # Run OpenTofu native tests (variable validation block contract,
+  # ADR 0024). Separate from the Go test job so a tofu-only change
+  # doesn't pull in the Go toolchain, and a Go-only change doesn't
+  # pull in tofu. Matches the local 'just test-iac' recipe so dev
+  # and CI stay in lockstep.
+  test-iac:
+    name: Test (OpenTofu)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: opentofu/setup-opentofu@fc711fa910b93cba0f3fbecaafc9f42fd0c411cb # v2.0.0
+        with:
+          tofu_version: latest
+
+      - name: tofu test
+        working-directory: tofu
+        run: |
+          rm -f .terraform/terraform.tfstate
+          tofu init -backend=false
+          tofu test
