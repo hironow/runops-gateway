@@ -54,3 +54,14 @@ repos:
         pass_filenames: false
         files: '^tofu/.*\.tf$'
         description: Format OpenTofu files (idempotent).
+
+      - id: just-test-iac
+        name: just test-iac (OpenTofu native tests)
+        entry: just test-iac
+        language: system
+        pass_filenames: false
+        # Trigger only on tofu source / test files so go-only commits
+        # do not pay the tofu init+test cost. Matches ADR 0024 split:
+        # variable validation behaviour lives in *.tofutest.hcl.
+        files: '^tofu/.*\.(tf|tofutest\.hcl)$'
+        description: Run `tofu test` against tofu/tests/ to gate variable validation contracts at commit time.
