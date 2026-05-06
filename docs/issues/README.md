@@ -14,6 +14,15 @@
 | [0003](0003-phase3-outbound-enable.md) | Phase 3 outbound StreamingPull を実運用化 (`CLOUD_RUN_MIN_INSTANCES=1`) | `hironow/runops-gateway` + 0001 完了 | 📝 未着手 | — |
 | [0004](0004-cloud-trace-span-verification.md) | Cloud Trace UI で実 span tree を確認 + 添付 | `hironow/runops-gateway` | 📝 未着手 | — |
 | [0005](0005-async-span-flush.md) | goroutine 内 span が Cloud Run idle shutdown までに flush されず lost する | `hironow/runops-gateway` | ✅ GREEN 完了 (PendingTracker + ordered shutdown + semgrep rule) | — |
+| [0006](0006-dmail-receiver-multi-path.md) | dmail-receiver の multi-project path 対応 (Pub/Sub `project_id` attr で write 先 select) | `hironow/runops-gateway` (Phase α) | 📝 未着手 | refs 0010 |
+| [0007](0007-dmail-emitter-project-id-attribute.md) | dmail-emitter が emit 時に `project_id` attribute を付与 | `hironow/runops-gateway` (Phase α) | 📝 未着手 | refs 0010 |
+| [0008](0008-slack-runops-project-flag.md) | Slack `/runops` command に `--project=<id>` flag 追加 | `hironow/runops-gateway` (Phase α) | 📝 未着手 | Phase α |
+| [0009](0009-project-registry-sot.md) | project registry の SoT を gateway DB で持つ (SQLite + `runops project ...` CLI) | `hironow/runops-gateway` (Phase α) | 📝 未着手 | 0008, 0010 |
+| [0010](0010-github-app-secret-manager.md) | GitHub App + Secret Manager 統合 (installation token fetch) | `hironow/runops-gateway` (Phase β) | 📝 未着手 | refs 0008/0011/0012 |
+
+> **multiplex Phase α/β 関連 (0006-0010) は cross-repo 親 issue が `tap/refs/docs/issues/` にある。**
+> 本 issue tracker が **実装 SoT**、refs 側は **dispatch 表 + cross-repo 親リスト**。
+> 推奨着手順 / 依存グラフは [tap/refs/docs/issues/README.md](https://github.com/hironow/tap/blob/main/refs/docs/issues/README.md) を参照。
 
 ## ファイル命名規則
 
