@@ -147,3 +147,94 @@ just check-all     # prek run + just check + just test (CI 同等の gate)
 - `go test` は重いので pre-commit には入れず `check-all` 段の `just test`
   でカバー
 - 除外 path: `output/` / `node_modules/` / `.venv/` / `tofu/.terraform/`
+
+## cdr (Coder CLI wrapper) — Issue 0001 deploy verify 手順
+
+dmail-receiver / dmail-emitter の OCI image は本リポの CD で
+Artifact Registry に publish される (ADR 0023)。 実 deploy は
+`hironow/dotfiles` 側の Coder workspace template (workspace VM の
+host OS systemd + docker run) で行う。 verify 時に本リポから
+production の workspace 状況を確認するための `cdr` コマンド一覧
+を以下に集約する。 dotfiles repo の `exe/scripts/cdr*` 系 wrapper
+が実体。
+
+### 前提
+
+- `cdr` コマンド (`~/.local/bin/cdr`) が PATH にあること
+  (= dotfiles で `just exe-cdr-install` 実行済)
+- gcloud auth + dotfiles tofu state 復号化 passphrase が手元にあること
+- exe-coder VM (= Coder server host) が SPOT preempt で TERMINATED
+  していないこと (= preempted なら `gcloud compute instances start
+  exe-coder --project gen-ai-hironow --zone asia-northeast1-a`
+  1 コマンドで復旧、 startup-script で coder.service +
+  cloudflared-exe.service が再立ち上がる)
+
+### dmail Phase 3 の deploy / verify ワークフロー
+
+```bash
+# 1. workspace template に新 image tag を flip (CD で AR に publish 済の SHA)
+cd ~/dotfiles
+SHA=<runops-gateway main の最新 SHA>
+PROJ=gen-ai-hironow
+cdr templates push exe-dotfiles-devcontainer \
+  -d exe/coder/templates/dotfiles-devcontainer \
+  --variable project_id="$PROJ" \
+  --variable workspace_sa_email="$(just exe-output -raw exe_workspace_sa_email)" \
+  --variable coder_internal_url="$(just exe-output -raw coder_internal_url)" \
+  --variable image="$(just exe-output -raw artifact_registry_repo)/devcontainer:main" \
+  --variable dmail_receiver_image="asia-northeast1-docker.pkg.dev/$PROJ/runops/dmail-receiver:$SHA" \
+  --variable dmail_emitter_image="asia-northeast1-docker.pkg.dev/$PROJ/runops/dmail-emitter:$SHA" \
+  --yes
+
+# 2. 検証用 workspace を起動 (instance_type は dev verify なら e2-micro 最小で十分。
+#    GCP region prompt は --yes でも skip できないので、 interactive で Tokyo を選ぶ)
+cdr create test-ws-001 \
+  --template exe-dotfiles-devcontainer \
+  --parameter instance_type=e2-micro \
+  --parameter dotfiles_uri=https://github.com/hironow/dotfiles.git \
+  --yes
+# → "GCP Region" prompt → "Tokyo, Japan: asia-northeast1-a" 選択
+
+# 3. workspace 起動状況確認 (Pending → Starting → Running、 agent connecting → ⦿ connected)
+cdr show test-ws-001
+# 注意: agent の connected シンボルは `⦿` (filled circle)、 `✔` ではない
+# (poll で grep するなら `⦿ connected` で match)
+
+# 4. Workspace VM の serial port log で startup-script の進捗を確認
+#    (startup-script は: tailscale install → docker pull devcontainer →
+#     docker pull dmail-receiver → docker pull dmail-emitter →
+#     /etc/systemd/system/dmail-{receiver,emitter}.service 書き出し →
+#     systemctl daemon-reload + enable --now)
+VM=coder-hironow-test-ws-001-root
+gcloud compute instances get-serial-port-output "$VM" \
+  --project gen-ai-hironow --zone asia-northeast1-a 2>&1 | tail -40
+# dmail-receiver / dmail-emitter container の log もここに出る
+# (docker[<pid>] tag で grep できる)
+
+# 5. workspace 削除 (検証完了後の cost 抑制)
+cdr delete test-ws-001 --yes
+```
+
+### よくハマる罠
+
+- **`coder ssh test-ws-001` は devcontainer の中に入る** (= host OS の
+  systemctl / docker は見えない)。 dmail container と systemd unit を
+  確認したいときは serial port log を使う。 `gcloud compute ssh
+  <VM>` は workspace VM の OS Login が設定されていないと
+  `Permission denied (publickey)` で失敗 — 確実なのは serial port log
+- **`--yes` flag でも GCP Region prompt は skip 不可**。 `coder/gcp-region`
+  module の制約。 interactive で Tokyo を選ぶ運用
+- **`cdr` の API call が 1033 (Cloudflare Tunnel error)** で失敗するときは
+  exe-coder VM が SPOT preempt で TERMINATED していないか確認。
+  `gcloud compute instances list --filter="name~exe-coder"` で status を
+  見て、 TERMINATED なら `gcloud compute instances start exe-coder ...`
+  で復旧
+- **dmail container は `USER nonroot:nonroot` (uid 65532、 distroless image
+  guardrail)** で起動。 host VM の `/var/lib/phonewave/{archive,outbox}`
+  の owner が違う (= devcontainer の linux_user uid 1000 系) と
+  `permission denied: open /outbox/.tmp-...` で write fail する。
+  dotfiles 側 main.tf startup-script の `chmod` / `chown` を整合させる
+  必要 (Issue 0001 Phase 3 deploy 時の確認ポイント)
+- **client (cdr) と server (Coder) の version mismatch** warning が頻出
+  するが、 通常 1 minor 版差 (例 client v2.32 / server v2.31) なら
+  運用上問題なし。 `cdr show` / `cdr templates push` 等は正常動作する
