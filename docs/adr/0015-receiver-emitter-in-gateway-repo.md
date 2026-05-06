@@ -9,6 +9,12 @@
 > attribute schema が単一情報源化されている (publisher / receiver / emitter
 > いずれもコンパイル時に整合する)。本番デプロイ (exe-coder VM の systemd unit)
 > は別 PR (infra) で実施。
+>
+> **2026-05-06 update (deploy section のみ)**: 下記 "デプロイ方式" 章の
+> 「GitHub Release のバイナリを curl 取得 + systemd 配置」 案は **ADR 0023
+> で再決定** された。 配置先 (exe-coder VM → 各 workspace VM) と配布手段
+> (生バイナリ → AR の OCI image + `docker run`) が変わっている。 Source 管理
+> 場所を本リポに固定する core decision は維持。
 
 ## Context
 

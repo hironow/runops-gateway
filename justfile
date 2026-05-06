@@ -29,11 +29,21 @@ test:
 test-v:
     go test -v ./...
 
-# Run linting (go vet + golangci-lint + semgrep)
+# Run linting (go vet + golangci-lint + semgrep + tofu test)
 lint:
     go vet ./...
     CGO_ENABLED=0 go tool -modfile=tools/go.mod golangci-lint run ./...
     just semgrep
+    just test-iac
+
+# Run OpenTofu native tests (validation block contract per ADR 0024).
+# Drop the cached terraform.tfstate first because a previous
+# `tofu init` against the real GCS backend leaves a state pointer
+# behind, which `tofu test` then tries to load — and fails with 403
+# in CI / on developer machines without GCS read perms. Removing the
+# cache forces a clean -backend=false init.
+test-iac:
+    cd tofu && rm -f .terraform/terraform.tfstate && tofu init -backend=false >/dev/null && tofu test
 
 # Run project semgrep rules
 semgrep:

@@ -154,6 +154,10 @@ jobs:
     env:
       IMAGE: >-
         ${{ vars.ARTIFACT_REGISTRY_LOCATION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/runops/runops-gateway
+      DMAIL_RECEIVER_IMAGE: >-
+        ${{ vars.ARTIFACT_REGISTRY_LOCATION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/runops/dmail-receiver
+      DMAIL_EMITTER_IMAGE: >-
+        ${{ vars.ARTIFACT_REGISTRY_LOCATION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/runops/dmail-emitter
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -173,7 +177,7 @@ jobs:
           gcloud auth configure-docker \
             ${{ vars.ARTIFACT_REGISTRY_LOCATION }}-docker.pkg.dev --quiet
 
-      - name: Build and push
+      - name: Build and push (runops-gateway)
         uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
         with:
           context: .
@@ -184,6 +188,36 @@ jobs:
           # Layer cache via GitHub Actions cache backend — no separate registry needed.
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # The dmail-receiver / dmail-emitter daemons run on the workspace
+      # VM (managed by hironow/dotfiles), not on Cloud Run. Build &
+      # push the images alongside the gateway so dotfiles can pull
+      # them via 'docker run' (Issue 0001 + the 2026-05-06 placement
+      # experiment). No Cloud Run deploy step — the workspace VM
+      # systemd unit handles lifecycle.
+      - name: Build and push (dmail-receiver)
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        with:
+          context: .
+          file: docker/dmail-receiver.Dockerfile
+          push: true
+          tags: |
+            ${{ env.DMAIL_RECEIVER_IMAGE }}:${{ github.sha }}
+            ${{ env.DMAIL_RECEIVER_IMAGE }}:latest
+          cache-from: type=gha,scope=dmail-receiver
+          cache-to: type=gha,mode=max,scope=dmail-receiver
+
+      - name: Build and push (dmail-emitter)
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        with:
+          context: .
+          file: docker/dmail-emitter.Dockerfile
+          push: true
+          tags: |
+            ${{ env.DMAIL_EMITTER_IMAGE }}:${{ github.sha }}
+            ${{ env.DMAIL_EMITTER_IMAGE }}:latest
+          cache-from: type=gha,scope=dmail-emitter
+          cache-to: type=gha,mode=max,scope=dmail-emitter
 
       - name: Deploy to Cloud Run
         id: deploy
