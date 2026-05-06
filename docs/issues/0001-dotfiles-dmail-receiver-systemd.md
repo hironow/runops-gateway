@@ -14,7 +14,7 @@
 
 調査結果 (Coder OSS / Pub/Sub 多重 puller / container daemon supervision) を踏まえた最終構造:
 
-- 配置: **各 workspace VM の host OS systemd** + `docker run --restart=unless-stopped`
+- 配置: **各 workspace VM の host OS systemd** + `docker run --rm` (再起動は systemd `Restart=on-failure` で担保。 `--rm` と `--restart` は docker 上で mutually exclusive なので同時指定はしない)
 - supervisor 不要 (supervisord / s6-overlay / systemd-user は採用しない)
 - `/var/lib/phonewave/{archive,outbox}` を host OS dir として用意し、 devcontainer (5本柱) と dmail container 両方に bind mount
 - image は本リポで build & AR publish、 dotfiles 側は image tag を `cdr templates push --variable` で pin

@@ -19,7 +19,7 @@ ADR 0015 (2026-05-05) は dmail-receiver / dmail-emitter の **source 管理場�
 
 ## Decision
 
-**dmail-receiver / dmail-emitter は本リポの CI で 2 つの OCI image (`docker/dmail-receiver.Dockerfile` / `docker/dmail-emitter.Dockerfile`) として build し、 Artifact Registry の `runops` repo に publish する。 dotfiles 側 (workspace VM template) は、 各 workspace VM の host OS systemd unit から `docker run --rm --restart=unless-stopped` でこれらの image を起動する。**
+**dmail-receiver / dmail-emitter は本リポの CI で 2 つの OCI image (`docker/dmail-receiver.Dockerfile` / `docker/dmail-emitter.Dockerfile`) として build し、 Artifact Registry の `runops` repo に publish する。 dotfiles 側 (workspace VM template) は、 各 workspace VM の host OS systemd unit から `docker run --rm` でこれらの image を起動し、 supervision (再起動) は systemd 側 `Restart=on-failure` に寄せる (`--rm` と `--restart` は [docker engine 上で mutually exclusive](https://docs.docker.com/reference/cli/docker/container/run/) なので、 同時指定はしない)。**
 
 ADR 0015 の "ソース管理は本リポ + デプロイは dotfiles 側" の大枠は維持し、 deploy section の **配布手段** (GitHub Release バイナリ → AR の OCI image) と **配置先** (exe-coder VM → 各 workspace VM) のみを本 ADR で確定する。
 
