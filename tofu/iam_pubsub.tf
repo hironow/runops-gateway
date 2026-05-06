@@ -7,12 +7,19 @@
 #      - publish dmail-inbound  (Phase 4a approval ack, ADR 0019)
 #      - subscribe dmail-outbound-gateway (Phase 3 OutboundReceiver, ADR 0018)
 #
-#   2. exe-coder VM (systemd, hironow/dotfiles repo) -> exe_coder_vm_sa_email
-#      - subscribe dmail-inbound-receiver
-#      - publish   dmail-outbound (dmail-emitter)
+#   2. workspace VM (per-VM host-OS systemd + docker run, hironow/dotfiles
+#      repo) -> var.exe_coder_vm_sa_email
+#      - subscribe dmail-inbound-receiver  (dmail-receiver container)
+#      - publish   dmail-outbound          (dmail-emitter container)
 #
-# The VM SA bindings are conditional on var.exe_coder_vm_sa_email being set so
-# this file applies cleanly during initial bootstrap before that SA exists.
+# Per ADR 0023 the daemons moved from the exe-coder control-plane VM to
+# each workspace VM, so the value of var.exe_coder_vm_sa_email is now
+# the workspace VM SA (exe-workspace@…), not the control-plane SA. The
+# variable name is preserved from the ADR 0015 era for backwards-
+# compatibility; see tofu/variables.tf for the validation block that
+# enforces the new pattern. The bindings remain conditional on
+# var.exe_coder_vm_sa_email being non-empty so this file applies
+# cleanly during initial bootstrap before that SA is provisioned.
 
 # --- runops-gateway (chatops_sa) ---
 
