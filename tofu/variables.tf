@@ -105,11 +105,22 @@ variable "dlq_alert_email" {
 
 variable "exe_coder_vm_sa_email" {
   description = <<-EOT
-    Service account email of the exe-coder VM (managed in hironow/dotfiles).
-    Granted pubsub.subscriber on dmail-inbound-receiver and pubsub.publisher on
-    dmail-outbound so the dmail-receiver and dmail-emitter daemons can run
-    against the production topology. Leave empty until the exe-coder VM SA is
-    actually provisioned — IAM bindings are created only when this is set.
+    Service account email of the VM that runs dmail-receiver / dmail-emitter
+    (managed in hironow/dotfiles). Variable name is preserved from the
+    ADR 0015 era when the daemons were targeted at the exe-coder control-
+    plane VM; per ADR 0023 the daemons now run on each workspace VM, so
+    the *value* should be the workspace-VM SA (e.g. exe-workspace@…) not
+    the control-plane VM SA. Granted:
+
+      - pubsub.subscriber  on dmail-inbound-receiver
+      - pubsub.publisher   on dmail-outbound topic
+      - cloudtrace.agent   project-level
+      - artifactregistry.reader scoped to the runops AR repo (so
+        'docker pull' of dmail-receiver / dmail-emitter image tags
+        works at workspace boot)
+
+    Leave empty until the workspace VM SA is actually provisioned — IAM
+    bindings are created only when this is set.
   EOT
   type        = string
   default     = ""
