@@ -918,6 +918,21 @@ Pub/Sub の挙動として、 同 subscription への複数 puller attach は **
 詳細は [`experiments/2026-05-06_dotfiles-dmail-daemon-placement.md`](../experiments/2026-05-06_dotfiles-dmail-daemon-placement.md)
 と ADR 0023。
 
+### 12. dmail container nonroot uid 65532 vs host VM linux_user uid 1000 の write 衝突
+
+Issue 0001 Phase 3 deploy verify (2026-05-06) で踏んだ permission
+denied error。 distroless `:nonroot` image は uid 65532 固定で起動
+する一方、 dotfiles の workspace VM startup-script は
+`/var/lib/phonewave/{archive,outbox}` を `chown linux_user:linux_user`
+(uid 1000-ish) で作成。 dmail-receiver container は uid 65532 で
+書こうとして `permission denied: open /outbox/.tmp-...` で fail。
+
+→ **fix**: `chmod 0777` (採用、 ADR 0023 Negative consequence 参照)。
+   workspace VM が per-user + short-lived + tag:exe-workspace
+   tailnet ACL 内 = trust boundary 狭いので acceptable。
+   multi-tenant / 長寿命 化したら shared group + setgid 2775 へ
+   refactor (= ADR 0023 の deferred refactor)。
+
 ---
 
 ## テスト戦略

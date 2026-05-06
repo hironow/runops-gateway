@@ -1,7 +1,7 @@
 # Issue 0001: workspace VM に dmail-receiver / dmail-emitter を systemd unit として deploy
 
 **Repo:** `hironow/dotfiles` (本リポ範囲外) + 本リポの Phase 2 image build
-**Status:** 🟡 Phase 1 GREEN (2026-05-06)、 Phase 2 image build & AR publish pending
+**Status:** 🟡 Phase 1 + 2 + 3 (IAM apply / templates push / workspace 起動) 完了済、 outbox permission denied fix 出した (2026-05-06、 dotfiles PR #90 / runops-gateway PR #37)、 fix merge → workspace 再作成 → 受入基準 verify が残タスク
 **Blocker for:** Issue 0003 (Phase 3 outbound 実運用化), Issue 0002 (5本柱 frontmatter trace 連結)
 
 > **配置先の確定 (2026-05-06)**: 当初タイトルは「exe-coder VM」 だったが、 [`experiments/2026-05-06_dotfiles-dmail-daemon-placement.md`](../../experiments/2026-05-06_dotfiles-dmail-daemon-placement.md) の調査で **配置先 = 各 workspace VM の host OS systemd** に確定。 exe-coder VM (control plane) には 5本柱 archive が存在しないため不適切。 5本柱は各 workspace VM 内で動作するので、 dmail daemon も同 VM に同居させる (per-VM = singleton、 race ゼロ、 Pub/Sub load-balancing で受信は自動 multiplex)。
@@ -57,19 +57,31 @@ dotfiles 側 (branch `hironow/issues-from-runops-gateway`):
 
 push 後の deploy で AR に image が publish される。 dotfiles 側の `dmail_receiver_image` / `dmail_emitter_image` default は `:placeholder` のままなので、 そのままでは workspace 起動時に `docker pull` が失敗する (= startup_script の `|| echo "...will retry"` で degrade)。 image 反映後に `cdr templates push --variable` で実 tag に切り替える。
 
-## Phase 3 — workspace SA に runops AR reader grant + image variable 切替 (実 deploy 直前)
+## Phase 3 — workspace SA への IAM 反映 + image tag flip + workspace 起動 (2026-05-06 実施)
 
-残タスク:
+実施済:
 
-1. **runops-gateway 側で IAM 追加**: workspace VM の SA (`exe-workspace@gen-ai-hironow.iam.gserviceaccount.com`) に runops AR repo (`<region>-docker.pkg.dev/gen-ai-hironow/runops`) の `roles/artifactregistry.reader` を grant。 現状は dotfiles AR (`dotfiles`) に対する grant のみ
-2. **dotfiles 側で template push**: `cdr templates push exe-dotfiles-devcontainer --variable dmail_receiver_image=...:<sha> --variable dmail_emitter_image=...:<sha>`
-3. **新規 workspace VM 起動 / 既存 VM の startup-script 再実行** で systemd unit を deploy
-4. **production 検証**:
-   - `systemctl status dmail-{receiver,emitter}` が `active (running)`
-   - `dmail-inbound-receiver` の `numUndeliveredMessages` が 0 に近づく
-   - phonewave outbox に `.md` が atomic write される
-   - Cloud Trace に `dmail-receiver` / `dmail-emitter` service の span が arrival
-   - `docs/runbooks/dlq.md` の "First-time setup" seek を 1 度実行 (過去 backlog 復活)
+1. **GitHub Variable `EXE_CODER_VM_SA_EMAIL`** を `exe-workspace@gen-ai-hironow.iam.gserviceaccount.com` に切替 (旧値 `exe-coder@…` は ADR 0023 の workspace VM 配置と矛盾、 さらに本リポ PR #33 で追加した validation block が reject する)
+2. **本リポで tofu apply** (release PR #34 + #35 + #36 経由): IAM 4 件 add (`roles/artifactregistry.reader` on runops AR repo / `roles/pubsub.subscriber` on `dmail-inbound-receiver` / `roles/pubsub.publisher` on `dmail-outbound` / `roles/cloudtrace.agent` project-level、 全部 `exe-workspace@…` に対して)。 monitoring resource (DLQ alert / notification channel) は `DLQ_ALERT_EMAIL=hironow365@gmail.com` のおかげで destroy せず維持
+3. **dotfiles で `cdr templates push exe-dotfiles-devcontainer`**: `dmail_receiver_image` / `dmail_emitter_image` を `:placeholder` から real SHA tag (`asia-northeast1-docker.pkg.dev/gen-ai-hironow/runops/dmail-{receiver,emitter}:85d4c2baa...`) に flip
+4. **検証用 workspace `test-ws-001`** を起動 (`cdr create ... --parameter instance_type=e2-micro`、 GCP Region prompt は `--yes` でも skip 不可で interactive で Tokyo 選択)
+5. **dmail container 動作確認**: dmail-emitter / dmail-receiver の起動ログ + Pub/Sub pull (= IAM 効いている) は OK
+
+検出された問題:
+
+- **dmail-receiver `permission denied: open /outbox/.tmp-...`**: distroless `:nonroot` (uid 65532) が host VM の `/var/lib/phonewave/outbox` (= mode 0755 owned by linux_user uid 1000-ish) に書けない
+- 本問題の trade-off + fix 採用案 = ADR 0023 の Negative consequences に追記済 (= `chmod 0777`、 workspace VM が per-user + short-lived + tag:exe-workspace 内 trust boundary なので acceptable)
+- 修正 PR:
+  - dotfiles `fix/dmail-outbox-permission` (PR #90) — main.tf startup-script の `install -d -m 0755` → `0777`
+  - runops-gateway `docs/cdr-runbook-and-permission-fix` (PR #37) — CLAUDE.md cdr 運用 section + ADR 0023 trade-off 追記
+
+残タスク (= 受入基準 verify):
+
+1. **dotfiles PR #90 merge** → main で chmod 0777 反映
+2. **`cdr templates push`** で template 再 push (or PR merge 後に dotfiles template が自動更新されるかは Coder server の trigger による)
+3. **workspace 再起動**: `cdr stop test-ws-001 && cdr start test-ws-001` で startup-script 再実行 → `chmod 0777` 反映 (or `cdr delete && cdr create` で確実に新 VM)
+4. **5本柱への dispatch 確認**: Slack で `/runops sightjack ...` を投げ、 5本柱が D-Mail を inbox で受信できることを verify
+5. **`docs/runbooks/dlq.md` "First-time setup" seek** を 1 度実行 (過去 backlog 復活)
 
 ## Service Account の前提条件 (本リポで apply 済)
 
