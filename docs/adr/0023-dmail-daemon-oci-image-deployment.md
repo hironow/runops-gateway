@@ -112,6 +112,7 @@ Cloud Run deploy step は **追加しない** (workspace VM 側で起動する d
 - **lifecycle が workspace VM と紐づく**: workspace VM が止まれば dmail も止まる。 5本柱 自体が workspace 内で動くので整合的だが、 workspace を全停止する運用日には Pub/Sub backlog が積み上がる (subscription retention 内で復活)
 - **AR 内 image 数の増加**: `runops-gateway` に加え `dmail-receiver` / `dmail-emitter` の 3 image を維持
 - **per-workspace VM image pull 容量**: workspace VM が複数同時稼働するとそれぞれが image を pull する (大した量ではないが auto-scale 時の cold-pull cost は発生)
+- **bind-mount uid 不整合 → mode 0777 trade-off**: distroless `:nonroot` image は uid 65532 固定で起動する一方、 devcontainer (= 5本柱 が動く側) の linux_user は uid 1000 系。 `/var/lib/phonewave/{archive,outbox}` を 3 process (devcontainer / receiver / emitter) で共有するには (a) `chmod 0777`、 (b) shared group + setgid 2775、 (c) container を任意 uid で起動 のいずれか。 2026-05-06 の実 deploy verify で permission denied を踏み、 (a) を採用 (workspace VM が per-user + short-lived (ADR 0008) + tag:exe-workspace tailnet ACL 内 = trust boundary が狭いため)。 multi-tenant / 長寿命 workspace に運用が広がったら (b) の shared group setgid に refactor すること
 
 ### Neutral
 
