@@ -1,7 +1,7 @@
 # Issue 0001: workspace VM に dmail-receiver / dmail-emitter を systemd unit として deploy
 
 **Repo:** `hironow/dotfiles` (本リポ範囲外) + 本リポの Phase 2 image build
-**Status:** 🟡 Phase 1 + 2 + 3 (IAM apply / templates push / workspace 起動) 完了済、 outbox permission denied fix 出した (2026-05-06、 dotfiles PR #90 / runops-gateway PR #37)、 fix merge → workspace 再作成 → 受入基準 verify が残タスク
+**Status:** ✅ 完了 (2026-05-06)。 受入基準 1〜5 全 verify 済。 関連 PR: dotfiles #89 (Phase 1) + #90 (chmod 0777 fix) + #91 (boot disk 30 GB + IaC drift policy)、 runops-gateway #33 (Phase 2 image build) + #34 (release) + #35/36 (IAM apply trigger) + #37 (cdr workflow + ADR 0023 trade-off docs) + #38 (release)
 **Blocker for:** Issue 0003 (Phase 3 outbound 実運用化), Issue 0002 (5本柱 frontmatter trace 連結)
 
 > **配置先の確定 (2026-05-06)**: 当初タイトルは「exe-coder VM」 だったが、 [`experiments/2026-05-06_dotfiles-dmail-daemon-placement.md`](../../experiments/2026-05-06_dotfiles-dmail-daemon-placement.md) の調査で **配置先 = 各 workspace VM の host OS systemd** に確定。 exe-coder VM (control plane) には 5本柱 archive が存在しないため不適切。 5本柱は各 workspace VM 内で動作するので、 dmail daemon も同 VM に同居させる (per-VM = singleton、 race ゼロ、 Pub/Sub load-balancing で受信は自動 multiplex)。
