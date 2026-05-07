@@ -58,3 +58,44 @@ jobs:
           rm -f .terraform/terraform.tfstate
           tofu init -backend=false
           tofu test
+
+  # Firestore integration tests against the bundled firebase emulator
+  # container (Issue #0011, ADR 0026). This job is the production-cutover
+  # gate that proves the Firestore adapter actually round-trips through the
+  # emulator before the registry is allowed to back a Cloud Run deployment.
+  # The (default) database is used here — emulator support for named DBs is
+  # not relied upon. The runtime production path uses NewClientWithDatabase
+  # with RUNOPS_FIRESTORE_DATABASE=runops-registry, which is exercised
+  # implicitly via registry_factory.go's branch in the unit tests.
+  firestore-integration:
+    name: Firestore integration (emulator)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
+
+      - name: Download modules
+        run: go mod download
+
+      - name: Build firebase emulator image
+        run: docker compose -f compose.yaml build pubsub-emulator
+
+      - name: Start emulator
+        run: |
+          docker compose -f compose.yaml up -d pubsub-emulator
+          timeout 90 sh -c 'until docker inspect -f "{{.State.Health.Status}}" runops-pubsub-emulator | grep -q healthy; do sleep 2; done'
+          echo "emulator ready"
+
+      - name: Probe Firestore (sentinel doc round-trip)
+        run: bash scripts/init-firestore.sh
+
+      - name: Run Firestore integration tests
+        env:
+          FIRESTORE_EMULATOR_HOST: localhost:8080
+          GOOGLE_CLOUD_PROJECT: runops-local
+        run: go test -tags=integration -run Firestore ./internal/adapter/output/state/...
+
+      - name: Stop emulator
+        if: always()
+        run: docker compose -f compose.yaml stop pubsub-emulator
