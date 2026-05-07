@@ -45,9 +45,18 @@ lint:
 test-iac:
     cd tofu && rm -f .terraform/terraform.tfstate && tofu init -backend=false >/dev/null && tofu test
 
-# Run project semgrep rules
+# Run project semgrep rules.
+#
+# Local `just semgrep` only fails on ERROR-severity findings. WARNING
+# findings (e.g. release-gate auth_boundary content signatures) are
+# escalation hints for the release-gate CI workflow, not local
+# blockers — release-gate.yaml runs with both severities and uses
+# the WARNING count to escalate the change category, while keeping
+# ERROR as the only hard fail. Mirroring that policy locally lets
+# developers iterate without false-positive blocks from the
+# escalation rules. See ADR 0033 §"Two-tier Semgrep policy".
 semgrep:
-    semgrep --config .semgrep/rules/ --error
+    semgrep --config .semgrep/rules/ --severity ERROR --error
 
 lint-md:
     @{{MARKDOWNLINT}} --fix "*.md" "docs/**/*.md"

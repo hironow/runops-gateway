@@ -338,6 +338,7 @@ func (h *InteractiveHandler) handleDispatchAction(traceCtx context.Context, acti
 	if h.consumedTokens != nil {
 		token := dispatchApproveToken(dv)
 		if !h.consumedTokens.MarkConsumed(token) {
+			// nosemgrep: gateway-broker-token-must-not-be-logged -- dispatch_approve consumed-token (single-use Slack button id), not a GitHub installation token; safe to log for replay-attempt audit.
 			slog.Warn("dispatch_approve replay rejected", "token", token, "clicker", clickerUserID)
 			span.SetStatus(codes.Error, "replay rejected")
 			span.End()
@@ -474,6 +475,7 @@ func (h *InteractiveHandler) handleApprovalAction(traceCtx context.Context, acti
 	if h.consumedTokens != nil {
 		token := approvalToken(av)
 		if !h.consumedTokens.MarkConsumed(token) {
+			// nosemgrep: gateway-broker-token-must-not-be-logged -- approval_approve consumed-token (single-use Slack button id), not a GitHub installation token; safe to log for replay-attempt audit.
 			slog.Warn("approval_approve replay rejected", "token", token, "clicker", clickerUserID)
 			span.SetStatus(codes.Error, "replay rejected")
 			span.End()
