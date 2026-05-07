@@ -15,7 +15,7 @@ func TestValidateProjectID_AcceptsValid(t *testing.T) {
 		"foo_bar",
 		"FooBar",
 		"a1b2c3",
-		"x", // 1 char OK
+		"x",                     // 1 char OK
 		strings.Repeat("a", 64), // boundary: exactly 64 chars
 	} {
 		if err := domain.ValidateProjectID(id); err != nil {

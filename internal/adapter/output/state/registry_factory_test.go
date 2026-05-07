@@ -36,8 +36,8 @@ func TestNewProjectRegistry_RejectsMissingEnv(t *testing.T) {
 func TestNewProjectRegistry_DevEnvDefaultsToSqlite(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "state.db")
 	getenv := envFromMap(map[string]string{
-		"RUNOPS_ENV":            "development",
-		"RUNOPS_STATE_DB_PATH":  dbPath,
+		"RUNOPS_ENV":           "development",
+		"RUNOPS_STATE_DB_PATH": dbPath,
 	})
 
 	reg, err := state.NewProjectRegistryFromEnv(context.Background(), getenv)
