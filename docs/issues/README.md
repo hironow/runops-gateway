@@ -17,8 +17,10 @@
 | [0006](0006-dmail-receiver-multi-path.md) | dmail-receiver の multi-project path 対応 (Pub/Sub `project_id` attr で write 先 select) | `hironow/runops-gateway` (Phase α) | 📝 未着手 | refs 0010 |
 | [0007](0007-dmail-emitter-project-id-attribute.md) | dmail-emitter が emit 時に `project_id` attribute を付与 | `hironow/runops-gateway` (Phase α) | 📝 未着手 | refs 0010 |
 | [0008](0008-slack-runops-project-flag.md) | Slack `/runops` command に `--project=<id>` flag 追加 | `hironow/runops-gateway` (Phase α) | 📝 未着手 | Phase α |
-| [0009](0009-project-registry-sot.md) | project registry の SoT を gateway DB で持つ (SQLite + `runops project ...` CLI) | `hironow/runops-gateway` (Phase α) | 📝 未着手 | 0008, 0010 |
+| [0009](0009-project-registry-sot.md) | project registry の SoT を gateway DB で持つ (port + SQLite adapter + CLI) | `hironow/runops-gateway` (Phase α) | 🟡 着地 (port/SQLite/CLI、 Firestore は #0011) | 0008, 0010 |
 | [0010](0010-github-app-secret-manager.md) | GitHub App + Secret Manager 統合 (installation token fetch) | `hironow/runops-gateway` (Phase β) | 📝 未着手 | refs 0008/0011/0012 |
+| [0011](0011-firestore-project-registry-adapter.md) | Firestore project registry adapter (production cutover blocker) | `hironow/runops-gateway` (Phase α) | 📝 未着手 | Phase α prod deploy |
+| [0012](0012-http-admin-endpoint-project-registry.md) | HTTP admin endpoint for project registry (production CLI 経路の正規 API) | `hironow/runops-gateway` (Phase α 完了後) | 📝 未着手 | — |
 
 > **multiplex Phase α/β 関連 (0006-0010) は cross-repo 親 issue が `tap/refs/docs/issues/` にある。**
 > 本 issue tracker が **実装 SoT**、refs 側は **dispatch 表 + cross-repo 親リスト**。
