@@ -4,8 +4,8 @@
 **Priority:** P1 (multiplex Phase α blocker)
 **Depends on:** —
 **Blocks:** 0010 (multiplex 動作確認)、0007 (sister: emitter)
-**Cross-ref:** [tap/refs/docs/issues/0001](../../../../tap/refs/docs/issues/0001-runops-gateway-dmail-receiver-multi-path.md) (cross-repo dispatch 親)
-**Status:** 📝 未着手
+**Cross-ref:** [tap/refs/docs/issues/0001](../../../../tap/refs/docs/issues/0001-runops-gateway-dmail-receiver-multi-path.md) (cross-repo dispatch 親)、 ADR 0028 (本 PR で起票、 multi-mode routing decision)
+**Status:** 🟡 着地 (OutboxRouter + multi-mode env + ParseOutboxDirsByProject + CI pubsub-integration job + ADR 0028、 single-mode 100% backward compat 維持)
 
 ## 概要
 
