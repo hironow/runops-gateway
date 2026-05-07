@@ -95,3 +95,99 @@ func TestOutboxWriter_ConcurrentSameNameSameContent(t *testing.T) {
 		t.Errorf("final content mismatch: %q", got)
 	}
 }
+
+func TestParseOutboxDirsByProject_AcceptsValidEntries(t *testing.T) {
+	got, err := ParseOutboxDirsByProject("foo:/abs/foo,bar:/abs/bar")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("want 2 entries, got %d (%v)", len(got), got)
+	}
+	if got["foo"] != "/abs/foo" || got["bar"] != "/abs/bar" {
+		t.Errorf("entries mismatch: %v", got)
+	}
+}
+
+func TestParseOutboxDirsByProject_AcceptsSingleEntry(t *testing.T) {
+	got, err := ParseOutboxDirsByProject("solo:/abs/solo")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if len(got) != 1 || got["solo"] != "/abs/solo" {
+		t.Errorf("entries mismatch: %v", got)
+	}
+}
+
+func TestParseOutboxDirsByProject_AcceptsEmptyInputAsZeroEntries(t *testing.T) {
+	for _, in := range []string{"", "   "} {
+		got, err := ParseOutboxDirsByProject(in)
+		if err != nil {
+			t.Errorf("input=%q err=%v want nil", in, err)
+		}
+		if len(got) != 0 {
+			t.Errorf("input=%q want 0 entries got %d", in, len(got))
+		}
+	}
+}
+
+func TestParseOutboxDirsByProject_TrimsWhitespace(t *testing.T) {
+	got, err := ParseOutboxDirsByProject("  foo : /abs/foo , bar : /abs/bar  ")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if got["foo"] != "/abs/foo" || got["bar"] != "/abs/bar" {
+		t.Errorf("entries mismatch: %v", got)
+	}
+}
+
+func TestParseOutboxDirsByProject_RejectsRelativePath(t *testing.T) {
+	_, err := ParseOutboxDirsByProject("foo:relative/path")
+	if err == nil {
+		t.Fatalf("relative path should be rejected")
+	}
+	if !strings.Contains(err.Error(), "absolute") {
+		t.Errorf("error should mention absolute, got %v", err)
+	}
+}
+
+func TestParseOutboxDirsByProject_RejectsInvalidProjectID(t *testing.T) {
+	cases := []string{
+		"with space:/abs/p",
+		"slash/in/id:/abs/p",
+		"dot.in.id:/abs/p",
+		"upper@lower:/abs/p",
+	}
+	for _, in := range cases {
+		_, err := ParseOutboxDirsByProject(in)
+		if err == nil {
+			t.Errorf("input=%q should be rejected", in)
+		}
+	}
+}
+
+func TestParseOutboxDirsByProject_RejectsDuplicateID(t *testing.T) {
+	_, err := ParseOutboxDirsByProject("foo:/abs/a,foo:/abs/b")
+	if err == nil {
+		t.Fatalf("duplicate id should be rejected")
+	}
+	if !strings.Contains(err.Error(), "duplicate") {
+		t.Errorf("error should mention duplicate, got %v", err)
+	}
+}
+
+func TestParseOutboxDirsByProject_RejectsMalformedEntries(t *testing.T) {
+	cases := []string{
+		"no-colon-here",
+		":/abs/no-id",
+		"id-no-path:",
+		"foo:/abs/foo,",
+		",foo:/abs/foo",
+	}
+	for _, in := range cases {
+		_, err := ParseOutboxDirsByProject(in)
+		if err == nil {
+			t.Errorf("input=%q should be rejected", in)
+		}
+	}
+}
