@@ -45,17 +45,13 @@ func main() {
 	}
 }
 
-// mustResolveProjectRegistry returns (nil, no-op cleanup) when the env
-// never opts in (so the CLI keeps working without DB / sqlite for callers
-// that only need approve / deny). When env asks for a registry but
-// construction fails, the program exits with a clear message — never
-// silently fall back. The cleanup is always non-nil so callers can defer
-// it unconditionally.
+// mustResolveProjectRegistry delegates to state.ResolveFromEnv so the same
+// fail-closed semantics apply identically to cmd/runops and cmd/server
+// (#0008). On error we exit with a clear message; we never silently fall
+// back. The cleanup is always non-nil so callers can defer it
+// unconditionally.
 func mustResolveProjectRegistry(ctx context.Context) (port.ProjectRegistry, state.CleanupFunc) {
-	if os.Getenv("RUNOPS_PROJECT_REGISTRY") == "" && os.Getenv("RUNOPS_ENV") != "development" {
-		return nil, func() error { return nil }
-	}
-	registry, cleanup, err := state.NewProjectRegistryFromEnv(ctx, os.Getenv)
+	registry, cleanup, err := state.ResolveFromEnv(ctx)
 	if err != nil {
 		_ = cleanup()
 		fmt.Fprintf(os.Stderr, "project registry init: %v\n", err)
