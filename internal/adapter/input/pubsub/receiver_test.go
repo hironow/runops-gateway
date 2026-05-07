@@ -53,7 +53,7 @@ func (m *fakeMessage) Nack()                         { m.nacked = true }
 
 func TestReceiver_OnMessage_WritesUsingIDAttributeAsFilename(t *testing.T) {
 	w := &fakeWriter{}
-	r := NewReceiver(w)
+	r := NewReceiver(NewSingleOutboxRouter(w))
 
 	msg := &fakeMessage{
 		id:   "publisher-id-1",
@@ -81,7 +81,7 @@ func TestReceiver_OnMessage_WritesUsingIDAttributeAsFilename(t *testing.T) {
 
 func TestReceiver_OnMessage_FallsBackToPubsubIDIfNoIDAttribute(t *testing.T) {
 	w := &fakeWriter{}
-	r := NewReceiver(w)
+	r := NewReceiver(NewSingleOutboxRouter(w))
 	msg := &fakeMessage{
 		id:         "fallback-id",
 		data:       []byte("body"),
@@ -99,7 +99,7 @@ func TestReceiver_OnMessage_FallsBackToPubsubIDIfNoIDAttribute(t *testing.T) {
 
 func TestReceiver_OnMessage_NacksOnWriterError(t *testing.T) {
 	w := &fakeWriter{err: errors.New("disk full")}
-	r := NewReceiver(w)
+	r := NewReceiver(NewSingleOutboxRouter(w))
 	msg := &fakeMessage{
 		id:         "msg-1",
 		data:       []byte("body"),
@@ -116,7 +116,7 @@ func TestReceiver_OnMessage_NacksOnWriterError(t *testing.T) {
 
 func TestReceiver_OnMessage_AcksAndDropsMessagesWithEmptyData(t *testing.T) {
 	w := &fakeWriter{}
-	r := NewReceiver(w)
+	r := NewReceiver(NewSingleOutboxRouter(w))
 	msg := &fakeMessage{
 		id:         "empty-1",
 		data:       nil,
@@ -134,7 +134,7 @@ func TestReceiver_OnMessage_AcksAndDropsMessagesWithEmptyData(t *testing.T) {
 func TestReceiver_OnMessage_RejectsUnsafeIDAttribute(t *testing.T) {
 	// Attribute-controlled filename → must be sanitized.
 	w := &fakeWriter{}
-	r := NewReceiver(w)
+	r := NewReceiver(NewSingleOutboxRouter(w))
 	msg := &fakeMessage{
 		id:   "msg-bad",
 		data: []byte("body"),

@@ -7,6 +7,7 @@ package pubsub
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -45,14 +46,19 @@ type Writer interface {
 	WriteFile(name string, data []byte) error
 }
 
-// Receiver bridges Pub/Sub messages to a phonewave outbox writer.
+// Receiver bridges Pub/Sub messages to a phonewave outbox writer via an
+// OutboxRouter. Single-mode deployments wire SingleOutboxRouter so the
+// project_id attribute is ignored (backward compat); multi-mode wires
+// MultiOutboxRouter so each project_id lands in its own outbox.
 type Receiver struct {
-	writer Writer
+	router OutboxRouter
 }
 
-// NewReceiver constructs a Receiver around the given Writer.
-func NewReceiver(w Writer) *Receiver {
-	return &Receiver{writer: w}
+// NewReceiver constructs a Receiver around the given OutboxRouter. The
+// router decides whether project_id matters; the receiver itself is
+// mode-agnostic (#0006 / ADR 0028).
+func NewReceiver(r OutboxRouter) *Receiver {
+	return &Receiver{router: r}
 }
 
 // OnMessage is the handler bound to Subscription.Receive. It writes the
@@ -87,7 +93,33 @@ func (r *Receiver) OnMessage(ctx context.Context, m Message) {
 	}
 	span.SetAttributes(attribute.String("outbox.filename", name))
 
-	if err := r.writer.WriteFile(name, data); err != nil {
+	writer, err := r.router.Resolve(ctx, m)
+	if errors.Is(err, ErrProjectNotRouted) {
+		// multi-mode rejected this project_id — silently drop would orphan
+		// the message; instead nack so Pub/Sub max_delivery_attempts ships
+		// it to the DLQ for operator triage (ADR 0028).
+		slog.WarnContext(ctx, "dmail receiver: project_id not routed; nacking to DLQ",
+			"pubsub_message_id", m.ID(),
+			"project_id", m.Attributes()["project_id"],
+			"error", err)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "project_not_routed")
+		m.Nack()
+		return
+	}
+	if err != nil {
+		slog.ErrorContext(ctx, "dmail receiver: router resolve failed; nacking for retry",
+			"pubsub_message_id", m.ID(), "error", err)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "router resolve failed")
+		m.Nack()
+		return
+	}
+	if pid := m.Attributes()["project_id"]; pid != "" {
+		span.SetAttributes(attribute.String("project_id", pid))
+	}
+
+	if err := writer.WriteFile(name, data); err != nil {
 		slog.ErrorContext(ctx, "dmail receiver: outbox write failed; nacking for retry",
 			"pubsub_message_id", m.ID(), "name", name, "error", err)
 		span.RecordError(err)

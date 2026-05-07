@@ -134,8 +134,11 @@ func main() {
 	}
 	defer client.Close()
 
+	// Phase A of #0006: keep the single-mode wiring intact via
+	// SingleOutboxRouter. Multi-mode env handling lands in a follow-up
+	// commit so each commit is byte-reversible.
 	writer := phonewave.NewOutboxWriter(cfg.outboxDir)
-	receiver := pubsubinput.NewReceiver(writer)
+	receiver := pubsubinput.NewReceiver(pubsubinput.NewSingleOutboxRouter(writer))
 
 	sub := client.Subscriber(cfg.subscription)
 	slog.Info("dmail-receiver: receiving",
