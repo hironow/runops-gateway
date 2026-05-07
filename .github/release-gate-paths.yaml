@@ -22,6 +22,15 @@ auth_boundary:
   - "internal/adapter/output/registry/agent_session_registry*"
   - "internal/adapter/output/github/**"
 
+  # AI agent session registry (plan v8 §5.2) — domain + port
+  # carry the verify-time sentinel logic (SA mismatch / expired /
+  # revoked / project mismatch / tool mismatch) that grants the
+  # broker permission to mint on behalf of an AI agent. Edits to
+  # the verify rule set are auth_boundary independent of the
+  # adapter-level Firestore wiring.
+  - "internal/core/domain/agent_session*"
+  - "internal/core/port/*agent_session*"
+
   # Composition root (broker mount, auth middleware ordering, DI of
   # the broker port). Any change here can mount or unmount the broker
   # endpoint or bypass the auth middleware.
