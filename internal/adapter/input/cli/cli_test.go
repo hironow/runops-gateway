@@ -37,7 +37,7 @@ func (m *mockUseCase) DenyAction(_ context.Context, req domain.ApprovalRequest, 
 
 func TestApproveCmd_Success(t *testing.T) {
 	mock := &mockUseCase{approveErr: nil}
-	root := cli.NewRootCmd(mock)
+	root := cli.NewRootCmd(mock, nil)
 	buf := &bytes.Buffer{}
 	root.SetOut(buf)
 
@@ -59,7 +59,7 @@ func TestApproveCmd_Success(t *testing.T) {
 
 func TestApproveCmd_MissingAction(t *testing.T) {
 	mock := &mockUseCase{}
-	root := cli.NewRootCmd(mock)
+	root := cli.NewRootCmd(mock, nil)
 	root.SetOut(&bytes.Buffer{})
 	root.SetErr(&bytes.Buffer{})
 
@@ -74,7 +74,7 @@ func TestApproveCmd_MissingAction(t *testing.T) {
 
 func TestApproveCmd_MissingArgs(t *testing.T) {
 	mock := &mockUseCase{}
-	root := cli.NewRootCmd(mock)
+	root := cli.NewRootCmd(mock, nil)
 	root.SetOut(&bytes.Buffer{})
 	root.SetErr(&bytes.Buffer{})
 
@@ -88,7 +88,7 @@ func TestApproveCmd_MissingArgs(t *testing.T) {
 
 func TestApproveCmd_UseCaseError(t *testing.T) {
 	mock := &mockUseCase{approveErr: errors.New("gcp unavailable")}
-	root := cli.NewRootCmd(mock)
+	root := cli.NewRootCmd(mock, nil)
 	root.SetOut(&bytes.Buffer{})
 	root.SetErr(&bytes.Buffer{})
 
@@ -104,7 +104,7 @@ func TestApproveCmd_UseCaseError(t *testing.T) {
 
 func TestApproveCmd_CLIMode_StdoutTarget(t *testing.T) {
 	mock := &mockUseCase{}
-	root := cli.NewRootCmd(mock)
+	root := cli.NewRootCmd(mock, nil)
 	root.SetOut(&bytes.Buffer{})
 
 	root.SetArgs([]string{"approve", "service", "frontend-service",
@@ -125,7 +125,7 @@ func TestApproveCmd_CLIMode_StdoutTarget(t *testing.T) {
 
 func TestDenyCmd_Success(t *testing.T) {
 	mock := &mockUseCase{}
-	root := cli.NewRootCmd(mock)
+	root := cli.NewRootCmd(mock, nil)
 	buf := &bytes.Buffer{}
 	root.SetOut(buf)
 
@@ -146,7 +146,7 @@ func TestDenyCmd_Success(t *testing.T) {
 
 func TestDenyCmd_MissingArgs(t *testing.T) {
 	mock := &mockUseCase{}
-	root := cli.NewRootCmd(mock)
+	root := cli.NewRootCmd(mock, nil)
 	root.SetOut(&bytes.Buffer{})
 	root.SetErr(&bytes.Buffer{})
 
