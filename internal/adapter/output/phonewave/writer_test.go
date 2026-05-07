@@ -96,8 +96,8 @@ func TestOutboxWriter_ConcurrentSameNameSameContent(t *testing.T) {
 	}
 }
 
-func TestParseOutboxDirsByProject_AcceptsValidEntries(t *testing.T) {
-	got, err := ParseOutboxDirsByProject("foo:/abs/foo,bar:/abs/bar")
+func TestParseDirsByProject_AcceptsValidEntries(t *testing.T) {
+	got, err := ParseDirsByProject("foo:/abs/foo,bar:/abs/bar")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -109,8 +109,8 @@ func TestParseOutboxDirsByProject_AcceptsValidEntries(t *testing.T) {
 	}
 }
 
-func TestParseOutboxDirsByProject_AcceptsSingleEntry(t *testing.T) {
-	got, err := ParseOutboxDirsByProject("solo:/abs/solo")
+func TestParseDirsByProject_AcceptsSingleEntry(t *testing.T) {
+	got, err := ParseDirsByProject("solo:/abs/solo")
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -119,9 +119,9 @@ func TestParseOutboxDirsByProject_AcceptsSingleEntry(t *testing.T) {
 	}
 }
 
-func TestParseOutboxDirsByProject_AcceptsEmptyInputAsZeroEntries(t *testing.T) {
+func TestParseDirsByProject_AcceptsEmptyInputAsZeroEntries(t *testing.T) {
 	for _, in := range []string{"", "   "} {
-		got, err := ParseOutboxDirsByProject(in)
+		got, err := ParseDirsByProject(in)
 		if err != nil {
 			t.Errorf("input=%q err=%v want nil", in, err)
 		}
@@ -131,8 +131,8 @@ func TestParseOutboxDirsByProject_AcceptsEmptyInputAsZeroEntries(t *testing.T) {
 	}
 }
 
-func TestParseOutboxDirsByProject_TrimsWhitespace(t *testing.T) {
-	got, err := ParseOutboxDirsByProject("  foo : /abs/foo , bar : /abs/bar  ")
+func TestParseDirsByProject_TrimsWhitespace(t *testing.T) {
+	got, err := ParseDirsByProject("  foo : /abs/foo , bar : /abs/bar  ")
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -141,8 +141,8 @@ func TestParseOutboxDirsByProject_TrimsWhitespace(t *testing.T) {
 	}
 }
 
-func TestParseOutboxDirsByProject_RejectsRelativePath(t *testing.T) {
-	_, err := ParseOutboxDirsByProject("foo:relative/path")
+func TestParseDirsByProject_RejectsRelativePath(t *testing.T) {
+	_, err := ParseDirsByProject("foo:relative/path")
 	if err == nil {
 		t.Fatalf("relative path should be rejected")
 	}
@@ -151,7 +151,7 @@ func TestParseOutboxDirsByProject_RejectsRelativePath(t *testing.T) {
 	}
 }
 
-func TestParseOutboxDirsByProject_RejectsInvalidProjectID(t *testing.T) {
+func TestParseDirsByProject_RejectsInvalidProjectID(t *testing.T) {
 	cases := []string{
 		"with space:/abs/p",
 		"slash/in/id:/abs/p",
@@ -159,15 +159,15 @@ func TestParseOutboxDirsByProject_RejectsInvalidProjectID(t *testing.T) {
 		"upper@lower:/abs/p",
 	}
 	for _, in := range cases {
-		_, err := ParseOutboxDirsByProject(in)
+		_, err := ParseDirsByProject(in)
 		if err == nil {
 			t.Errorf("input=%q should be rejected", in)
 		}
 	}
 }
 
-func TestParseOutboxDirsByProject_RejectsDuplicateID(t *testing.T) {
-	_, err := ParseOutboxDirsByProject("foo:/abs/a,foo:/abs/b")
+func TestParseDirsByProject_RejectsDuplicateID(t *testing.T) {
+	_, err := ParseDirsByProject("foo:/abs/a,foo:/abs/b")
 	if err == nil {
 		t.Fatalf("duplicate id should be rejected")
 	}
@@ -176,7 +176,7 @@ func TestParseOutboxDirsByProject_RejectsDuplicateID(t *testing.T) {
 	}
 }
 
-func TestParseOutboxDirsByProject_RejectsMalformedEntries(t *testing.T) {
+func TestParseDirsByProject_RejectsMalformedEntries(t *testing.T) {
 	cases := []string{
 		"no-colon-here",
 		":/abs/no-id",
@@ -185,7 +185,7 @@ func TestParseOutboxDirsByProject_RejectsMalformedEntries(t *testing.T) {
 		",foo:/abs/foo",
 	}
 	for _, in := range cases {
-		_, err := ParseOutboxDirsByProject(in)
+		_, err := ParseDirsByProject(in)
 		if err == nil {
 			t.Errorf("input=%q should be rejected", in)
 		}
