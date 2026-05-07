@@ -19,6 +19,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/hironow/runops-gateway/internal/core/domain"
 )
 
 // OutboxWriter writes D-Mail files into a single phonewave-watched directory.
@@ -106,4 +108,44 @@ func validateName(name string) error {
 		return fmt.Errorf("phonewave writer: filename %q is not allowed", name)
 	}
 	return nil
+}
+
+// ParseOutboxDirsByProject decodes the PHONEWAVE_OUTBOX_DIRS_BY_PROJECT
+// env var (#0006). The shape is `id1:/abs/path/1,id2:/abs/path/2`, with
+// each id validated against domain.ValidateProjectID, each path required
+// to be absolute (relative paths are inherently ambiguous on workspace
+// VMs / multi-instance Cloud Run), and duplicate ids rejected so a typo
+// never silently overwrites another project's mapping.
+//
+// Returns the parsed map, or an error that the receiver init can surface
+// at process boot (fail-loud > fail-late on the first message).
+func ParseOutboxDirsByProject(s string) (map[string]string, error) {
+	out := map[string]string{}
+	trimmed := strings.TrimSpace(s)
+	if trimmed == "" {
+		return out, nil
+	}
+	for _, raw := range strings.Split(trimmed, ",") {
+		entry := strings.TrimSpace(raw)
+		if entry == "" {
+			return nil, fmt.Errorf("phonewave: empty entry in PHONEWAVE_OUTBOX_DIRS_BY_PROJECT")
+		}
+		idx := strings.Index(entry, ":")
+		if idx <= 0 || idx == len(entry)-1 {
+			return nil, fmt.Errorf("phonewave: entry must be id:path (got %q)", entry)
+		}
+		id := strings.TrimSpace(entry[:idx])
+		path := strings.TrimSpace(entry[idx+1:])
+		if err := domain.ValidateProjectID(id); err != nil {
+			return nil, fmt.Errorf("phonewave: invalid project id %q: %w", id, err)
+		}
+		if !filepath.IsAbs(path) {
+			return nil, fmt.Errorf("phonewave: path for project %q must be absolute (got %q)", id, path)
+		}
+		if _, dup := out[id]; dup {
+			return nil, fmt.Errorf("phonewave: duplicate project id %q", id)
+		}
+		out[id] = path
+	}
+	return out, nil
 }
