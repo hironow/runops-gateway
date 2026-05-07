@@ -132,6 +132,30 @@ type ApprovalRequester interface {
 	PostApprovalRequest(ctx context.Context, target NotifyTarget, mail domain.DMail) error
 }
 
+// ProjectRegistry is the SoT for the multiplex `project_id` namespace
+// introduced in issue #0009. Implementations must be safe for concurrent
+// callers from CLI subcommands (operator local) and (in #0011) gateway
+// dispatch handlers.
+//
+// Two adapters share this port:
+//   - SQLite (this PR): operator local / dev / test only
+//   - Firestore native (#0011): production Cloud Run, multi-instance safe
+//
+// Selection happens at composition root via env RUNOPS_PROJECT_REGISTRY;
+// see internal/adapter/output/state/registry_factory.go.
+type ProjectRegistry interface {
+	Add(ctx context.Context, p domain.Project) error
+	List(ctx context.Context, filter ProjectListFilter) ([]domain.Project, error)
+	Get(ctx context.Context, id string) (domain.Project, error)
+	Archive(ctx context.Context, id string) error
+}
+
+// ProjectListFilter narrows ProjectRegistry.List results.
+// Status == "" returns projects of any status.
+type ProjectListFilter struct {
+	Status domain.ProjectStatus
+}
+
 // DMailPublisher hands a DMail to the cross-process transport that delivers
 // it to the destination tool's inbox via phonewave.
 //
