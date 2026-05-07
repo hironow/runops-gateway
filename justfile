@@ -88,6 +88,24 @@ pubsub-init:
 pubsub-down:
     docker compose -f compose.yaml stop pubsub-emulator
 
+# Start Firestore emulator (issue #0011 — bundled in the same firebase
+# image as Pub/Sub, so this is an alias for pubsub-up that emphasizes the
+# Firestore use case)
+firestore-up: pubsub-up
+    @echo "firestore emulator ready: http://localhost:8080 (UI: http://localhost:4000)"
+
+# Probe the Firestore emulator with a sentinel doc round-trip
+firestore-init:
+    {{justfile_directory()}}/scripts/init-firestore.sh
+
+# Stop the Firestore emulator (alias for pubsub-down — same container)
+firestore-down: pubsub-down
+
+# Run Firestore integration tests against the emulator
+test-firestore-integration:
+    FIRESTORE_EMULATOR_HOST=localhost:8080 GOOGLE_CLOUD_PROJECT=runops-local \
+        go test -tags=integration -run Firestore ./internal/adapter/output/state/...
+
 # Start local Jaeger v2 (OpenTelemetry trace backend, ADR 0020)
 trace-up:
     docker compose -f compose.yaml up -d jaeger

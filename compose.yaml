@@ -23,6 +23,9 @@ services:
     restart: unless-stopped
 
   pubsub-emulator:
+    # Service name kept for backward compat with `just pubsub-up` etc.
+    # The image now bundles both the Pub/Sub and Firestore emulators
+    # (issue #0011): Firestore is exposed on port 8080.
     image: ghcr.io/hironow/firebase-pubsub-emulator:latest
     build:
       context: ./docker/firebase-emulator
@@ -30,6 +33,7 @@ services:
     container_name: runops-pubsub-emulator
     ports:
       - "9399:9399" # Pub/Sub emulator
+      - "8080:8080" # Firestore emulator (#0011)
       - "4400:4400" # Emulator hub (used by healthcheck)
       - "4000:4000" # Emulator UI (optional, browser at http://localhost:4000)
     environment:
