@@ -3,6 +3,7 @@ module github.com/hironow/runops-gateway
 go 1.26.1
 
 require (
+	cloud.google.com/go/firestore v1.22.0
 	cloud.google.com/go/pubsub/v2 v2.6.0
 	cloud.google.com/go/run v1.20.0
 	github.com/fsnotify/fsnotify v1.10.1

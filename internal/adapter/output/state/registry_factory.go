@@ -6,25 +6,43 @@ import (
 	"os"
 	"path/filepath"
 
+	"cloud.google.com/go/firestore"
 	"github.com/hironow/runops-gateway/internal/core/port"
 )
 
 // Env var names recognized by NewProjectRegistryFromEnv.
 const (
-	envProjectRegistry = "RUNOPS_PROJECT_REGISTRY"
-	envRunopsEnv       = "RUNOPS_ENV"
-	envStateDBPath     = "RUNOPS_STATE_DB_PATH"
+	envProjectRegistry     = "RUNOPS_PROJECT_REGISTRY"
+	envRunopsEnv           = "RUNOPS_ENV"
+	envStateDBPath         = "RUNOPS_STATE_DB_PATH"
+	envGoogleCloudProject  = "GOOGLE_CLOUD_PROJECT"
+	envFirestoreDatabase   = "RUNOPS_FIRESTORE_DATABASE"
+	envFirestoreCollection = "RUNOPS_FIRESTORE_COLLECTION"
 )
+
+// CleanupFunc releases resources held by a ProjectRegistry adapter
+// (e.g. SQLite *sql.DB or Firestore client). Composition roots MUST defer
+// the returned cleanup so long-running services do not leak file
+// descriptors or gRPC connections.
+type CleanupFunc func() error
+
+// noopCleanup is a stable cleanup returned by error paths so callers can
+// always defer the result without nil checks.
+func noopCleanup() error { return nil }
 
 // NewProjectRegistryFromEnv selects and constructs a ProjectRegistry based
 // on env vars. The factory is fail-closed: env must be explicit, with a
 // single dev-mode escape hatch (RUNOPS_ENV=development) that defaults to
 // sqlite for developer ergonomics.
 //
-//	RUNOPS_PROJECT_REGISTRY=sqlite     SQLite adapter (this PR)
-//	RUNOPS_PROJECT_REGISTRY=firestore  reserved for #0011 (returns error)
+//	RUNOPS_PROJECT_REGISTRY=sqlite     SQLite adapter (issue #0009)
+//	RUNOPS_PROJECT_REGISTRY=firestore  Firestore adapter (issue #0011)
 //	(unset)                            error, unless RUNOPS_ENV=development
 //	(other value)                      error
+//
+// The second return value is a cleanup function that closes the adapter's
+// underlying handle. Callers MUST defer it (a no-op cleanup is returned on
+// error paths so deferring is always safe).
 //
 // SQLite path comes from RUNOPS_STATE_DB_PATH; if unset, defaults to
 // $HOME/.runops/state.db. The DB file (and parent dir) are created on first
@@ -32,7 +50,7 @@ const (
 //
 // getenv is injected for testability — production callers should pass
 // os.Getenv.
-func NewProjectRegistryFromEnv(ctx context.Context, getenv func(string) string) (port.ProjectRegistry, error) {
+func NewProjectRegistryFromEnv(ctx context.Context, getenv func(string) string) (port.ProjectRegistry, CleanupFunc, error) {
 	choice := getenv(envProjectRegistry)
 	runopsEnv := getenv(envRunopsEnv)
 
@@ -40,7 +58,7 @@ func NewProjectRegistryFromEnv(ctx context.Context, getenv func(string) string) 
 		if runopsEnv == "development" {
 			choice = "sqlite"
 		} else {
-			return nil, fmt.Errorf("%s env required (sqlite|firestore); set %s=development to default to sqlite for local development",
+			return nil, noopCleanup, fmt.Errorf("%s env required (sqlite|firestore); set %s=development to default to sqlite for local development",
 				envProjectRegistry, envRunopsEnv)
 		}
 	}
@@ -49,27 +67,64 @@ func NewProjectRegistryFromEnv(ctx context.Context, getenv func(string) string) 
 	case "sqlite":
 		return newSQLiteRegistryFromEnv(ctx, getenv)
 	case "firestore":
-		return nil, fmt.Errorf("firestore adapter not implemented yet, see issue #0011")
+		return newFirestoreRegistryFromEnv(ctx, getenv)
 	default:
-		return nil, fmt.Errorf("unknown %s value: %q (want sqlite or firestore)", envProjectRegistry, choice)
+		return nil, noopCleanup, fmt.Errorf("unknown %s value: %q (want sqlite or firestore)", envProjectRegistry, choice)
 	}
 }
 
-func newSQLiteRegistryFromEnv(ctx context.Context, getenv func(string) string) (port.ProjectRegistry, error) {
+// newFirestoreRegistryFromEnv constructs the production Firestore adapter.
+//
+// GOOGLE_CLOUD_PROJECT is required (matches the existing GCP env
+// convention used by gcpadapter / cmd/server). RUNOPS_FIRESTORE_DATABASE
+// selects between the named DB ("runops-registry" in production tofu) and
+// the (default) DB; the empty value uses (default) so the same code path
+// works against the Firestore emulator (which does not require named DB
+// support). RUNOPS_FIRESTORE_COLLECTION overrides the default
+// "projects" collection name.
+func newFirestoreRegistryFromEnv(ctx context.Context, getenv func(string) string) (port.ProjectRegistry, CleanupFunc, error) {
+	projectID := getenv(envGoogleCloudProject)
+	if projectID == "" {
+		return nil, noopCleanup, fmt.Errorf("%s env required for firestore registry", envGoogleCloudProject)
+	}
+	dbName := getenv(envFirestoreDatabase)
+	collection := getenv(envFirestoreCollection)
+	if collection == "" {
+		collection = DefaultProjectsCollection
+	}
+
+	client, err := newFirestoreClient(ctx, projectID, dbName)
+	if err != nil {
+		return nil, noopCleanup, fmt.Errorf("firestore client: %w", err)
+	}
+	return NewFirestoreProjectRegistry(client, collection), client.Close, nil
+}
+
+// newFirestoreClient routes between default-DB and named-DB constructors.
+// Pulled out so factory logic stays linear and so tests can swap in a
+// fake constructor if needed (current tests rely on the emulator instead).
+var newFirestoreClient = func(ctx context.Context, projectID, dbName string) (*firestore.Client, error) {
+	if dbName == "" {
+		return firestore.NewClient(ctx, projectID)
+	}
+	return firestore.NewClientWithDatabase(ctx, projectID, dbName)
+}
+
+func newSQLiteRegistryFromEnv(ctx context.Context, getenv func(string) string) (port.ProjectRegistry, CleanupFunc, error) {
 	dbPath := getenv(envStateDBPath)
 	if dbPath == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
-			return nil, fmt.Errorf("resolve home dir for default %s: %w", envStateDBPath, err)
+			return nil, noopCleanup, fmt.Errorf("resolve home dir for default %s: %w", envStateDBPath, err)
 		}
 		dbPath = filepath.Join(home, ".runops", "state.db")
 	}
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o700); err != nil {
-		return nil, fmt.Errorf("create state dir: %w", err)
+		return nil, noopCleanup, fmt.Errorf("create state dir: %w", err)
 	}
 	db, err := OpenSQLite(ctx, dbPath)
 	if err != nil {
-		return nil, err
+		return nil, noopCleanup, err
 	}
-	return NewSQLiteProjectRegistry(db), nil
+	return NewSQLiteProjectRegistry(db), db.Close, nil
 }
