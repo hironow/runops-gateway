@@ -134,6 +134,7 @@ func (h *CommandHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Text:           freeText,
 		RequesterID:    userID,
 		IdempotencyKey: idempotencyKey,
+		ProjectID:      projectID,
 		ApproveValue:   approveValue,
 		DenyValue:      denyValue,
 	})
