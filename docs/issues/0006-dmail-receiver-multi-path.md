@@ -20,13 +20,24 @@ multiplex (1 VM = N project, hironow 決定 2026-05-06 選択肢 B) の必要条
 
 ## 受入基準
 
-- [ ] env var `PHONEWAVE_OUTBOX_DIRS_BY_PROJECT` で `project_id → outbox path` の map を受け付ける
-      (例: `foo:/home/coder/projects/foo/.phonewave/outbox,bar:/home/coder/projects/bar/.phonewave/outbox`)
-- [ ] Pub/Sub message attribute から `project_id` を読み、対応する outbox に atomic write
-- [ ] `project_id` 不明 (map に無い OR attribute なし) は **エラーログ + DLQ 送り** で hard fail (silently drop しない)
-- [ ] backward-compat: `PHONEWAVE_OUTBOX_DIR` 単一 env も継続サポート (deprecated、map 未設定時のみ使用)
-- [ ] 既存の atomic write / idempotency 保証は維持
-- [ ] integration test: 2 project 分の outbox に正しく振り分けられること
+- [x] env var `PHONEWAVE_OUTBOX_DIRS_BY_PROJECT` で `project_id → outbox path` の map を受け付ける
+      (`foo:/abs/foo,bar:/abs/bar` 形式、 ParseOutboxDirsByProject で fail-loud parse)
+- [x] Pub/Sub message attribute から `project_id` を読み (multi-mode 限定)、 対応する outbox に atomic write
+- [x] `project_id` 不明 / 未登録 / 不正 format (multi-mode) → ErrProjectNotRouted + nack で DLQ 行き (max_delivery_attempts=5)
+- [x] backward-compat: `PHONEWAVE_OUTBOX_DIR` 単一 env が継続サポート (single-mode、 SingleOutboxRouter で project_id 完全 ignore = 100% byte-identical)
+- [x] 両 env 同時設定時は multi-mode 優先 + single env を deprecated warn-log
+- [x] 既存の atomic write / idempotency 保証は維持 (phonewave.OutboxWriter 変更なし)
+- [x] integration test: 2 project 分の outbox に正しく振り分け + cross-leak 不在 + DLQ 行き + single-mode 互換 (3 ケース、 emulator 経由)
+- [x] CI pubsub-integration job 追加 (firestore-integration pattern 踏襲)
+- [x] ADR 0028 起票
+
+### defer 項目 (本 issue scope 外)
+
+- [ ] **#0007** dmail-emitter 側 (publish に project_id attribute + D-Mail frontmatter 書込)
+- [ ] **exe 側 #0010** workspace VM systemd で multi-project env 配信
+- [ ] **exe 側 #0006** workspace VM `~/projects/<id>/` 命名規則
+- [ ] **#0012** HTTP admin endpoint
+- [ ] default project 解決 (multi-mode で project_id 不在時 fallback) → ADR 0028 で意図的 reject
 
 ## 実装ヒント
 
