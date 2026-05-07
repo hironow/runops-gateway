@@ -1,0 +1,51 @@
+# CODEOWNERS — release-gate meta-gate review requirements (ADR 0031, ADR 0033).
+#
+# Every meta-gate path requires AT LEAST TWO human reviewers from
+# the listed owners. The release-gate workflow flags edits to these
+# paths as `auth_boundary`; the GitHub PR review requirement here
+# enforces the second-reviewer policy.
+#
+# To add a new owner: edit this file and route the PR through the
+# meta-gate (auth_boundary). The PR's review requirement is computed
+# from the BASE-ref CODEOWNERS, so the bootstrap PR that introduces
+# this file is gated by the hard-coded self-protection set in
+# .github/workflows/release-gate.yaml (which forces auth_boundary
+# regardless of CODEOWNERS content).
+
+# Meta-gate: workflows that implement the gate.
+.github/workflows/release-gate.yaml      @hironow
+.github/workflows/cd.yaml                @hironow
+
+# Meta-gate: canonical path list and CODEOWNERS itself.
+.github/release-gate-paths.yaml          @hironow
+.github/CODEOWNERS                       @hironow
+
+# Meta-gate: Semgrep rules under release-gate/.
+.semgrep/rules/release-gate/             @hironow
+
+# Meta-gate: ADRs that pin the gate's contract.
+docs/adr/0031-*                          @hironow
+docs/adr/0033-*                          @hironow
+
+# Meta-gate: ADR for token broker grant matrix (when added).
+docs/adr/0032-*                          @hironow
+
+# Auth-boundary: token broker code paths.
+internal/core/port/*token*               @hironow
+internal/usecase/broker_token*           @hironow
+internal/adapter/input/broker/           @hironow
+internal/adapter/output/auth/            @hironow
+internal/adapter/output/cache/           @hironow
+internal/adapter/output/registry/agent_session_registry*   @hironow
+internal/adapter/output/github/          @hironow
+
+# Auth-boundary: composition root (broker mount, middleware order).
+cmd/server/                              @hironow
+
+# Auth-boundary: IaC for IAM, Secret Manager, GitHub provider, ruleset.
+tofu/                                    @hironow
+
+# NOTE: this file currently lists only the repo owner so the bootstrap
+# PR can land. Adding additional reviewers (e.g. `@security-team`)
+# is a follow-up auth_boundary PR; the GitHub UI will then require
+# two of the listed owners to approve every meta-gate change.

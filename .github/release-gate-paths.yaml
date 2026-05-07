@@ -1,0 +1,60 @@
+# Release-gate path classification (canonical, referenced by ADR 0031,
+# externalized by ADR 0033).
+#
+# IMPORTANT: This file is read by .github/workflows/release-gate.yaml
+# from the PR's BASE ref (github.event.pull_request.base.sha), not the
+# PR head, to prevent a malicious PR from rewriting this file to
+# reclassify itself. The workflow also contains a hard-coded
+# minimum self-protection set that overrides this YAML if the YAML
+# is missing or malformed.
+#
+# Edits to this file are themselves auth_boundary changes (the file
+# is included under auth_boundary below + in the workflow's hard-coded
+# set). Two human reviewers required (CODEOWNERS).
+
+auth_boundary:
+  # Token broker (refs#0007) — broker port, usecase, adapters
+  - "internal/core/port/*token*"
+  - "internal/usecase/broker_token*"
+  - "internal/adapter/input/broker/**"
+  - "internal/adapter/output/auth/**"
+  - "internal/adapter/output/cache/**"
+  - "internal/adapter/output/registry/agent_session_registry*"
+  - "internal/adapter/output/github/**"
+
+  # Composition root (broker mount, auth middleware ordering, DI of
+  # the broker port). Any change here can mount or unmount the broker
+  # endpoint or bypass the auth middleware.
+  - "cmd/server/**"
+
+  # IaC for IAM, Secret Manager, GitHub provider, Repository Ruleset.
+  # Existing repo layout puts deployer IAM in tofu/github.tf and
+  # Secret Manager resources/accessors in tofu/main.tf, so the gate
+  # is fail-closed: every .tf and .tfvars under tofu/ is auth_boundary.
+  - "tofu/**/*.tf"
+  - "tofu/**/*.tfvars"
+
+  # Workflow + gate self-defence (meta-gate). Also enumerated in the
+  # workflow's hard-coded set so a base-ref or YAML failure cannot
+  # let these paths slip into routing.
+  - ".github/workflows/release-gate.yaml"
+  - ".github/workflows/cd.yaml"
+  - ".github/workflows/deploy*.yaml"
+  - ".github/CODEOWNERS"
+  - ".github/release-gate-paths.yaml"
+  - ".semgrep/rules/release-gate/**"
+  - "docs/adr/0031-*"
+  - "docs/adr/0032-*"
+  - "docs/adr/0033-*"
+
+schema:
+  # D-Mail / event / persistence schema. Forward-compatibility matters
+  # because gateway and 4-tool consumers parse these.
+  - "internal/core/domain/dmail*.go"
+  - "internal/core/domain/event*.go"
+  - "internal/adapter/output/firestore/**"
+  - "internal/core/port/*.go"
+
+# `routing` is the implicit fallback. Any PR whose changed files do
+# not match auth_boundary or schema globs is classified `routing` and
+# may continue using the existing develop-push auto-deploy pipeline.
