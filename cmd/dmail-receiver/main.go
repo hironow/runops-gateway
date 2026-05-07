@@ -62,7 +62,7 @@ func loadConfig() (config, error) {
 	// to a non-empty configuration.
 	mapEnv := os.Getenv("PHONEWAVE_OUTBOX_DIRS_BY_PROJECT")
 	if mapEnv != "" {
-		parsed, err := phonewave.ParseOutboxDirsByProject(mapEnv)
+		parsed, err := phonewave.ParseDirsByProject(mapEnv)
 		if err != nil {
 			return config{}, fmt.Errorf("PHONEWAVE_OUTBOX_DIRS_BY_PROJECT: %w", err)
 		}

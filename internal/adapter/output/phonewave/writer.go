@@ -110,16 +110,17 @@ func validateName(name string) error {
 	return nil
 }
 
-// ParseOutboxDirsByProject decodes the PHONEWAVE_OUTBOX_DIRS_BY_PROJECT
-// env var (#0006). The shape is `id1:/abs/path/1,id2:/abs/path/2`, with
-// each id validated against domain.ValidateProjectID, each path required
-// to be absolute (relative paths are inherently ambiguous on workspace
-// VMs / multi-instance Cloud Run), and duplicate ids rejected so a typo
-// never silently overwrites another project's mapping.
+// ParseDirsByProject decodes a `id1:/abs/path/1,id2:/abs/path/2` env var
+// shared by both the receiver (#0006 — outbox dir) and the emitter
+// (#0007 — archive dir). Each id is validated against
+// domain.ValidateProjectID, each path must be absolute (relative paths
+// are inherently ambiguous on workspace VMs / multi-instance Cloud Run),
+// and duplicate ids are rejected so a typo never silently overwrites
+// another project's mapping.
 //
-// Returns the parsed map, or an error that the receiver init can surface
+// Returns the parsed map, or an error that the binary init can surface
 // at process boot (fail-loud > fail-late on the first message).
-func ParseOutboxDirsByProject(s string) (map[string]string, error) {
+func ParseDirsByProject(s string) (map[string]string, error) {
 	out := map[string]string{}
 	trimmed := strings.TrimSpace(s)
 	if trimmed == "" {
@@ -148,4 +149,13 @@ func ParseOutboxDirsByProject(s string) (map[string]string, error) {
 		out[id] = path
 	}
 	return out, nil
+}
+
+// ParseOutboxDirsByProject is a deprecated alias for ParseDirsByProject.
+// Kept for one PR cycle so #0006 / receiver call sites keep compiling
+// during the #0007 transition; remove in a follow-up PR.
+//
+// Deprecated: use ParseDirsByProject instead.
+func ParseOutboxDirsByProject(s string) (map[string]string, error) {
+	return ParseDirsByProject(s)
 }
