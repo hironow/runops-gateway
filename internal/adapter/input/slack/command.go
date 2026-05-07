@@ -85,13 +85,12 @@ func (h *CommandHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeEphemeral(w, "❌ `/agent <role> [--project=<id>] <task description>` の形式で指示内容を渡してください")
 		return
 	}
-	_ = projectID // wired in subsequent commits (#0008 Phase B onwards)
-	_ = cmd       // command field is validated above; not echoed back to avoid reflecting user input
+	_ = cmd // command field is validated above; not echoed back to avoid reflecting user input
 
 	idempotencyKey := newIdempotencyKey()
 	issuedAt := time.Now().Unix()
 
-	approveValue, denyValue, err := buildDispatchButtonValues(role, freeText, userID, idempotencyKey, issuedAt)
+	approveValue, denyValue, err := buildDispatchButtonValues(role, freeText, userID, idempotencyKey, projectID, issuedAt)
 	if err != nil {
 		slog.Error("failed to build dispatch button values", "err", err)
 		writeEphemeral(w, "❌ 確認メッセージの組み立てに失敗しました")
@@ -118,13 +117,14 @@ func (h *CommandHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // Approve and Deny buttons of the dispatch confirmation. Both carry the same
 // dispatchActionValue so InteractiveHandler can rebuild a DispatchRequest
 // regardless of which button is clicked.
-func buildDispatchButtonValues(role domain.AgentRole, text, requesterID, idempotencyKey string, issuedAt int64) (approve, deny string, err error) {
+func buildDispatchButtonValues(role domain.AgentRole, text, requesterID, idempotencyKey, projectID string, issuedAt int64) (approve, deny string, err error) {
 	dv := dispatchActionValue{
 		Role:           string(role),
 		Text:           text,
 		RequesterID:    requesterID,
 		IdempotencyKey: idempotencyKey,
 		IssuedAt:       issuedAt,
+		ProjectID:      projectID,
 	}
 	raw, err := marshalDispatchActionValue(dv)
 	if err != nil {
