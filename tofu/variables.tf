@@ -103,6 +103,39 @@ variable "dlq_alert_email" {
   default     = ""
 }
 
+variable "firestore_database_name" {
+  description = <<-EOT
+    Named Firestore database used as the multiplex project registry SoT
+    (Issue #0011). MUST NOT be "(default)" — see firestore.tf for the
+    rationale. The runtime gateway reads RUNOPS_FIRESTORE_DATABASE to
+    select this database via firestore.NewClientWithDatabase.
+  EOT
+  type        = string
+  default     = "runops-registry"
+
+  validation {
+    condition     = var.firestore_database_name != "(default)" && length(var.firestore_database_name) > 0
+    error_message = "firestore_database_name must be a non-empty named Firestore database, not \"(default)\". Use \"runops-registry\" or another project-unique identifier."
+  }
+}
+
+variable "firestore_location_id" {
+  description = <<-EOT
+    Firestore native location ID for the multiplex project registry.
+    Single-region IDs (e.g. asia-northeast1) keep latency aligned with
+    the gateway Cloud Run region. Multi-region IDs (nam5/eur3) are
+    permitted but require an ADR update because they change the cost
+    model and disaster-recovery story.
+  EOT
+  type        = string
+  default     = "asia-northeast1"
+
+  validation {
+    condition     = length(var.firestore_location_id) > 0
+    error_message = "firestore_location_id must be non-empty."
+  }
+}
+
 variable "exe_coder_vm_sa_email" {
   description = <<-EOT
     Service account email of the VM that runs dmail-receiver / dmail-emitter
