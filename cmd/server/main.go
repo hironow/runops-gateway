@@ -130,7 +130,26 @@ func main() {
 		slackHandler = slackHandler.WithApprovalPublisher(approvalPub)
 		slog.Info("Phase 4a approval_approve / approval_deny path enabled")
 	}
+	// Multiplex project registry (#0008/#0009/#0011). Opt-in via env so
+	// non-multiplex deployments stay byte-identical. The cleanup is always
+	// non-nil; on env error we exit before any handler binds.
+	registry, registryCleanup, err := state.ResolveFromEnv(context.Background())
+	if err != nil {
+		_ = registryCleanup()
+		slog.Error("project registry init failed", "error", err)
+		os.Exit(1)
+	}
+	defer func() {
+		if err := registryCleanup(); err != nil {
+			slog.Error("project registry cleanup failed", "error", err)
+		}
+	}()
+
 	commandHandler := slackadapter.NewCommandHandler(cfg.slackSigningSecret)
+	if registry != nil {
+		commandHandler = commandHandler.WithProjectRegistry(registry)
+		slog.Info("multiplex project registry wired into Slack /agent (#0008)")
+	}
 
 	// Register routes
 	mux := http.NewServeMux()
