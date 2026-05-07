@@ -60,7 +60,7 @@ func TestEmitter_PublishFile_ParsesAndPublishes(t *testing.T) {
 	path := writeArchive(t, dir, "msg.md", mail)
 
 	pub := &recordingPublisher{}
-	e := NewEmitter(pub)
+	e := NewEmitter(pub, NewSingleArchiveRouter())
 
 	if err := e.PublishFile(context.Background(), path); err != nil {
 		t.Fatalf("PublishFile: %v", err)
@@ -80,7 +80,7 @@ func TestEmitter_PublishFile_SkipsNonMarkdown(t *testing.T) {
 	_ = os.WriteFile(path, []byte("not a dmail"), 0o644)
 
 	pub := &recordingPublisher{}
-	e := NewEmitter(pub)
+	e := NewEmitter(pub, NewSingleArchiveRouter())
 	if err := e.PublishFile(context.Background(), path); err != nil {
 		t.Errorf("non-md should be skipped silently, got: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestEmitter_PublishFile_PropagatesPublishError(t *testing.T) {
 	path := writeArchive(t, dir, "x.md", mail)
 
 	pub := &recordingPublisher{err: errors.New("boom")}
-	e := NewEmitter(pub)
+	e := NewEmitter(pub, NewSingleArchiveRouter())
 
 	err := e.PublishFile(context.Background(), path)
 	if err == nil {
@@ -116,7 +116,7 @@ func TestEmitter_PublishFile_RetriesAfterParseError(t *testing.T) {
 	// a follow-up event for the same path with valid content must succeed.
 	dir := t.TempDir()
 	pub := &recordingPublisher{}
-	e := NewEmitter(pub)
+	e := NewEmitter(pub, NewSingleArchiveRouter())
 
 	path := filepath.Join(dir, "race.md")
 	// Step 1: empty file (simulates fsnotify Create firing before Write).
@@ -161,7 +161,7 @@ func TestEmitter_PublishFile_DedupsByPath(t *testing.T) {
 	path := writeArchive(t, dir, "dup.md", mail)
 
 	pub := &recordingPublisher{}
-	e := NewEmitter(pub)
+	e := NewEmitter(pub, NewSingleArchiveRouter())
 	if err := e.PublishFile(context.Background(), path); err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +182,7 @@ func TestEmitter_PublishFile_SkipsDirectoriesAndDotFiles(t *testing.T) {
 	_ = os.WriteFile(dot, []byte("---\nkind: report\n---\nx"), 0o644)
 
 	pub := &recordingPublisher{}
-	e := NewEmitter(pub)
+	e := NewEmitter(pub, NewSingleArchiveRouter())
 	if err := e.PublishFile(context.Background(), filepath.Join(dir, "subdir")); err != nil {
 		t.Errorf("dir should be skipped silently: %v", err)
 	}
