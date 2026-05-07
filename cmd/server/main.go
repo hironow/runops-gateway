@@ -16,6 +16,7 @@ import (
 	"go.opentelemetry.io/otel"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
+	"github.com/hironow/runops-gateway/internal/adapter/input/admin"
 	pubsubinput "github.com/hironow/runops-gateway/internal/adapter/input/pubsub"
 	slackadapter "github.com/hironow/runops-gateway/internal/adapter/input/slack"
 	"github.com/hironow/runops-gateway/internal/adapter/observability"
@@ -155,6 +156,26 @@ func main() {
 	mux := http.NewServeMux()
 	mux.Handle("POST /slack/interactive", slackHandler)
 	mux.Handle("POST /slack/command", commandHandler)
+
+	// Admin endpoint (#0012) is opt-in: registered only when both a
+	// project registry and an admin token are configured. Either one
+	// missing leaves /admin/projects unreachable so the attack surface
+	// stays at zero on non-multiplex deployments. ADR 0030 §"Why opt-in".
+	adminToken := os.Getenv("RUNOPS_ADMIN_TOKEN")
+	if registry != nil && adminToken != "" {
+		admin.NewHandler(registry, adminToken).Register(mux)
+		slog.Info("admin endpoint registered (#0012)",
+			"endpoints", []string{
+				"POST /admin/projects",
+				"GET /admin/projects",
+				"GET /admin/projects/{id}",
+				"POST /admin/projects/{id}/archive",
+			})
+	} else {
+		slog.Info("admin endpoint not registered",
+			"registry_wired", registry != nil,
+			"admin_token_set", adminToken != "")
+	}
 	mux.HandleFunc("GET /_healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintln(w, `{"status":"ok"}`)

@@ -13,15 +13,15 @@ import (
 // (#0011) writes Project values via firestore.DocumentRef.Create / DataTo. The
 // SQLite adapter scans columns explicitly so the tags do not affect it.
 type Project struct {
-	ID                      string        `firestore:"id"`
-	GitHubOrg               string        `firestore:"github_org"`
-	GitHubRepo              string        `firestore:"github_repo"`
-	WorkspacePath           string        `firestore:"workspace_path"`
-	SlackDefaultChannel     string        `firestore:"slack_default_channel"`
-	GitHubAppInstallationID int64         `firestore:"github_app_installation_id"`
-	Status                  ProjectStatus `firestore:"status"`
-	CreatedAt               time.Time     `firestore:"created_at"`
-	ArchivedAt              *time.Time    `firestore:"archived_at,omitempty"`
+	ID                      string        `firestore:"id"                         json:"id"`
+	GitHubOrg               string        `firestore:"github_org"                 json:"github_org"`
+	GitHubRepo              string        `firestore:"github_repo"                json:"github_repo"`
+	WorkspacePath           string        `firestore:"workspace_path"             json:"workspace_path"`
+	SlackDefaultChannel     string        `firestore:"slack_default_channel"      json:"slack_default_channel,omitempty"`
+	GitHubAppInstallationID int64         `firestore:"github_app_installation_id" json:"github_app_installation_id,omitempty"`
+	Status                  ProjectStatus `firestore:"status"                     json:"status"`
+	CreatedAt               time.Time     `firestore:"created_at"                 json:"created_at"`
+	ArchivedAt              *time.Time    `firestore:"archived_at,omitempty"      json:"archived_at,omitempty"`
 }
 
 // ProjectStatus is the lifecycle state of a Project.

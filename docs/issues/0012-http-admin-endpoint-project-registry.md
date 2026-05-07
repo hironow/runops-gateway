@@ -4,7 +4,8 @@
 **Priority:** P2 (Phase α 完了後、 production operations 改善)
 **Depends on:** 0009 (port), 0011 (Firestore adapter)
 **Blocks:** —
-**Status:** 📝 未着手
+**Status:** 🟡 着地 (Bearer auth + 4 endpoint + opt-in 配線 + ADR 0030 + Test job で gate)
+**Cross-ref:** ADR 0030 (本 PR で起票、 HTTP admin endpoint authentication strategy)
 
 ## 概要
 
@@ -21,20 +22,26 @@ operator が production registry を触る経路が現状無い。
 
 ## 受入基準
 
-- [ ] gateway server (Cloud Run main) に admin route を追加
+- [x] gateway server (Cloud Run main) に admin route を追加
   - POST `/admin/projects` — body は Project struct JSON
   - GET `/admin/projects` — query: `?status=active|archived|all`
   - GET `/admin/projects/{id}` — show
   - POST `/admin/projects/{id}/archive` — archive (idempotent)
-- [ ] auth: gateway 既存 IAM Identity-Aware Proxy or admin-only auth header
-      pattern を踏襲 (operator が認可された identity でのみ叩ける)
-- [ ] 内部実装は `port.ProjectRegistry` を直接呼ぶ (SQLite or Firestore は
-      composition root の env で決まる)
-- [ ] 4-eyes 不要 (registry mutation は high-severity でない判定)
-- [ ] `cmd/runops` CLI に `--remote=<gateway-url>` flag を追加検討 (本 issue
-      scope に含めるかは別途、 stub で良い)
-- [ ] integration test: 同じ Project が CLI / HTTP どちらからでも書ける /
-      読める equivalence test (Firestore emulator + http test client)
+- [x] auth: **Bearer token (env-driven、 opt-in、 constant-time 比較)** — 既存 admin auth 前例なしのため新規 strategy を ADR 0030 で確立
+- [x] 内部実装は `port.ProjectRegistry` を直接呼ぶ (SQLite or Firestore は composition root の env で決まる)
+- [x] 4-eyes 不要 (registry mutation は high-severity でない判定)
+- [x] **fail-closed**: env (RUNOPS_ADMIN_TOKEN) + registry が両方揃ったときのみ admin handler を mux に register、 attack surface ゼロ
+- [x] **token 漏洩防止**: log / response / OTel span / Handler.String() 全箇所で token 不出力、 captureSlogBuffer test で証明
+- [x] **token 正規化**: 12 ケース unit test (Bearer/bearer/BEARER + prefix only / leading whitespace / trailing newline / token internal whitespace 等) で boundary 全 cover
+- [x] handler unit test 19 ケース + lifecycle test 1 ケース (SQLite t.TempDir 経由 round-trip) — build tag なしで既存 Test job が gate
+- [x] ADR 0030 起票
+
+### defer 項目 (本 issue scope 外)
+
+- [ ] **`cmd/runops` CLI に `--remote=<gateway-url>` flag** — 別 issue (client-side companion)
+- [ ] IAP 統合 / SSO / identity-bound audit log — 将来 ADR で扱う
+- [ ] rate limit / brute-force 対策 — Cloud Armor / Cloud Run concurrency cap で対応する想定、 application 層では実装せず
+- [ ] pagination — Phase α は project 数 small、 必要時 ?cursor= で拡張
 
 ## 実装ヒント
 
