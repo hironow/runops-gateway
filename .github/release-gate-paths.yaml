@@ -31,6 +31,14 @@ auth_boundary:
   - "internal/core/domain/agent_session*"
   - "internal/core/port/*agent_session*"
 
+  # Identity token domain helpers (plan v8 §5.1 caller auth) — JWT
+  # claim parsing + audience / expiry validation shared by the 4
+  # caller-auth verifiers (cloudrun_iam / workload_identity /
+  # gcloud_identity / delegated_agent). The verifier adapters live
+  # under internal/adapter/output/auth/** which is already covered
+  # above; the domain glob here pins the rule set itself.
+  - "internal/core/domain/identity_token*"
+
   # Composition root (broker mount, auth middleware ordering, DI of
   # the broker port). Any change here can mount or unmount the broker
   # endpoint or bypass the auth middleware.
