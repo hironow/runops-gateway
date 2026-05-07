@@ -32,7 +32,8 @@ func TestProjectLifecycle_E2E(t *testing.T) {
 		}
 		return ""
 	}
-	registry, err := state.NewProjectRegistryFromEnv(context.Background(), getenv)
+	registry, cleanup, err := state.NewProjectRegistryFromEnv(context.Background(), getenv)
+	t.Cleanup(func() { _ = cleanup() })
 	if err != nil {
 		t.Fatalf("registry init: %v", err)
 	}
@@ -121,7 +122,8 @@ func TestProjectLifecycle_E2E(t *testing.T) {
 
 func TestProjectLifecycle_RegistryFactoryFailClosed(t *testing.T) {
 	// Empty env → fail-closed
-	_, err := state.NewProjectRegistryFromEnv(context.Background(), func(string) string { return "" })
+	_, cleanup, err := state.NewProjectRegistryFromEnv(context.Background(), func(string) string { return "" })
+	t.Cleanup(func() { _ = cleanup() })
 	if err == nil {
 		t.Fatalf("empty env should fail-closed")
 	}
@@ -130,12 +132,13 @@ func TestProjectLifecycle_RegistryFactoryFailClosed(t *testing.T) {
 	}
 
 	// Firestore reserved for #0011
-	_, err = state.NewProjectRegistryFromEnv(context.Background(), func(k string) string {
+	_, cleanup2, err := state.NewProjectRegistryFromEnv(context.Background(), func(k string) string {
 		if k == "RUNOPS_PROJECT_REGISTRY" {
 			return "firestore"
 		}
 		return ""
 	})
+	t.Cleanup(func() { _ = cleanup2() })
 	if err == nil || !strings.Contains(err.Error(), "0011") {
 		t.Errorf("firestore should fail with #0011 reference, got %v", err)
 	}

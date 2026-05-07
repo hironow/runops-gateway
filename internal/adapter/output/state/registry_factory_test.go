@@ -22,7 +22,8 @@ func TestNewProjectRegistry_RejectsMissingEnv(t *testing.T) {
 	getenv := envFromMap(map[string]string{})
 
 	// When.
-	_, err := state.NewProjectRegistryFromEnv(context.Background(), getenv)
+	_, cleanup, err := state.NewProjectRegistryFromEnv(context.Background(), getenv)
+	t.Cleanup(func() { _ = cleanup() })
 
 	// Then: explicit fail-fast, not silent default.
 	if err == nil {
@@ -40,7 +41,8 @@ func TestNewProjectRegistry_DevEnvDefaultsToSqlite(t *testing.T) {
 		"RUNOPS_STATE_DB_PATH": dbPath,
 	})
 
-	reg, err := state.NewProjectRegistryFromEnv(context.Background(), getenv)
+	reg, cleanup, err := state.NewProjectRegistryFromEnv(context.Background(), getenv)
+	t.Cleanup(func() { _ = cleanup() })
 	if err != nil {
 		t.Fatalf("dev env should default to sqlite: %v", err)
 	}
@@ -54,7 +56,8 @@ func TestNewProjectRegistry_NonDevEnvRequiresExplicit(t *testing.T) {
 	getenv := envFromMap(map[string]string{
 		"RUNOPS_ENV": "production",
 	})
-	_, err := state.NewProjectRegistryFromEnv(context.Background(), getenv)
+	_, cleanup, err := state.NewProjectRegistryFromEnv(context.Background(), getenv)
+	t.Cleanup(func() { _ = cleanup() })
 	if err == nil {
 		t.Fatalf("want error in production without explicit registry, got nil")
 	}
@@ -64,7 +67,8 @@ func TestNewProjectRegistry_FirestoreReturnsUnimplemented(t *testing.T) {
 	getenv := envFromMap(map[string]string{
 		"RUNOPS_PROJECT_REGISTRY": "firestore",
 	})
-	_, err := state.NewProjectRegistryFromEnv(context.Background(), getenv)
+	_, cleanup, err := state.NewProjectRegistryFromEnv(context.Background(), getenv)
+	t.Cleanup(func() { _ = cleanup() })
 	if err == nil {
 		t.Fatalf("want unimplemented error for firestore, got nil")
 	}
@@ -77,7 +81,8 @@ func TestNewProjectRegistry_RejectsInvalidValue(t *testing.T) {
 	getenv := envFromMap(map[string]string{
 		"RUNOPS_PROJECT_REGISTRY": "postgres",
 	})
-	_, err := state.NewProjectRegistryFromEnv(context.Background(), getenv)
+	_, cleanup, err := state.NewProjectRegistryFromEnv(context.Background(), getenv)
+	t.Cleanup(func() { _ = cleanup() })
 	if err == nil {
 		t.Fatalf("want error for invalid value, got nil")
 	}
@@ -92,11 +97,26 @@ func TestNewProjectRegistry_SqliteUsesEnvPath(t *testing.T) {
 		"RUNOPS_PROJECT_REGISTRY": "sqlite",
 		"RUNOPS_STATE_DB_PATH":    dbPath,
 	})
-	reg, err := state.NewProjectRegistryFromEnv(context.Background(), getenv)
+	reg, cleanup, err := state.NewProjectRegistryFromEnv(context.Background(), getenv)
+	t.Cleanup(func() { _ = cleanup() })
 	if err != nil {
 		t.Fatalf("sqlite explicit: %v", err)
 	}
 	if reg == nil {
 		t.Fatalf("want non-nil registry")
+	}
+}
+
+func TestNewProjectRegistry_ReturnsCleanupOnError(t *testing.T) {
+	// Even error paths must return a non-nil cleanup so deferring is safe.
+	_, cleanup, err := state.NewProjectRegistryFromEnv(context.Background(), envFromMap(nil))
+	if err == nil {
+		t.Fatalf("expected error from empty env")
+	}
+	if cleanup == nil {
+		t.Fatalf("cleanup must be non-nil on error path")
+	}
+	if got := cleanup(); got != nil {
+		t.Errorf("noop cleanup should return nil, got %v", got)
 	}
 }
