@@ -6,14 +6,18 @@ import (
 	"os"
 	"path/filepath"
 
+	"cloud.google.com/go/firestore"
 	"github.com/hironow/runops-gateway/internal/core/port"
 )
 
 // Env var names recognized by NewProjectRegistryFromEnv.
 const (
-	envProjectRegistry = "RUNOPS_PROJECT_REGISTRY"
-	envRunopsEnv       = "RUNOPS_ENV"
-	envStateDBPath     = "RUNOPS_STATE_DB_PATH"
+	envProjectRegistry     = "RUNOPS_PROJECT_REGISTRY"
+	envRunopsEnv           = "RUNOPS_ENV"
+	envStateDBPath         = "RUNOPS_STATE_DB_PATH"
+	envGoogleCloudProject  = "GOOGLE_CLOUD_PROJECT"
+	envFirestoreDatabase   = "RUNOPS_FIRESTORE_DATABASE"
+	envFirestoreCollection = "RUNOPS_FIRESTORE_COLLECTION"
 )
 
 // CleanupFunc releases resources held by a ProjectRegistry adapter
@@ -63,10 +67,47 @@ func NewProjectRegistryFromEnv(ctx context.Context, getenv func(string) string) 
 	case "sqlite":
 		return newSQLiteRegistryFromEnv(ctx, getenv)
 	case "firestore":
-		return nil, noopCleanup, fmt.Errorf("firestore adapter not implemented yet, see issue #0011")
+		return newFirestoreRegistryFromEnv(ctx, getenv)
 	default:
 		return nil, noopCleanup, fmt.Errorf("unknown %s value: %q (want sqlite or firestore)", envProjectRegistry, choice)
 	}
+}
+
+// newFirestoreRegistryFromEnv constructs the production Firestore adapter.
+//
+// GOOGLE_CLOUD_PROJECT is required (matches the existing GCP env
+// convention used by gcpadapter / cmd/server). RUNOPS_FIRESTORE_DATABASE
+// selects between the named DB ("runops-registry" in production tofu) and
+// the (default) DB; the empty value uses (default) so the same code path
+// works against the Firestore emulator (which does not require named DB
+// support). RUNOPS_FIRESTORE_COLLECTION overrides the default
+// "projects" collection name.
+func newFirestoreRegistryFromEnv(ctx context.Context, getenv func(string) string) (port.ProjectRegistry, CleanupFunc, error) {
+	projectID := getenv(envGoogleCloudProject)
+	if projectID == "" {
+		return nil, noopCleanup, fmt.Errorf("%s env required for firestore registry", envGoogleCloudProject)
+	}
+	dbName := getenv(envFirestoreDatabase)
+	collection := getenv(envFirestoreCollection)
+	if collection == "" {
+		collection = DefaultProjectsCollection
+	}
+
+	client, err := newFirestoreClient(ctx, projectID, dbName)
+	if err != nil {
+		return nil, noopCleanup, fmt.Errorf("firestore client: %w", err)
+	}
+	return NewFirestoreProjectRegistry(client, collection), client.Close, nil
+}
+
+// newFirestoreClient routes between default-DB and named-DB constructors.
+// Pulled out so factory logic stays linear and so tests can swap in a
+// fake constructor if needed (current tests rely on the emulator instead).
+var newFirestoreClient = func(ctx context.Context, projectID, dbName string) (*firestore.Client, error) {
+	if dbName == "" {
+		return firestore.NewClient(ctx, projectID)
+	}
+	return firestore.NewClientWithDatabase(ctx, projectID, dbName)
 }
 
 func newSQLiteRegistryFromEnv(ctx context.Context, getenv func(string) string) (port.ProjectRegistry, CleanupFunc, error) {

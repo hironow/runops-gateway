@@ -63,17 +63,19 @@ func TestNewProjectRegistry_NonDevEnvRequiresExplicit(t *testing.T) {
 	}
 }
 
-func TestNewProjectRegistry_FirestoreReturnsUnimplemented(t *testing.T) {
+func TestNewProjectRegistry_FirestoreRequiresProjectID(t *testing.T) {
+	// Firestore is now implemented (#0011) but still fail-fast when env is incomplete.
 	getenv := envFromMap(map[string]string{
 		"RUNOPS_PROJECT_REGISTRY": "firestore",
+		// GOOGLE_CLOUD_PROJECT intentionally absent
 	})
 	_, cleanup, err := state.NewProjectRegistryFromEnv(context.Background(), getenv)
 	t.Cleanup(func() { _ = cleanup() })
 	if err == nil {
-		t.Fatalf("want unimplemented error for firestore, got nil")
+		t.Fatalf("want error when GOOGLE_CLOUD_PROJECT is missing")
 	}
-	if !strings.Contains(err.Error(), "firestore") || !strings.Contains(err.Error(), "0011") {
-		t.Errorf("error should reference firestore + #0011, got %q", err.Error())
+	if !strings.Contains(err.Error(), "GOOGLE_CLOUD_PROJECT") {
+		t.Errorf("error should mention GOOGLE_CLOUD_PROJECT, got %q", err.Error())
 	}
 }
 
