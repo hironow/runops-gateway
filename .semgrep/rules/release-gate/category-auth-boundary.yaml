@@ -46,12 +46,29 @@ rules:
       Confirm the change is in internal/adapter/output/github/** and
       classified auth_boundary.
     pattern-either:
-      - pattern: |
-          go-github.NewClient($T)
-      - pattern: |
-          $X.Apps.CreateInstallationToken(...)
-      - pattern: |
-          $X.Apps.CreateInstallationToken($CTX, ...)
+      # Detect imports of any major version of go-github. The
+      # original pattern `go-github.NewClient($T)` was Go-syntax
+      # invalid (hyphen forbidden in identifiers), causing semgrep
+      # to exit with code 2 (rule parse error) and the release-gate
+      # workflow to fail-closed on every PR. Import-based detection
+      # is functionally equivalent: any code path that mints
+      # installation tokens must import this package, so flagging
+      # the import covers all use sites without parsing call sites.
+      - pattern: import "github.com/google/go-github/v74/github"
+      - pattern: import "github.com/google/go-github/v73/github"
+      - pattern: import "github.com/google/go-github/v72/github"
+      - pattern: import "github.com/google/go-github/v71/github"
+      - pattern: import "github.com/google/go-github/v70/github"
+      - pattern: import "github.com/google/go-github/v69/github"
+      - pattern: import "github.com/google/go-github/v68/github"
+      - pattern: import "github.com/google/go-github/v67/github"
+      - pattern: import "github.com/google/go-github/v66/github"
+      - pattern: import "github.com/google/go-github/v65/github"
+      # Call-site detection for the App-installation token mint API
+      # remains valuable because it catches uses that import via an
+      # alias the import-pattern would miss.
+      - pattern: $X.Apps.CreateInstallationToken(...)
+      - pattern: $X.Apps.CreateInstallationToken($CTX, ...)
 
   - id: release-gate-auth-boundary-cloudrun-iam-binding
     languages: [hcl]
