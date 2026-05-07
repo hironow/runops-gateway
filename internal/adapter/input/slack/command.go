@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -31,12 +32,24 @@ type DispatchUseCase interface {
 // operator to click Approve before DispatchAgentTask runs. The Approve click
 // arrives at /slack/interactive and is dispatched by InteractiveHandler.
 type CommandHandler struct {
-	signingSecret string
+	signingSecret   string
+	projectRegistry port.ProjectRegistry // optional; when nil --project is rejected
 }
 
 // NewCommandHandler returns a Slash Command handler.
 func NewCommandHandler(signingSecret string) *CommandHandler {
 	return &CommandHandler{signingSecret: signingSecret}
+}
+
+// WithProjectRegistry enables `--project=<id>` validation against the
+// multiplex registry (issue #0008). When the deployment opts out of the
+// project registry the handler still functions; commands that include
+// `--project` are rejected with an ephemeral message instead of silently
+// running with an unverified project_id. Returns the same handler so
+// callers can chain after NewCommandHandler.
+func (h *CommandHandler) WithProjectRegistry(r port.ProjectRegistry) *CommandHandler {
+	h.projectRegistry = r
+	return h
 }
 
 // ServeHTTP implements http.Handler. Slack expects 200 within 3 seconds; the
@@ -84,6 +97,25 @@ func (h *CommandHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if freeText == "" {
 		writeEphemeral(w, "❌ `/agent <role> [--project=<id>] <task description>` の形式で指示内容を渡してください")
 		return
+	}
+	if projectID != "" {
+		if h.projectRegistry == nil {
+			writeEphemeral(w, "❌ --project は本 gateway インスタンスでは無効化されています")
+			return
+		}
+		p, err := h.projectRegistry.Get(r.Context(), projectID)
+		switch {
+		case errors.Is(err, domain.ErrProjectNotFound):
+			writeEphemeral(w, fmt.Sprintf("❌ project not registered: %s", projectID))
+			return
+		case err != nil:
+			slog.Error("project registry lookup failed", "project_id", projectID, "err", err)
+			writeEphemeral(w, "❌ project レジストリの参照に失敗しました")
+			return
+		case p.Status != domain.ProjectStatusActive:
+			writeEphemeral(w, fmt.Sprintf("❌ project is archived: %s", projectID))
+			return
+		}
 	}
 	_ = cmd // command field is validated above; not echoed back to avoid reflecting user input
 
