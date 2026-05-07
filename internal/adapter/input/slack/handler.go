@@ -47,6 +47,12 @@ type actionValue struct {
 	NextRevision     string `json:"next_revision"` // legacy: singular form
 	NextAction       string `json:"next_action"`
 	BuildInfo        string `json:"build_info"`
+	// SQLInstanceName is the Cloud SQL instance to back up before migrate_apply.
+	// 空 (legacy button) のときは usecase 側で ResourceNames (= job 名) に
+	// fallback する。 job 名と SQL instance 名が一致しない命名規約 (例:
+	// stg-ops-agent-migration job → stg-ops-agent-db instance) のときは
+	// この field を埋めないと TriggerBackup が 404 で落ちる。
+	SQLInstanceName string `json:"sql_instance_name"`
 }
 
 // interactiveAction is a single Block Kit action element from a Slack
@@ -268,6 +274,7 @@ func (h *InteractiveHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Action:           av.Action,
 		ApproverID:       slackPayload.User.ID,
 		IssuedAt:         av.IssuedAt,
+		SQLInstanceName:  av.SQLInstanceName,
 		MigrationDone:    av.MigrationDone,
 		NextServiceNames: firstNonEmpty(av.NextServiceNames, av.NextServiceName),
 		NextRevisions:    firstNonEmpty(av.NextRevisions, av.NextRevision),

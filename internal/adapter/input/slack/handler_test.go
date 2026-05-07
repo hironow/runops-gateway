@@ -1512,3 +1512,50 @@ func TestInteractiveHandler_ButtonValueBuildInfo_PropagatesToApprovalRequest(t *
 		t.Fatal("timeout waiting for ApproveAction")
 	}
 }
+
+func TestHandler_ButtonValueSqlInstanceName_PropagatesToApprovalRequest(t *testing.T) {
+	// given — migrate_apply ボタンの action value に sql_instance_name が乗っている。
+	// usecase 側は req.SqlInstanceName が非空なら job 名 fallback ではなく
+	// この値を Cloud SQL backup 対象として使う (job 名と SQL instance 名の命名規約が
+	// 一致しない env で 404 を防ぐ)。 handler は wire 値をそのまま素通しするだけ。
+	secret := "test-secret"
+	mock := newMockUseCase()
+	handler := NewInteractiveHandler(mock, nil, testNotifier, nil, secret)
+
+	av := actionValue{
+		Project: "stg-hironow-ops-agent", Location: "asia-northeast1",
+		ResourceType:    "job",
+		ResourceNames:   "stg-ops-agent-migration",
+		Action:          "migrate_apply",
+		IssuedAt:        time.Now().Unix(),
+		SQLInstanceName: "stg-ops-agent-db",
+	}
+	avBytes, _ := json.Marshal(av)
+
+	payload := interactivePayload{}
+	payload.User.ID = "U123"
+	payload.ResponseURL = "https://hooks.slack.com/response"
+	payload.Actions = []interactiveAction{
+		{ActionID: "approve_job", Value: string(avBytes)},
+	}
+	payloadBytes, _ := json.Marshal(payload)
+
+	req := buildValidRequest(t, secret, string(payloadBytes))
+	rr := httptest.NewRecorder()
+
+	// when
+	handler.ServeHTTP(rr, req)
+
+	// then
+	select {
+	case got := <-mock.approveCh:
+		if got.SQLInstanceName != "stg-ops-agent-db" {
+			t.Errorf("SQLInstanceName = %q, want %q", got.SQLInstanceName, "stg-ops-agent-db")
+		}
+		if got.ResourceNames != "stg-ops-agent-migration" {
+			t.Errorf("ResourceNames = %q, want %q (job 名は SQL instance 名とは別物)", got.ResourceNames, "stg-ops-agent-migration")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for ApproveAction")
+	}
+}
