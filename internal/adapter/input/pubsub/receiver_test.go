@@ -154,3 +154,93 @@ func TestReceiver_OnMessage_RejectsUnsafeIDAttribute(t *testing.T) {
 		}
 	}
 }
+
+func TestReceiver_OnMessage_NacksOnProjectNotRouted(t *testing.T) {
+	// Multi-mode router that knows only "foo"; an incoming message with
+	// project_id=ghost must be nacked so Pub/Sub max_delivery_attempts
+	// pushes it to the DLQ for operator triage (#0006 / ADR 0028).
+	w := &fakeWriter{}
+	r := NewReceiver(NewMultiOutboxRouter(map[string]Writer{
+		"foo": w,
+	}))
+	msg := &fakeMessage{
+		id:   "msg-multi-1",
+		data: []byte("body"),
+		attributes: map[string]string{
+			"id":         "01HZW0K0AB12CD34EF56GH78JK",
+			"project_id": "ghost",
+		},
+	}
+
+	r.OnMessage(context.Background(), msg)
+
+	if !msg.nacked {
+		t.Errorf("unrouted project_id should nack the message")
+	}
+	if msg.acked {
+		t.Errorf("unrouted project_id must NOT ack the message")
+	}
+	if got := w.snapshot(); len(got) != 0 {
+		t.Errorf("writer for 'foo' should not see ghost message; got %d writes", len(got))
+	}
+}
+
+func TestReceiver_OnMessage_RoutesByProjectIDInMultiMode(t *testing.T) {
+	// Multi-mode happy path: project_id=bar lands in bar's writer, not
+	// foo's, and the message is acked.
+	wFoo := &fakeWriter{}
+	wBar := &fakeWriter{}
+	r := NewReceiver(NewMultiOutboxRouter(map[string]Writer{
+		"foo": wFoo,
+		"bar": wBar,
+	}))
+	msg := &fakeMessage{
+		id:   "msg-multi-2",
+		data: []byte("payload"),
+		attributes: map[string]string{
+			"id":         "01HZW0K0AB12CD34EF56GH78JK",
+			"project_id": "bar",
+		},
+	}
+
+	r.OnMessage(context.Background(), msg)
+
+	if got := wBar.snapshot(); len(got) != 1 {
+		t.Errorf("bar writer should see exactly one write, got %d", len(got))
+	}
+	if got := wFoo.snapshot(); len(got) != 0 {
+		t.Errorf("foo writer should see no writes, got %d", len(got))
+	}
+	if !msg.acked {
+		t.Errorf("multi-mode happy path should ack the message")
+	}
+}
+
+func TestReceiver_OnMessage_SingleModeIgnoresProjectID(t *testing.T) {
+	// Backward-compat assertion: even when a publisher upstream sets
+	// project_id, single-mode receivers must hand the message to the
+	// sole writer without consulting the attribute. Confirms the
+	// SingleOutboxRouter contract end-to-end through Receiver.
+	w := &fakeWriter{}
+	r := NewReceiver(NewSingleOutboxRouter(w))
+	msg := &fakeMessage{
+		id:   "msg-single-1",
+		data: []byte("payload"),
+		attributes: map[string]string{
+			"id":         "01HZW0K0AB12CD34EF56GH78JK",
+			"project_id": "any-value-ignored",
+		},
+	}
+
+	r.OnMessage(context.Background(), msg)
+
+	if got := w.snapshot(); len(got) != 1 {
+		t.Errorf("single-mode writer should see exactly one write, got %d", len(got))
+	}
+	if !msg.acked {
+		t.Errorf("single-mode happy path should ack the message")
+	}
+}
+
+// silence unused strings import if subsequent commits drop it.
+var _ = strings.Builder{}
