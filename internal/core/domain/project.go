@@ -8,16 +8,20 @@ import (
 
 // Project is a multiplex registry entry. Shared by SQLite (dev/test) and
 // Firestore (production, issue #0011) adapters via port.ProjectRegistry.
+//
+// Firestore tags map struct fields to document keys when the FirestoreProjectRegistry
+// (#0011) writes Project values via firestore.DocumentRef.Create / DataTo. The
+// SQLite adapter scans columns explicitly so the tags do not affect it.
 type Project struct {
-	ID                      string
-	GitHubOrg               string
-	GitHubRepo              string
-	WorkspacePath           string
-	SlackDefaultChannel     string // "" = unset
-	GitHubAppInstallationID int64  // 0 = unset; validated in issue #0010
-	Status                  ProjectStatus
-	CreatedAt               time.Time
-	ArchivedAt              *time.Time // non-nil only when Status == ProjectStatusArchived
+	ID                      string        `firestore:"id"`
+	GitHubOrg               string        `firestore:"github_org"`
+	GitHubRepo              string        `firestore:"github_repo"`
+	WorkspacePath           string        `firestore:"workspace_path"`
+	SlackDefaultChannel     string        `firestore:"slack_default_channel"`
+	GitHubAppInstallationID int64         `firestore:"github_app_installation_id"`
+	Status                  ProjectStatus `firestore:"status"`
+	CreatedAt               time.Time     `firestore:"created_at"`
+	ArchivedAt              *time.Time    `firestore:"archived_at,omitempty"`
 }
 
 // ProjectStatus is the lifecycle state of a Project.
