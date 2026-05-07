@@ -47,6 +47,10 @@ type DispatchRequest struct {
 	// SlackThreadTS is the Slack message.ts to thread reply onto. Empty
 	// for CLI dispatches.
 	SlackThreadTS string
+	// ProjectID is the multiplex project_id (issue #0008/#0009/#0011).
+	// Empty when --project was not specified; non-empty when the Slack
+	// command supplied a registered project. See ADR 0027.
+	ProjectID string
 }
 
 // OperationKey returns a canonical deduplication key for a DispatchRequest.
