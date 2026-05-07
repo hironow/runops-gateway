@@ -367,6 +367,10 @@ func (h *InteractiveHandler) handleDispatchAction(traceCtx context.Context, acti
 		// these to thread-reply when the agent finishes.
 		SlackChannelID: target.ChannelID,
 		SlackThreadTS:  target.ThreadTS,
+		// #0008 (ADR 0027): carry the multiplex project_id through the
+		// approve click so DispatchAgentTask + Pub/Sub publish see the
+		// same value the operator originally chose.
+		ProjectID: dv.ProjectID,
 	}
 	h.goAsync(func() {
 		ctx, cancel := context.WithTimeout(traceCtx, responseURLTimeout)

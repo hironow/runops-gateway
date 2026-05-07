@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -31,12 +32,24 @@ type DispatchUseCase interface {
 // operator to click Approve before DispatchAgentTask runs. The Approve click
 // arrives at /slack/interactive and is dispatched by InteractiveHandler.
 type CommandHandler struct {
-	signingSecret string
+	signingSecret   string
+	projectRegistry port.ProjectRegistry // optional; when nil --project is rejected
 }
 
 // NewCommandHandler returns a Slash Command handler.
 func NewCommandHandler(signingSecret string) *CommandHandler {
 	return &CommandHandler{signingSecret: signingSecret}
+}
+
+// WithProjectRegistry enables `--project=<id>` validation against the
+// multiplex registry (issue #0008). When the deployment opts out of the
+// project registry the handler still functions; commands that include
+// `--project` are rejected with an ephemeral message instead of silently
+// running with an unverified project_id. Returns the same handler so
+// callers can chain after NewCommandHandler.
+func (h *CommandHandler) WithProjectRegistry(r port.ProjectRegistry) *CommandHandler {
+	h.projectRegistry = r
+	return h
 }
 
 // ServeHTTP implements http.Handler. Slack expects 200 within 3 seconds; the
@@ -71,22 +84,45 @@ func (h *CommandHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	roleStr, freeText := parseSlashCommandText(text)
+	roleStr, projectID, freeText, err := parseSlashCommandText(text)
+	if err != nil {
+		writeEphemeral(w, fmt.Sprintf("❌ %v", err))
+		return
+	}
 	role, err := domain.ParseAgentRole(roleStr)
 	if err != nil {
 		writeEphemeral(w, fmt.Sprintf("❌ %v", err))
 		return
 	}
 	if freeText == "" {
-		writeEphemeral(w, "❌ `/agent <role> <task description>` の形式で指示内容を渡してください")
+		writeEphemeral(w, "❌ `/agent <role> [--project=<id>] <task description>` の形式で指示内容を渡してください")
 		return
+	}
+	if projectID != "" {
+		if h.projectRegistry == nil {
+			writeEphemeral(w, "❌ --project は本 gateway インスタンスでは無効化されています")
+			return
+		}
+		p, err := h.projectRegistry.Get(r.Context(), projectID)
+		switch {
+		case errors.Is(err, domain.ErrProjectNotFound):
+			writeEphemeral(w, fmt.Sprintf("❌ project not registered: %s", projectID))
+			return
+		case err != nil:
+			slog.Error("project registry lookup failed", "project_id", projectID, "err", err)
+			writeEphemeral(w, "❌ project レジストリの参照に失敗しました")
+			return
+		case p.Status != domain.ProjectStatusActive:
+			writeEphemeral(w, fmt.Sprintf("❌ project is archived: %s", projectID))
+			return
+		}
 	}
 	_ = cmd // command field is validated above; not echoed back to avoid reflecting user input
 
 	idempotencyKey := newIdempotencyKey()
 	issuedAt := time.Now().Unix()
 
-	approveValue, denyValue, err := buildDispatchButtonValues(role, freeText, userID, idempotencyKey, issuedAt)
+	approveValue, denyValue, err := buildDispatchButtonValues(role, freeText, userID, idempotencyKey, projectID, issuedAt)
 	if err != nil {
 		slog.Error("failed to build dispatch button values", "err", err)
 		writeEphemeral(w, "❌ 確認メッセージの組み立てに失敗しました")
@@ -98,6 +134,7 @@ func (h *CommandHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Text:           freeText,
 		RequesterID:    userID,
 		IdempotencyKey: idempotencyKey,
+		ProjectID:      projectID,
 		ApproveValue:   approveValue,
 		DenyValue:      denyValue,
 	})
@@ -113,13 +150,14 @@ func (h *CommandHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // Approve and Deny buttons of the dispatch confirmation. Both carry the same
 // dispatchActionValue so InteractiveHandler can rebuild a DispatchRequest
 // regardless of which button is clicked.
-func buildDispatchButtonValues(role domain.AgentRole, text, requesterID, idempotencyKey string, issuedAt int64) (approve, deny string, err error) {
+func buildDispatchButtonValues(role domain.AgentRole, text, requesterID, idempotencyKey, projectID string, issuedAt int64) (approve, deny string, err error) {
 	dv := dispatchActionValue{
 		Role:           string(role),
 		Text:           text,
 		RequesterID:    requesterID,
 		IdempotencyKey: idempotencyKey,
 		IssuedAt:       issuedAt,
+		ProjectID:      projectID,
 	}
 	raw, err := marshalDispatchActionValue(dv)
 	if err != nil {
@@ -129,20 +167,89 @@ func buildDispatchButtonValues(role domain.AgentRole, text, requesterID, idempot
 	return encoded, encoded, nil
 }
 
-// parseSlashCommandText splits "<role> <free text>" into the two parts.
-// Whitespace-only or empty input yields ("", ""); a role-only input yields
-// (role, "") so the handler can render a clearer error.
-func parseSlashCommandText(s string) (role, text string) {
+// parseSlashCommandText is a reject-first parser for `/agent <role> [--project=<id> | --project <id>] <text>`.
+//
+// Allowed grammars (only these three):
+//  1. "<role>"                                 — role-only, text="", project=""
+//  2. "<role> <text>"                          — backward compat, project=""
+//  3. "<role> --project=<id> <text>"           — flag = form
+//  4. "<role> --project <id> <text>"           — flag space form
+//
+// Anything else (multiple --project, empty value, role-only with --project,
+// invalid project_id format) is rejected with an error so the caller can
+// surface a Slack ephemeral message. The flag is only recognized as the
+// SECOND token after role; "--project" appearing inside the free text is
+// passed through as a literal string.
+func parseSlashCommandText(s string) (role, projectID, text string, err error) {
 	trimmed := strings.TrimSpace(s)
 	if trimmed == "" {
-		return "", ""
+		return "", "", "", nil
 	}
 	parts := strings.SplitN(trimmed, " ", 2)
 	role = parts[0]
-	if len(parts) == 2 {
-		text = strings.TrimSpace(parts[1])
+	if len(parts) == 1 {
+		// role-only is allowed; caller decides whether empty text is an error.
+		return role, "", "", nil
 	}
-	return role, text
+	rest := strings.TrimSpace(parts[1])
+
+	headParts := strings.SplitN(rest, " ", 2)
+	head := headParts[0]
+	tail := ""
+	if len(headParts) == 2 {
+		tail = strings.TrimSpace(headParts[1])
+	}
+
+	switch {
+	case strings.HasPrefix(head, "--project="):
+		value := strings.TrimPrefix(head, "--project=")
+		if value == "" {
+			return "", "", "", fmt.Errorf("--project= requires a value")
+		}
+		if err := domain.ValidateProjectID(value); err != nil {
+			return "", "", "", fmt.Errorf("invalid --project value: %w", err)
+		}
+		if tail == "" {
+			return "", "", "", fmt.Errorf("--project=<id> must be followed by the request text")
+		}
+		if containsProjectFlag(tail) {
+			return "", "", "", fmt.Errorf("multiple --project flags not allowed")
+		}
+		return role, value, tail, nil
+	case head == "--project":
+		if tail == "" {
+			return "", "", "", fmt.Errorf("--project must be followed by a value and the request text")
+		}
+		valueParts := strings.SplitN(tail, " ", 2)
+		value := valueParts[0]
+		if err := domain.ValidateProjectID(value); err != nil {
+			return "", "", "", fmt.Errorf("invalid --project value: %w", err)
+		}
+		if len(valueParts) < 2 || strings.TrimSpace(valueParts[1]) == "" {
+			return "", "", "", fmt.Errorf("--project <id> must be followed by the request text")
+		}
+		remainder := strings.TrimSpace(valueParts[1])
+		if containsProjectFlag(remainder) {
+			return "", "", "", fmt.Errorf("multiple --project flags not allowed")
+		}
+		return role, value, remainder, nil
+	default:
+		// No flag at the head position — entire rest is free text. Any
+		// "--project" inside is literal and passed through unchanged.
+		return role, "", rest, nil
+	}
+}
+
+// containsProjectFlag reports whether s contains a `--project` flag at the
+// start of any whitespace-delimited token. Used to reject duplicate flag
+// usage after the head has already consumed one.
+func containsProjectFlag(s string) bool {
+	for _, tok := range strings.Fields(s) {
+		if tok == "--project" || strings.HasPrefix(tok, "--project=") {
+			return true
+		}
+	}
+	return false
 }
 
 // newIdempotencyKey returns a 16-byte hex string. Crypto-random so that two

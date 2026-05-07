@@ -19,6 +19,11 @@ type DispatchConfirmation struct {
 	// IdempotencyKey is shown in the confirmation so the operator can match it
 	// against the eventual ack message.
 	IdempotencyKey string
+	// ProjectID is the multiplex project_id (#0008). When non-empty it is
+	// rendered as an extra "Project" line so the operator can sanity-check
+	// the routing before approving. Empty values are omitted from the
+	// rendered message to keep the existing single-project layout.
+	ProjectID string
 	// ApproveValue is the full payload to embed in the Approve button's
 	// value field (must already be compressed via CompressButtonValue).
 	ApproveValue string
@@ -37,8 +42,11 @@ func BuildDispatchConfirmation(p DispatchConfirmation) SlackPayload {
 	// 依頼者は <@U...> 形式で出力すると Slack が @username に展開する。
 	// 他のフィールドは識別子なので code-formatted (バッククォート) で残す。
 	detail := "*エージェント:* `" + safeTrunc(p.Role, 50) + "`\n" +
-		"*依頼者:* <@" + safeTrunc(p.RequesterID, 50) + ">\n" +
-		"*指示内容:* `" + safeTrunc(p.Text, 500) + "`\n" +
+		"*依頼者:* <@" + safeTrunc(p.RequesterID, 50) + ">\n"
+	if p.ProjectID != "" {
+		detail += "*Project:* `" + safeTrunc(p.ProjectID, 64) + "`\n"
+	}
+	detail += "*指示内容:* `" + safeTrunc(p.Text, 500) + "`\n" +
 		"*依頼ID:* `" + safeTrunc(p.IdempotencyKey, 64) + "`"
 
 	approve := NewButton("dispatch_approve", "✅ Dispatch", p.ApproveValue, "primary").
