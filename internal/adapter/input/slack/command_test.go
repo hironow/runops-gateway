@@ -245,21 +245,55 @@ func TestCommandHandler_RejectsMalformedFormBody(t *testing.T) {
 
 func TestParseSlashCommandText_ExtractsRoleAndRest(t *testing.T) {
 	cases := []struct {
-		in       string
-		wantRole string
-		wantText string
+		name        string
+		in          string
+		wantRole    string
+		wantProject string
+		wantText    string
+		wantErr     bool
 	}{
-		{"paintress fix M-42", "paintress", "fix M-42"},
-		{"sightjack scan ENG project", "sightjack", "scan ENG project"},
-		{"amadeus", "amadeus", ""}, // role only — caller may treat as missing text
+		// Backward-compatible cases (no --project flag).
+		{"role + text", "paintress fix M-42", "paintress", "", "fix M-42", false},
+		{"role + multi-token text", "sightjack scan ENG project", "sightjack", "", "scan ENG project", false},
+		{"role only", "amadeus", "amadeus", "", "", false},
+
+		// --project= form.
+		{"role + --project= + text", "paintress --project=foo fix it", "paintress", "foo", "fix it", false},
+
+		// --project (space) form.
+		{"role + --project space + text", "paintress --project foo fix it", "paintress", "foo", "fix it", false},
+
+		// Reject cases.
+		{"--project= empty value", "paintress --project= fix it", "", "", "", true},
+		{"--project space without value", "paintress --project", "", "", "", true},
+		{"--project= without text", "paintress --project=foo", "", "", "", true},
+		{"--project space without text", "paintress --project foo", "", "", "", true},
+		{"duplicate --project=", "paintress --project=foo --project=bar fix it", "", "", "", true},
+		{"duplicate --project space", "paintress --project foo --project bar fix it", "", "", "", true},
+		{"--project= invalid id (space char rejected by regex via tokenization)", "paintress --project=foo bar fix", "paintress", "foo", "bar fix", false}, // value=foo, text="bar fix" — regex passes
+		{"--project= invalid id (regex fail)", "paintress --project=bad@id fix it", "", "", "", true},
+
+		// text-internal --project must NOT be consumed.
+		{"text contains --project", "paintress fix --project=ghost it", "paintress", "", "fix --project=ghost it", false},
 	}
 	for _, tc := range cases {
-		role, text := parseSlashCommandText(tc.in)
-		if role != tc.wantRole {
-			t.Errorf("in=%q role=%q want=%q", tc.in, role, tc.wantRole)
-		}
-		if text != tc.wantText {
-			t.Errorf("in=%q text=%q want=%q", tc.in, text, tc.wantText)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			role, project, text, err := parseSlashCommandText(tc.in)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err=%v wantErr=%v", err, tc.wantErr)
+			}
+			if tc.wantErr {
+				return
+			}
+			if role != tc.wantRole {
+				t.Errorf("role=%q want=%q", role, tc.wantRole)
+			}
+			if project != tc.wantProject {
+				t.Errorf("project=%q want=%q", project, tc.wantProject)
+			}
+			if text != tc.wantText {
+				t.Errorf("text=%q want=%q", text, tc.wantText)
+			}
+		})
 	}
 }
