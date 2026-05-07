@@ -274,7 +274,13 @@ jobs:
         working-directory: tofu
 
     steps:
+      # Checkout the resolved deploy_sha (workflow_dispatch input ref
+      # resolved to a 40-char SHA, or github.sha for push). Without
+      # this, dispatch deploys would silently apply infra from the
+      # branch HEAD instead of the input ref (codex review v6 #2).
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.gate-check.outputs.deploy_sha }}
 
       - id: auth
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
@@ -342,9 +348,17 @@ jobs:
         ${{ vars.ARTIFACT_REGISTRY_LOCATION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/runops/dmail-receiver
       DMAIL_EMITTER_IMAGE: >-
         ${{ vars.ARTIFACT_REGISTRY_LOCATION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/runops/dmail-emitter
+      # Deploy SHA is the canonical commit ref for this run (resolved
+      # by gate-check). All checkout / build / deploy steps below use
+      # this rather than github.sha so that workflow_dispatch input
+      # ref is actually what gets shipped (codex review v6 #2).
+      DEPLOY_SHA: ${{ needs.gate-check.outputs.deploy_sha }}
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.gate-check.outputs.deploy_sha }}
+          fetch-depth: 0  # need history for prod-* tag creation step
 
       - id: auth
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
@@ -367,7 +381,7 @@ jobs:
           context: .
           push: true
           tags: |
-            ${{ env.IMAGE }}:${{ github.sha }}
+            ${{ env.IMAGE }}:${{ env.DEPLOY_SHA }}
             ${{ env.IMAGE }}:latest
           # Layer cache via GitHub Actions cache backend — no separate registry needed.
           cache-from: type=gha
@@ -386,7 +400,7 @@ jobs:
           file: docker/dmail-receiver.Dockerfile
           push: true
           tags: |
-            ${{ env.DMAIL_RECEIVER_IMAGE }}:${{ github.sha }}
+            ${{ env.DMAIL_RECEIVER_IMAGE }}:${{ env.DEPLOY_SHA }}
             ${{ env.DMAIL_RECEIVER_IMAGE }}:latest
           cache-from: type=gha,scope=dmail-receiver
           cache-to: type=gha,mode=max,scope=dmail-receiver
@@ -398,7 +412,7 @@ jobs:
           file: docker/dmail-emitter.Dockerfile
           push: true
           tags: |
-            ${{ env.DMAIL_EMITTER_IMAGE }}:${{ github.sha }}
+            ${{ env.DMAIL_EMITTER_IMAGE }}:${{ env.DEPLOY_SHA }}
             ${{ env.DMAIL_EMITTER_IMAGE }}:latest
           cache-from: type=gha,scope=dmail-emitter
           cache-to: type=gha,mode=max,scope=dmail-emitter
@@ -409,7 +423,7 @@ jobs:
         with:
           service: runops-gateway
           region: ${{ vars.CLOUD_RUN_LOCATION }}
-          image: ${{ env.IMAGE }}:${{ github.sha }}
+          image: ${{ env.IMAGE }}:${{ env.DEPLOY_SHA }}
           # deploy-cloudrun@v2 routes 100% traffic to the new revision by default.
 
       # Post-deploy smoke: prove that the just-shipped revision is reachable
@@ -458,3 +472,119 @@ jobs:
           fi
 
           echo "smoke: all checks passed against ${SERVICE_URL}"
+
+      # ADR 0031 §"Rollback target separation": create the immutable
+      # prod-* tag pointing at the deployed commit and stamp the
+      # Cloud Run revision label so rollback uses the same SoT pair
+      # (protected git tag + revision label).
+      - name: Stamp Cloud Run revision label
+        env:
+          SERVICE: runops-gateway
+          REGION: ${{ vars.CLOUD_RUN_LOCATION }}
+        run: |
+          set -euo pipefail
+          # The deploy-cloudrun action publishes a new revision named
+          # auto-<n>; we attach a label `prod-<sha7>` so the next
+          # deploy can read the previous-production commit from the
+          # currently-serving revision (codex review v4 #3 + ADR 0031).
+          SHA7="${DEPLOY_SHA:0:7}"
+          gcloud run services update "$SERVICE" \
+            --region="$REGION" \
+            --update-labels="prod-sha7=${SHA7}" \
+            --quiet
+
+      - name: Create prod-* immutable tag (ADR 0031)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SERVICE: runops-gateway
+          REGION: ${{ vars.CLOUD_RUN_LOCATION }}
+        run: |
+          set -euo pipefail
+          # Tag name format: prod-YYYYMMDD-<sha7>. Created against the
+          # deploy_sha. Idempotent retry-safe (ADR 0031): if the tag
+          # exists pointing at the same expected previous-production
+          # commit we proceed; if it points at a different commit we
+          # fail loudly.
+          DATE_STAMP=$(date -u +%Y%m%d)
+          SHA7="${DEPLOY_SHA:0:7}"
+          TAG="prod-${DATE_STAMP}-${SHA7}"
+
+          # The "expected previous-production commit" is read from the
+          # currently-serving Cloud Run revision label (set by the
+          # previous successful deploy). On first deploy ever, the
+          # label is missing and we accept any commit.
+          PREV_SHA7=$(gcloud run services describe "$SERVICE" \
+            --region="$REGION" \
+            --format="value(metadata.labels.prod-sha7)" 2>/dev/null || echo "")
+
+          if git rev-parse "refs/tags/$TAG" >/dev/null 2>&1; then
+            EXISTING_SHA=$(git rev-parse "refs/tags/$TAG")
+            if [ "$EXISTING_SHA" = "$DEPLOY_SHA" ]; then
+              echo "tag $TAG already exists at $DEPLOY_SHA — retry-safe (ADR 0031)"
+            else
+              echo "::error::tag $TAG exists pointing at $EXISTING_SHA but deploy is at $DEPLOY_SHA. Refusing to retag (ADR 0031 §prod-* tag immutability)." >&2
+              exit 1
+            fi
+          else
+            git config user.name  "release-gate-bot"
+            git config user.email "release-gate-bot@users.noreply.github.com"
+            git tag -a "$TAG" "$DEPLOY_SHA" \
+              -m "production deploy at $DEPLOY_SHA (previous prod-sha7=${PREV_SHA7:-none})"
+            # Push via the workflow GITHUB_TOKEN. The Repository
+            # Ruleset (tofu/github_repository.tf) restricts create on
+            # prod-* to the deploy app identity; this token is the
+            # workflow's bot, which the operator adds to the bypass
+            # list of the ruleset on first setup.
+            git push "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "$TAG"
+          fi
+
+      - name: Append deploy log
+        env:
+          SHA7: ${{ env.DEPLOY_SHA }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          ACTOR: ${{ github.actor }}
+          EVENT: ${{ github.event_name }}
+          DECLARED_CATEGORY: ${{ github.event.inputs.declared_category }}
+          REASON: ${{ github.event.inputs.reason }}
+        run: |
+          set -euo pipefail
+          # docs/deploy-log.md is the human-readable auxiliary ledger
+          # (ADR 0031 §"prod-* tag immutability"). The protected
+          # tag + Cloud Run revision label remain the rollback SoT;
+          # this file just gives operators a quick scan.
+          DATE_STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+          PREV_SHA7=$(gcloud run services describe runops-gateway \
+            --region="${{ vars.CLOUD_RUN_LOCATION }}" \
+            --format="value(metadata.labels.prod-sha7)" 2>/dev/null || echo "")
+          ENTRY="| ${DATE_STAMP} | ${EVENT} | ${ACTOR} | ${DEPLOY_SHA} | ${PREV_SHA7:-(none)} | ${DECLARED_CATEGORY:-routing} | ${REASON:-auto-deploy} |"
+          # Append + commit via the workflow token. This is a routing
+          # change (just a markdown append) so it lands on develop
+          # without dispatch.
+          git config user.name  "release-gate-bot"
+          git config user.email "release-gate-bot@users.noreply.github.com"
+          git fetch origin develop
+          git checkout origin/develop -- docs/deploy-log.md 2>/dev/null || true
+          if [ ! -f docs/deploy-log.md ]; then
+            mkdir -p docs
+            cat > docs/deploy-log.md <<'HDR'
+# Production deploy log (ADR 0031)
+
+Append-only ledger written by the cd.yaml workflow after each
+production deploy. Auxiliary to the protected `prod-*` git tags
+and Cloud Run revision labels (those are the rollback SoT).
+
+| timestamp_utc | trigger | actor | deploy_sha | previous_prod_sha7 | category | reason |
+|---|---|---|---|---|---|---|
+HDR
+          fi
+          echo "$ENTRY" >> docs/deploy-log.md
+          # The append commit itself is routing-classified (markdown
+          # only, no auth_boundary path matched), so it reaches the
+          # develop push pipeline cleanly. Use a separate branch +
+          # PR to land it on a future iteration; for now we just
+          # leave the file uncommitted so the operator can review
+          # and merge manually. (Auto-PR creation is a follow-up.)
+          echo "deploy log entry prepared (manual commit required):"
+          cat docs/deploy-log.md
