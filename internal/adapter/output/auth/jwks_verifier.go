@@ -65,7 +65,10 @@ var ErrJWKSTokenInvalid = errors.New("jwks: token reported invalid by jwt parser
 // → domain.IdentityClaims.Validate(now, audience). On success the
 // caller may trust every field on the returned IdentityClaims.
 func (v *JWKSVerifier) VerifyAndParse(jwtToken string) (domain.IdentityClaims, error) {
-	parsed, err := jwt.Parse(jwtToken, v.keyfunc.Keyfunc, jwt.WithValidMethods([]string{"RS256"}))
+	parsed, err := jwt.Parse(jwtToken, v.keyfunc.Keyfunc,
+		jwt.WithValidMethods([]string{"RS256"}),
+		jwt.WithTimeFunc(v.now),
+	)
 	if err != nil {
 		return domain.IdentityClaims{}, fmt.Errorf("jwks: verify: %w", err)
 	}
