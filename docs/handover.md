@@ -1166,9 +1166,28 @@ Slack / admin endpoint は影響を受けない (= opt-in pattern, Phase 3b-3b-2
 - **paths.yaml glob 設計**: `agent_session_registry*` (prefix) は単一 canonical ファイル前提で、 `in_memory_agent_session_registry.go` 等の多 impl に対応せず → `*agent_session*` (substring) へ broaden (PR #69 内で同梱 fix)。 同様の prefix-only glob pattern bug が他 path に存在しないか今後 audit 推奨。
 - **secure-by-default lib 採用効果**: `keyfunc/v3` + `golang-jwt/v5` で自前 RSA + JWT parse 約 150 行を 80 行に圧縮、 `alg=none` attack 防御 + kid rotation も lib 内蔵。 ghinstallation/v2 が transitive で go-github/v66 → /v84 への migrate を引いた (= secure lib のメンテ追従コストとのトレードオフ)。
 
+### Follow-ups (2026-05-08、 broker 28 PR 着地後)
+
+token broker 機能完成後の周辺整備として 4 PR + 1 fix-up 着地:
+
+| PR | 内容 |
+|---|---|
+| #84 | **ADR 0034** (Proposed): release-gate rule parse error bootstrap exception。 Phase 0 の self-fix path bug (PR #55 の GitHub UI 一回限り bypass) を architectural fix として pin、 release-gate.yaml への workflow 変更は ADR Accepted 後に別 PR で着手 |
+| #85 | paths.yaml chore: `docs/adr/0034-*` を auth_boundary glob に追加 (= Phase 0 / ADR 0033 で 0031/0032/0033 だけ enumerate していた漏れの follow-up)。 future enhancement として class-based pattern (`docs/adr/00[3-9][0-9]-release-gate*`) 化を deferred として note |
+| #86 | **Pub/Sub emulator topic init failure 修復** (token broker 30 PR で 5+ PR 観察された persistent flaky)。 3 commit progression: (1) `\|\| true` 排除で fail-loud → (2) curl `--write-out %{http_code}` の retry-per-emit collapse → (3) `docker container healthy ≠ REST listener ready` race condition 吸収 (60s probe loop with curl exit-code semantics)。 PR 自身で両 trigger Pub/Sub pass 確認済み |
+| (refs commit) | `tap/refs/docs/issues/0007-runops-gateway-github-app-secret-manager.md` Status 🟡 → 🟢 完了。 12 受入基準すべて [x] (Phase 3c integration test 1 件のみ admin scope 明記)。 28 PR table + production rollout 4-step を contained |
+
+### Follow-ups で見えた追加 architectural insight
+
+- **ADR-implementation 分離 pattern**: ADR 0034 を Proposed で pin、 implementation は別 PR (= Accepted 後)。 architectural decisions と code changes の cadence 分離で review window を確保。
+- **Russian doll bug pattern**: Pub/Sub flake fix で `\|\| true` 排除 → curl write-out repetition bug 露出 → http_code collapse fix で false positive 修復 → 真の race condition 直視可能 → probe loop で吸収。 各 commit が前 fix の ulterior bug を露出させる sequence は fail-loud principle の威力 (= silent failure では observation 不可)。
+- **`docker container healthy` の認識限界**: HEALTHCHECK は supervisor 単位、 multi-process container (Firebase emulator は Pub/Sub + Firestore + UI 同居) では per-service ready check (= REST endpoint actual reach) を独自実装が現実的。
+
 ### 関連 docs
 
 - `docs/runops-gateway-env-vars.md` — Token broker 全 env var + production rollout sequence
 - `docs/adr/0032-token-broker-caller-grant-matrix.md` — 4 caller × 5 tool grant matrix の Accepted ADR
 - `docs/adr/0031-production-deploy-gate-on-develop.md` + `0033-release-gate-path-externalization.md` — release-gate workflow design
+- `docs/adr/0034-release-gate-rule-parse-error-bootstrap-exception.md` — Phase 0 self-fix path bug の Proposed ADR (implementation 待ち)
 - `tofu/secret_manager_github_app.tf` — Secret Manager secret + Cloud Run IAM binding
+- `scripts/init-pubsub.sh` — fail-loud + retry + REST API readiness probe (Pub/Sub flake fix 完了)
