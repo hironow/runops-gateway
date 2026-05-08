@@ -21,7 +21,7 @@ type mockUseCase struct {
 	lastTarget    port.NotifyTarget
 }
 
-func (m *mockUseCase) ApproveAction(_ context.Context, req domain.ApprovalRequest, target port.NotifyTarget) error {
+func (m *mockUseCase) ApproveAction(_ context.Context, req domain.ApprovalRequest, target port.NotifyTarget, _ domain.CallerType) error {
 	m.approveCalled = true
 	m.lastReq = req
 	m.lastTarget = target

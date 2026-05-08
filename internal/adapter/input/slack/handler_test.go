@@ -27,7 +27,7 @@ type mockUseCase struct {
 	denyCh    chan domain.ApprovalRequest
 }
 
-func (m *mockUseCase) ApproveAction(_ context.Context, req domain.ApprovalRequest, _ port.NotifyTarget) error {
+func (m *mockUseCase) ApproveAction(_ context.Context, req domain.ApprovalRequest, _ port.NotifyTarget, _ domain.CallerType) error {
 	m.approveCh <- req
 	return nil
 }
