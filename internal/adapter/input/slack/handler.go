@@ -486,12 +486,84 @@ func (h *InteractiveHandler) handleApprovalAction(traceCtx context.Context, acti
 		})
 		return
 	}
+	// ADR 0037 §Gateway policy on classification: reject spoofed_broker
+	// fail-closed; reject unknown for HIGH severity (this is a HIGH path).
+	// The button-build site (ApprovalRequester.buildButtonValues) sets
+	// av.RequesterActorSource to one of the GatewayClassification enum
+	// values. Empty / absent decodes to GatewayClassificationUnknown.
+	classification := domain.GatewayClassification(av.RequesterActorSource)
+	if av.RequesterActorSource == "" {
+		classification = domain.GatewayClassificationUnknown
+	}
+	if classification == domain.GatewayClassificationSpoofedBroker {
+		slog.Warn("actor_type_source_spoof_attempt",
+			"raw_source", av.RequesterActorSource,
+			"clicker", clickerUserID,
+			"parent", av.ParentIdempotencyKey)
+		span.SetStatus(codes.Error, "actor_type_source_spoof_attempt")
+		span.End()
+		h.goAsync(func() {
+			ctx, cancel := context.WithTimeout(traceCtx, 30*time.Second)
+			defer cancel()
+			if err := h.notifier.SendEphemeral(ctx, target, clickerUserID,
+				"🚫 actor source spoof attempt detected (ADR 0037)"); err != nil {
+				slog.Error("approval spoof-source ephemeral failed", "error", err)
+			}
+		})
+		return
+	}
+	if classification == domain.GatewayClassificationUnknown && av.RequesterActorType != "" {
+		// Producer emitted a requester actor type but no source = inconsistent.
+		// Treat as unknown classification and fail-closed per ADR 0037 §Migration
+		// window alignment (HIGH paths fail-closed from Accepted day).
+		slog.Warn("approval_actor_source_unknown",
+			"requester_actor", av.RequesterActorType,
+			"clicker", clickerUserID,
+			"parent", av.ParentIdempotencyKey)
+		span.SetStatus(codes.Error, "approval_actor_source_unknown")
+		span.End()
+		h.goAsync(func() {
+			ctx, cancel := context.WithTimeout(traceCtx, 30*time.Second)
+			defer cancel()
+			if err := h.notifier.SendEphemeral(ctx, target, clickerUserID,
+				"🚫 actor type source unknown、 HIGH approval を保留します (ADR 0037)"); err != nil {
+				slog.Error("approval unknown-source ephemeral failed", "error", err)
+			}
+		})
+		return
+	}
+	// ADR 0037 §Axis 3 effective_requester_actor_type rule. Compute the
+	// effective requester for AI-vs-AI determination. workspace-daemon
+	// requires initiating_actor_type to be present (laundering closure).
+	syntheticForEffective := domain.ApprovalRequest{
+		RequesterActorType:  domain.CallerType(av.RequesterActorType),
+		InitiatingActorType: domain.CallerType(av.InitiatingActorType),
+	}
+	effectiveRequester, effErr := domain.EffectiveRequesterActorType(syntheticForEffective)
+	if effErr != nil {
+		slog.Warn("approval_initiating_actor_required",
+			"requester_actor", av.RequesterActorType,
+			"clicker", clickerUserID,
+			"parent", av.ParentIdempotencyKey)
+		span.SetStatus(codes.Error, "approval_initiating_actor_required")
+		span.End()
+		h.goAsync(func() {
+			ctx, cancel := context.WithTimeout(traceCtx, 30*time.Second)
+			defer cancel()
+			if err := h.notifier.SendEphemeral(ctx, target, clickerUserID,
+				"🚫 daemon-driven HIGH approval requires initiating actor (ADR 0037)"); err != nil {
+				slog.Error("approval missing-initiating ephemeral failed", "error", err)
+			}
+		})
+		return
+	}
 	clickerActorType := ClassifyApproverActorType(clickerUserID, h.aiAgentBotUserIDs)
-	synthetic := domain.ApprovalRequest{RequesterActorType: domain.CallerType(av.RequesterActorType)}
-	if vErr := domain.ValidateApproverPermitted(synthetic, clickerActorType); vErr != nil {
+	syntheticForValidate := domain.ApprovalRequest{RequesterActorType: effectiveRequester}
+	if vErr := domain.ValidateApproverPermitted(syntheticForValidate, clickerActorType); vErr != nil {
 		slog.Warn("ai_approves_ai_attempt",
 			"approver_id", clickerUserID,
 			"requester_actor", av.RequesterActorType,
+			"effective_requester", string(effectiveRequester),
 			"approver_actor", string(clickerActorType),
 			"parent", av.ParentIdempotencyKey)
 		span.SetStatus(codes.Error, "ai_approves_ai_attempt")

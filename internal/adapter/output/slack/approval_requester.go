@@ -135,6 +135,21 @@ func (r *ApprovalRequester) buildButtonValues(mail domain.DMail) (string, string
 	if rat := mail.Metadata[domain.MetadataKeyRequesterActorType]; rat != "" {
 		value["requester_actor_type"] = rat
 	}
+	// ADR 0037 §Axis 4: carry the gateway-internal classification of the
+	// producer-emitted requester_actor_source. External producers cannot
+	// be broker_verified — the gateway flag stays false here. The gateway-
+	// internal emit path is responsible for setting broker_verified when
+	// it builds buttons from its own authenticated broker context.
+	rawSource := mail.Metadata[domain.MetadataKeyRequesterActorSource]
+	classification := domain.ClassifyRequesterActorSource(rawSource, false)
+	if classification != domain.GatewayClassificationUnknown {
+		value["requester_actor_source"] = string(classification)
+	}
+	// ADR 0037 §Axis 3: carry the distal actor when present. Required for
+	// HIGH severity workspace-daemon flows; gateway enforces at click time.
+	if iat := mail.Metadata[domain.MetadataKeyInitiatingActorType]; iat != "" {
+		value["initiating_actor_type"] = iat
+	}
 	raw, err := json.Marshal(value)
 	if err != nil {
 		return "", "", err

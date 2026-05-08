@@ -571,6 +571,7 @@ func TestInteractiveHandler_ApprovalApprove_RejectsAIvsAI(t *testing.T) {
 		BodyDigest:           "abcd1234deadbeef",
 		IssuedAt:             time.Now().Unix(),
 		RequesterActorType:   string(domain.CallerAIAgent),
+		RequesterActorSource: string(domain.GatewayClassificationEnvAttested),
 	}
 	payload := interactivePayload{}
 	payload.User.ID = "B_AI_BOT_APPROVER" // enrolled AI agent — different from OriginalRequester so 4-eyes passes
@@ -658,6 +659,7 @@ func TestInteractiveHandler_ApprovalApprove_AIRequester_HumanApprover_Publishes(
 		BodyDigest:           "abcd1234deadbeef",
 		IssuedAt:             time.Now().Unix(),
 		RequesterActorType:   string(domain.CallerAIAgent),
+		RequesterActorSource: string(domain.GatewayClassificationEnvAttested),
 	}
 	payload := interactivePayload{}
 	payload.User.ID = "U_HUMAN_APPROVER"
@@ -735,6 +737,196 @@ func TestInteractiveHandler_ApprovalApprove_LegacyEmpty_Publishes(t *testing.T) 
 	}
 	if got := pub.snapshot(); len(got) != 1 {
 		t.Errorf("legacy empty actor type must still publish during migration window; got %d (ADR 0036 §Migration)", len(got))
+	}
+}
+
+// TestInteractiveHandler_ApprovalApprove_DaemonHopAIAgentClicked confirms
+// ADR 0037 §Axis 3 effective_requester_actor_type rule: when
+// requester_actor_type=workspace-daemon and initiating_actor_type=ai-agent,
+// an AI approver clicking Approve fires the AI-vs-AI invariant via the
+// effective requester (= ai-agent), closing the daemon-laundering bypass.
+func TestInteractiveHandler_ApprovalApprove_DaemonHopAIAgentClicked(t *testing.T) {
+	secret := "test-secret"
+	mock := newMockUseCase()
+	disp := &recordedDispatchUseCase{}
+	consumed := state.NewMemoryConsumedStore(time.Hour)
+	pub := &recordingApprovalPublisher{}
+	handler := NewInteractiveHandler(mock, disp, testNotifier, consumed, secret).
+		WithApprovalPublisher(pub).
+		WithAIAgentBotUserIDs([]string{"B_AI_BOT_APPROVER"})
+
+	av := approvalActionValue{
+		ParentIdempotencyKey: "parent-daemon-ai-001",
+		OriginalRequesterID:  "U_ORIG",
+		Source:               "amadeus",
+		Target:               "sightjack",
+		BodyDigest:           "abcd1234deadbeef",
+		IssuedAt:             time.Now().Unix(),
+		RequesterActorType:   string(domain.CallerWorkspaceDaemon),
+		RequesterActorSource: string(domain.GatewayClassificationEnvAttested),
+		InitiatingActorType:  string(domain.CallerAIAgent),
+	}
+	payload := interactivePayload{}
+	payload.User.ID = "B_AI_BOT_APPROVER"
+	payload.ResponseURL = "https://hooks.slack.com/x"
+	payload.Channel.ID = "C_APR"
+	payload.Message.TS = "1700000000.000050"
+	payload.Actions = []interactiveAction{
+		{ActionID: "approval_approve", Value: makeApprovalPayload(t, av)},
+	}
+	payloadBytes, _ := json.Marshal(payload)
+
+	req := buildValidRequest(t, secret, string(payloadBytes))
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	time.Sleep(80 * time.Millisecond)
+	if got := pub.snapshot(); len(got) != 0 {
+		t.Errorf("daemon hop with AI initiating + AI approver must NOT publish ack; got %d (ADR 0037 §Axis 3 effective rule)", len(got))
+	}
+}
+
+// TestInteractiveHandler_ApprovalApprove_DaemonHopHumanInitiated confirms
+// ADR 0037 §Axis 3 narrowing scope: workspace-daemon proximate +
+// human-operator distal allows AI approver to publish (= effective
+// resolves to human-operator, AI-vs-AI does NOT fire).
+func TestInteractiveHandler_ApprovalApprove_DaemonHopHumanInitiated(t *testing.T) {
+	secret := "test-secret"
+	mock := newMockUseCase()
+	disp := &recordedDispatchUseCase{}
+	consumed := state.NewMemoryConsumedStore(time.Hour)
+	pub := &recordingApprovalPublisher{}
+	handler := NewInteractiveHandler(mock, disp, testNotifier, consumed, secret).
+		WithApprovalPublisher(pub).
+		WithAIAgentBotUserIDs([]string{"B_AI_BOT_APPROVER"})
+
+	av := approvalActionValue{
+		ParentIdempotencyKey: "parent-daemon-human-001",
+		OriginalRequesterID:  "U_ORIG",
+		Source:               "amadeus",
+		Target:               "sightjack",
+		BodyDigest:           "abcd1234deadbeef",
+		IssuedAt:             time.Now().Unix(),
+		RequesterActorType:   string(domain.CallerWorkspaceDaemon),
+		RequesterActorSource: string(domain.GatewayClassificationEnvAttested),
+		InitiatingActorType:  string(domain.CallerHumanOperator),
+	}
+	payload := interactivePayload{}
+	payload.User.ID = "B_AI_BOT_APPROVER"
+	payload.ResponseURL = "https://hooks.slack.com/x"
+	payload.Channel.ID = "C_APR"
+	payload.Message.TS = "1700000000.000050"
+	payload.Actions = []interactiveAction{
+		{ActionID: "approval_approve", Value: makeApprovalPayload(t, av)},
+	}
+	payloadBytes, _ := json.Marshal(payload)
+
+	req := buildValidRequest(t, secret, string(payloadBytes))
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) && len(pub.snapshot()) == 0 {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := pub.snapshot(); len(got) != 1 {
+		t.Errorf("daemon hop with human initiating + AI approver must publish ack; got %d (ADR 0037 §Axis 3 narrowing)", len(got))
+	}
+}
+
+// TestInteractiveHandler_ApprovalApprove_DaemonHopMissingInitiating confirms
+// ADR 0037 §Axis 3 fail-closed: workspace-daemon without initiating_actor_type
+// is a laundering attempt (or producer rollout incomplete); the gateway
+// rejects HIGH approvals.
+func TestInteractiveHandler_ApprovalApprove_DaemonHopMissingInitiating(t *testing.T) {
+	secret := "test-secret"
+	mock := newMockUseCase()
+	disp := &recordedDispatchUseCase{}
+	consumed := state.NewMemoryConsumedStore(time.Hour)
+	pub := &recordingApprovalPublisher{}
+	handler := NewInteractiveHandler(mock, disp, testNotifier, consumed, secret).WithApprovalPublisher(pub)
+
+	av := approvalActionValue{
+		ParentIdempotencyKey: "parent-daemon-missing-001",
+		OriginalRequesterID:  "U_ORIG",
+		Source:               "amadeus",
+		Target:               "sightjack",
+		BodyDigest:           "abcd1234deadbeef",
+		IssuedAt:             time.Now().Unix(),
+		RequesterActorType:   string(domain.CallerWorkspaceDaemon),
+		RequesterActorSource: string(domain.GatewayClassificationEnvAttested),
+		// InitiatingActorType: "" — laundering or producer rollout incomplete
+	}
+	payload := interactivePayload{}
+	payload.User.ID = "U_APPROVER"
+	payload.ResponseURL = "https://hooks.slack.com/x"
+	payload.Channel.ID = "C_APR"
+	payload.Message.TS = "1700000000.000050"
+	payload.Actions = []interactiveAction{
+		{ActionID: "approval_approve", Value: makeApprovalPayload(t, av)},
+	}
+	payloadBytes, _ := json.Marshal(payload)
+
+	req := buildValidRequest(t, secret, string(payloadBytes))
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	time.Sleep(80 * time.Millisecond)
+	if got := pub.snapshot(); len(got) != 0 {
+		t.Errorf("workspace-daemon without initiating must fail-closed; got %d (ADR 0037 §Axis 3)", len(got))
+	}
+}
+
+// TestInteractiveHandler_ApprovalApprove_RejectsSpoofedBroker confirms
+// ADR 0037 §Axis 4: producer-emitted spoofed_broker classification
+// is rejected at the click time fail-closed.
+func TestInteractiveHandler_ApprovalApprove_RejectsSpoofedBroker(t *testing.T) {
+	secret := "test-secret"
+	mock := newMockUseCase()
+	disp := &recordedDispatchUseCase{}
+	consumed := state.NewMemoryConsumedStore(time.Hour)
+	pub := &recordingApprovalPublisher{}
+	handler := NewInteractiveHandler(mock, disp, testNotifier, consumed, secret).WithApprovalPublisher(pub)
+
+	av := approvalActionValue{
+		ParentIdempotencyKey: "parent-spoof-001",
+		OriginalRequesterID:  "U_ORIG",
+		Source:               "amadeus",
+		Target:               "sightjack",
+		BodyDigest:           "abcd1234deadbeef",
+		IssuedAt:             time.Now().Unix(),
+		RequesterActorType:   string(domain.CallerHumanOperator),
+		RequesterActorSource: string(domain.GatewayClassificationSpoofedBroker),
+	}
+	payload := interactivePayload{}
+	payload.User.ID = "U_APPROVER"
+	payload.ResponseURL = "https://hooks.slack.com/x"
+	payload.Channel.ID = "C_APR"
+	payload.Message.TS = "1700000000.000050"
+	payload.Actions = []interactiveAction{
+		{ActionID: "approval_approve", Value: makeApprovalPayload(t, av)},
+	}
+	payloadBytes, _ := json.Marshal(payload)
+
+	req := buildValidRequest(t, secret, string(payloadBytes))
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	time.Sleep(80 * time.Millisecond)
+	if got := pub.snapshot(); len(got) != 0 {
+		t.Errorf("spoofed_broker source must fail-closed; got %d (ADR 0037 §Axis 4)", len(got))
 	}
 }
 

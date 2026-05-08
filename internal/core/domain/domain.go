@@ -117,4 +117,11 @@ type ApprovalRequest struct {
 	// string) is treated as CallerHumanOperator so the 52 existing
 	// ApprovalRequest{...} construction sites remain backwards-compatible.
 	RequesterActorType CallerType
+	// InitiatingActorType identifies the distal (initiating) actor when
+	// RequesterActorType is workspace-daemon (per ADR 0037 §Axis 3).
+	// Optional for non-daemon flows; REQUIRED at the use-case level for
+	// HIGH severity Phase 4a approvals when RequesterActorType is
+	// CallerWorkspaceDaemon — the gateway uses EffectiveRequesterActorType
+	// to derive the value passed to ValidateApproverPermitted.
+	InitiatingActorType CallerType
 }
