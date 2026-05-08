@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
 	"github.com/hironow/runops-gateway/internal/adapter/input/admin"
+	"github.com/hironow/runops-gateway/internal/adapter/input/broker"
 	pubsubinput "github.com/hironow/runops-gateway/internal/adapter/input/pubsub"
 	slackadapter "github.com/hironow/runops-gateway/internal/adapter/input/slack"
 	"github.com/hironow/runops-gateway/internal/adapter/observability"
@@ -26,6 +28,7 @@ import (
 	pubsubadapter "github.com/hironow/runops-gateway/internal/adapter/output/pubsub"
 	slacknotifier "github.com/hironow/runops-gateway/internal/adapter/output/slack"
 	"github.com/hironow/runops-gateway/internal/adapter/output/state"
+	"github.com/hironow/runops-gateway/internal/composition"
 	"github.com/hironow/runops-gateway/internal/core/port"
 	"github.com/hironow/runops-gateway/internal/usecase"
 )
@@ -175,6 +178,43 @@ func main() {
 		slog.Info("admin endpoint not registered",
 			"registry_wired", registry != nil,
 			"admin_token_set", adminToken != "")
+	}
+
+	// Token broker endpoint (#0007) is opt-in: registered only when
+	// BROKER_AUDIENCE is set AND the project registry is wired.
+	// Without one of these the broker stays disabled so dev /
+	// staging / pre-rollout deployments behave identically to the
+	// pre-broker gateway. See plan v8 §6 step 17 + ADR 0032
+	// (caller grant matrix) + ADR 0033 (release-gate).
+	//
+	// Failure modes (config load / dependency wiring) are logged
+	// at ERROR but do NOT abort the binary — the broker is one
+	// endpoint among several; the gateway must keep serving Slack
+	// + admin even when broker setup is broken. Operators see
+	// "broker disabled" in the structured log and can re-deploy
+	// after fixing the env / secret.
+	if registry != nil && strings.TrimSpace(os.Getenv("BROKER_AUDIENCE")) != "" {
+		brokerCfg, err := composition.LoadBrokerConfig()
+		if err != nil {
+			slog.Error("broker disabled: cannot load config", "err", err)
+		} else {
+			deps, err := composition.NewBrokerDependencies(context.Background(), brokerCfg, registry)
+			if err != nil {
+				slog.Error("broker disabled: cannot wire dependencies", "err", err)
+			} else {
+				mux.Handle("POST /broker/token", broker.NewHandler(deps.Service, deps.Authenticator))
+				slog.Info("token broker registered (#0007)",
+					"endpoints", []string{"POST /broker/token"},
+					"use_firestore_registry", brokerCfg.UseFirestoreRegistry,
+					"operator_allowlist_size", len(brokerCfg.OperatorEmails),
+					"gateway_service_allowlist_size", len(brokerCfg.GatewayServiceSAs),
+					"workspace_daemon_allowlist_size", len(brokerCfg.WorkspaceDaemonSAs))
+			}
+		}
+	} else {
+		slog.Info("broker endpoint not registered",
+			"registry_wired", registry != nil,
+			"broker_audience_set", os.Getenv("BROKER_AUDIENCE") != "")
 	}
 	mux.HandleFunc("GET /_healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
