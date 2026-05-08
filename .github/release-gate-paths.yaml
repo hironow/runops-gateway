@@ -48,6 +48,12 @@ auth_boundary:
   # endpoint or bypass the auth middleware.
   - "cmd/server/**"
 
+  # Broker env-var configuration loader (Phase 3b-3a). Edits here
+  # change the SA allowlist semantics + audience pinning + Firestore-
+  # vs-in-memory selector — same auth-boundary surface as the
+  # composition root itself.
+  - "internal/composition/**"
+
   # IaC for IAM, Secret Manager, GitHub provider, Repository Ruleset.
   # Existing repo layout puts deployer IAM in tofu/github.tf and
   # Secret Manager resources/accessors in tofu/main.tf, so the gate
