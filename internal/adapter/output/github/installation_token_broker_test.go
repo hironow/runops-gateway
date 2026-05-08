@@ -81,7 +81,7 @@ func TestInstallationTokenBroker_Mint_HappyPathProducesScopedToken(t *testing.T)
 	}}
 	expires := time.Now().Add(50 * time.Minute).UTC().Truncate(time.Second)
 	minter := &fakeMinter{returnTok: ghToken("ghs_synthetic", expires)}
-	broker := newInstallationTokenBroker(minter, registry, domain.DefaultGrantPolicy())
+	broker := NewInstallationTokenBroker(minter, registry, domain.DefaultGrantPolicy())
 
 	got, err := broker.Mint(
 		context.Background(),
@@ -125,7 +125,7 @@ func TestInstallationTokenBroker_Mint_PerProjectRepoBindingOnlyOneRepo(t *testin
 		"proj-foo": project("proj-foo", "foo-app", 12345),
 	}}
 	minter := &fakeMinter{returnTok: ghToken("ghs_x", time.Now().Add(50*time.Minute))}
-	broker := newInstallationTokenBroker(minter, registry, domain.DefaultGrantPolicy())
+	broker := NewInstallationTokenBroker(minter, registry, domain.DefaultGrantPolicy())
 
 	_, err := broker.Mint(
 		context.Background(),
@@ -151,7 +151,7 @@ func TestInstallationTokenBroker_Mint_ReadOnlyToolHasNoWritePermission(t *testin
 		"proj-foo": project("proj-foo", "foo-app", 12345),
 	}}
 	minter := &fakeMinter{returnTok: ghToken("ghs_y", time.Now().Add(50*time.Minute))}
-	broker := newInstallationTokenBroker(minter, registry, domain.DefaultGrantPolicy())
+	broker := NewInstallationTokenBroker(minter, registry, domain.DefaultGrantPolicy())
 
 	_, err := broker.Mint(
 		context.Background(),
@@ -178,7 +178,7 @@ func TestInstallationTokenBroker_Mint_PhonewaveRejectedBeforeMinter(t *testing.T
 		"proj-foo": project("proj-foo", "foo-app", 12345),
 	}}
 	minter := &fakeMinter{}
-	broker := newInstallationTokenBroker(minter, registry, domain.DefaultGrantPolicy())
+	broker := NewInstallationTokenBroker(minter, registry, domain.DefaultGrantPolicy())
 
 	_, err := broker.Mint(
 		context.Background(),
@@ -199,7 +199,7 @@ func TestInstallationTokenBroker_Mint_PhonewaveRejectedBeforeMinter(t *testing.T
 func TestInstallationTokenBroker_Mint_ProjectNotFoundPropagates(t *testing.T) {
 	registry := &fakeProjectRegistry{projects: map[string]domain.Project{}}
 	minter := &fakeMinter{}
-	broker := newInstallationTokenBroker(minter, registry, domain.DefaultGrantPolicy())
+	broker := NewInstallationTokenBroker(minter, registry, domain.DefaultGrantPolicy())
 
 	_, err := broker.Mint(
 		context.Background(),
@@ -222,7 +222,7 @@ func TestInstallationTokenBroker_Mint_MinterErrorPropagates(t *testing.T) {
 	}}
 	wantErr := errors.New("synthetic upstream 500")
 	minter := &fakeMinter{returnErr: wantErr}
-	broker := newInstallationTokenBroker(minter, registry, domain.DefaultGrantPolicy())
+	broker := NewInstallationTokenBroker(minter, registry, domain.DefaultGrantPolicy())
 
 	_, err := broker.Mint(
 		context.Background(),

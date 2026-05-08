@@ -97,10 +97,10 @@ func TestNewGhinstallationMinter_PreservesCustomClient(t *testing.T) {
 }
 
 // Compile-time assertion: the production minter satisfies the
-// unexported tokenMinter interface used by InstallationTokenBroker.
+// unexported Minter interface used by InstallationTokenBroker.
 // (Same assertion as the production file — duplicated here so a
 // future test-only refactor that moves the assertion still has
 // a guard.)
 func TestGhinstallationMinter_SatisfiesTokenMinterInterface(t *testing.T) {
-	var _ tokenMinter = (*GhinstallationMinter)(nil)
+	var _ Minter = (*GhinstallationMinter)(nil)
 }
