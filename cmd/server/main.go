@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"cloud.google.com/go/firestore"
 	gpubsub "cloud.google.com/go/pubsub/v2"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
@@ -198,17 +199,46 @@ func main() {
 		if err != nil {
 			slog.Error("broker disabled: cannot load config", "err", err)
 		} else {
-			deps, err := composition.NewBrokerDependencies(context.Background(), brokerCfg, registry)
-			if err != nil {
-				slog.Error("broker disabled: cannot wire dependencies", "err", err)
+			// When the broker uses the Firestore agent_session_registry
+			// for Cloud Run multi-instance safety, the composition root
+			// owns the *firestore.Client lifecycle. ProjectID is read
+			// from GOOGLE_CLOUD_PROJECT (Cloud Run autopopulates this
+			// from the SA project; dev shells set it manually).
+			var brokerFirestoreClient *firestore.Client
+			if brokerCfg.UseFirestoreRegistry {
+				projectID := strings.TrimSpace(os.Getenv("GOOGLE_CLOUD_PROJECT"))
+				if projectID == "" {
+					slog.Error("broker disabled: GOOGLE_CLOUD_PROJECT must be set when BROKER_USE_FIRESTORE_REGISTRY=true")
+				} else {
+					c, err := firestore.NewClient(context.Background(), projectID)
+					if err != nil {
+						slog.Error("broker disabled: firestore.NewClient", "err", err)
+					} else {
+						brokerFirestoreClient = c
+						defer func() {
+							if cerr := c.Close(); cerr != nil {
+								slog.Warn("broker firestore client close", "err", cerr)
+							}
+						}()
+					}
+				}
+			}
+			if brokerCfg.UseFirestoreRegistry && brokerFirestoreClient == nil {
+				// Fall through with broker disabled — the error has
+				// already been logged above.
 			} else {
-				mux.Handle("POST /broker/token", broker.NewHandler(deps.Service, deps.Authenticator))
-				slog.Info("token broker registered (#0007)",
-					"endpoints", []string{"POST /broker/token"},
-					"use_firestore_registry", brokerCfg.UseFirestoreRegistry,
-					"operator_allowlist_size", len(brokerCfg.OperatorEmails),
-					"gateway_service_allowlist_size", len(brokerCfg.GatewayServiceSAs),
-					"workspace_daemon_allowlist_size", len(brokerCfg.WorkspaceDaemonSAs))
+				deps, err := composition.NewBrokerDependencies(context.Background(), brokerCfg, registry, brokerFirestoreClient)
+				if err != nil {
+					slog.Error("broker disabled: cannot wire dependencies", "err", err)
+				} else {
+					mux.Handle("POST /broker/token", broker.NewHandler(deps.Service, deps.Authenticator))
+					slog.Info("token broker registered (#0007)",
+						"endpoints", []string{"POST /broker/token"},
+						"use_firestore_registry", brokerCfg.UseFirestoreRegistry,
+						"operator_allowlist_size", len(brokerCfg.OperatorEmails),
+						"gateway_service_allowlist_size", len(brokerCfg.GatewayServiceSAs),
+						"workspace_daemon_allowlist_size", len(brokerCfg.WorkspaceDaemonSAs))
+				}
 			}
 		}
 	} else {

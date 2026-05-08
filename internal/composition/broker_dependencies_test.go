@@ -78,7 +78,7 @@ func happyConfig(t *testing.T) *composition.BrokerConfig {
 // nil BrokerConfig produces a precise sentinel so the cmd/server
 // composition root can render a startup-time error.
 func TestNewBrokerDependencies_NilConfigRejected(t *testing.T) {
-	_, err := composition.NewBrokerDependencies(context.Background(), nil, fakeProjectRegistry{})
+	_, err := composition.NewBrokerDependencies(context.Background(), nil, fakeProjectRegistry{}, nil)
 	if !errors.Is(err, composition.ErrBrokerDependenciesNilConfig) {
 		t.Errorf("want ErrBrokerDependenciesNilConfig, got %v", err)
 	}
@@ -87,7 +87,7 @@ func TestNewBrokerDependencies_NilConfigRejected(t *testing.T) {
 // nil ProjectRegistry produces a precise sentinel.
 func TestNewBrokerDependencies_NilProjectRegistryRejected(t *testing.T) {
 	cfg := happyConfig(t)
-	_, err := composition.NewBrokerDependencies(context.Background(), cfg, nil)
+	_, err := composition.NewBrokerDependencies(context.Background(), cfg, nil, nil)
 	if !errors.Is(err, composition.ErrBrokerDependenciesNilProjectRegistry) {
 		t.Errorf("want ErrBrokerDependenciesNilProjectRegistry, got %v", err)
 	}
@@ -99,7 +99,7 @@ func TestNewBrokerDependencies_NilProjectRegistryRejected(t *testing.T) {
 func TestNewBrokerDependencies_MissingKeyFileSurfaces(t *testing.T) {
 	cfg := happyConfig(t)
 	cfg.GitHubAppPrivateKeyPath = "/tmp/path/that/does/not/exist/key.pem"
-	_, err := composition.NewBrokerDependencies(context.Background(), cfg, fakeProjectRegistry{})
+	_, err := composition.NewBrokerDependencies(context.Background(), cfg, fakeProjectRegistry{}, nil)
 	if err == nil {
 		t.Fatalf("want error for missing key file, got nil")
 	}
@@ -119,7 +119,7 @@ func TestNewBrokerDependencies_MalformedKeyRejected(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 	cfg.GitHubAppPrivateKeyPath = bogusPath
-	_, err := composition.NewBrokerDependencies(context.Background(), cfg, fakeProjectRegistry{})
+	_, err := composition.NewBrokerDependencies(context.Background(), cfg, fakeProjectRegistry{}, nil)
 	if err == nil {
 		t.Errorf("want error for malformed key, got nil")
 	}
@@ -138,7 +138,7 @@ func TestNewBrokerDependencies_HappyPathWiresAllDependencies(t *testing.T) {
 	// fails (subsequent verifications will retry).
 	cfg.GoogleJWKSURL = "http://127.0.0.1:0/jwks"
 
-	deps, err := composition.NewBrokerDependencies(context.Background(), cfg, fakeProjectRegistry{})
+	deps, err := composition.NewBrokerDependencies(context.Background(), cfg, fakeProjectRegistry{}, nil)
 	if err != nil {
 		t.Fatalf("NewBrokerDependencies: %v", err)
 	}
