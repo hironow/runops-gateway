@@ -8,7 +8,7 @@
 新しい session を開始するとき、または将来このリポジトリに戻ってくるとき、
 最初に読むべきページとして書く。日付ベースで上書き更新する想定。
 
-最終更新: 2026-05-08 (後半: 0011 architectural pin 全 4 layer 着地 + drift 解消)
+最終更新: 2026-05-08 (後半 phase 2: ADR 0037 + system-level invariant 完成)
 
 ## ブランチ運用ポリシー (重要)
 
@@ -1226,3 +1226,45 @@ paintress PR #206 / amadeus PR #207 が `just fmt + just lint auto-fixes` を単
 - `internal/core/domain/approver_validator.go` + `_test.go` — sentinel + pure function (Phase A-1)
 - `internal/adapter/input/slack/actor_classifier.go` + `_test.go` — Slack user.id 分類 (Phase A-3)
 - `tap/refs/scripts/check_substrate_drift.sh` — canonical hash table (drift 解消で bump 済)
+
+### Follow-ups (2026-05-08 後半 phase 2、 ADR 0037 + system-level invariant 完成)
+
+ADR 0037 producer-side actor classification + ADR 0036 amendment + effective_requester_actor_type rule で gateway-side architectural pin が **system-level invariant** に到達:
+
+| PR | 内容 |
+|---|---|
+| #97 | **ADR 0037 v4 Proposed**: codex (gpt-5.5) review v1→v4 で 16 件 critical points 反映 (5→5→1→0)。 4 axes (source precedence / AI-CLI 区別 / daemon dual-actor / metadata trust boundary) + Enforcement inventory section + Gateway policy table を pin |
+| #98 | **JWKS time-bomb fix**: \`jwt.Parse\` に \`WithTimeFunc(v.now)\` 不足、 test fixture の \`now=2026-05-08 12:00 UTC\` + token exp 13:00 UTC が wall-clock 13:00 UTC 越えで silent fail。 \`jwt.WithTimeFunc(v.now)\` 1 line 追加で fix |
+| #99 | **ADR 0037 promote**: Proposed → Accepted (codex v4 で「致命的指摘なし」 確認後) |
+| #100 | **ADR 0036 amendment + effective_requester_actor_type 実装**: \`ApprovalRequest.InitiatingActorType\` field 追加 / \`ActorTypeSource\` (producer-input enum) と \`GatewayClassification\` (gateway-internal enum) の two-enum split / \`ClassifyRequesterActorSource\` + \`EffectiveRequesterActorType\` 関数 / \`approvalActionValue\` に \`RequesterActorSource\` + \`InitiatingActorType\` field 追加 / \`buildButtonValues\` carry / \`handleApprovalAction\` に 4 layer fail-closed (unknown actor type / spoofed_broker / unknown classification / missing initiating) + effective rule。 4 新 test (DaemonHopAIAgentClicked / DaemonHopHumanInitiated / DaemonHopMissingInitiating / RejectsSpoofedBroker) |
+
+### system-level invariant 到達
+
+ADR 0035/0036/0037 + 全実装 (PR #100) で、 producer 側がまだ何も rollout していない状態でも HIGH severity 4-eyes approval flow に AI bypass の経路が完全に存在しない状態に到達:
+
+- **laundering**: workspace-daemon 経由 AI requester + AI approver → \`effective_requester_actor_type\` rule が initiating の値を ValidateApproverPermitted に渡す → AI-vs-AI invariant fire
+- **spoofing**: producer-emitted \`actor_type_source=broker\` → gateway-attached フラグが false なので \`spoofed_broker\` に reclassify → fail-closed + audit \`actor_type_source_spoof_attempt\`
+- **silent fallback**: \`tool_default\` を ADR 0037 で禁止、 producer は broker / env / unknown のみ。 unknown は HIGH severity で fail-closed
+- **missing carry**: workspace-daemon proximate + initiating_actor_type missing → fail-closed + audit \`approval_initiating_actor_required\`
+
+producer rollout は now optional: rollout 未完了 tool の HIGH approval は単に fail-closed で operator 通知される (silent risk なし)。
+
+### ADR 0037 で見えた追加 insight
+
+- **ADR review iteration の収束 cadence**: codex v1→v2→v3→v4 で critical points が 5→5→1→0 と monotonically decreasing で converge。 4 iteration で security 中核 ADR を Proposed → Accepted-ready に持って行けた。 「session 区切り判断は overconservative」 だった反省、 review iteration ROI が monotonically decreasing なら同 session 続行が筋。
+- **two-enum split の codex 提案**: 「producer-writable と gateway-derived の値を 1 enum に混在させると implementer confusion」 を避けるため、 metadata input enum (\`{broker, env, unknown}\`) と gateway-internal classification enum (\`{broker_verified, env_attested, unknown, spoofed_broker}\`) を別 type で実装。 enum 分離の implementation cost (= 別 Go type) は文書 review の cognitive cost を大幅に削減する pattern。
+- **necessary vs sufficient condition**: ADR 0037 v3 で「\`initiating_actor_type\` REQUIRED」 (= necessary) を pin したが、 「gateway が effective rule で実 use」 (= sufficient) を v4 で追加。 「mandatory carry → mandatory use」 を 1 セットで pin する habit が必要。
+- **time-bomb test pattern**: hardcoded \`time.Date()\` + token exp \`now + 1h\` で test を書くと、 wall-clock がその時刻を越えた瞬間に fail。 jwt-go の \`WithTimeFunc\` を inject 忘れる「 secure-by-default lib の使い方の盲点」 が flaky の根本原因。
+
+### 残 work (次 session 候補)
+
+- **producer-side per-tool ADR + implementation**: phonewave / sightjack / paintress / amadeus 各 repo で per-tool ADR 起案 + DMail emit に \`RUNOPS_ACTOR_TYPE\` env reading + metadata 設定 + \`actor_type_source=env\` + \`initiating_actor_type\` (daemon 用 systemd unit env)
+- **fmt-check gate**: 各 tool repo の justfile に \`gofmt -d\` 検出 (drift 再発防止 structural gate)
+- **ADR 起案 framework codification**: CLAUDE.md ADR template に enforcement inventory section 必須化
+- **ADR 0038 candidate**: dispatch-path fail-closed flip + broker-only \`ai-agent\` (rollout coverage 確認後)
+
+### 関連 docs (ADR 0037 完成)
+
+- `docs/adr/0037-producer-actor-classification.md` — Accepted、 4 axes + enforcement inventory + gateway policy + migration window severity-split
+- `internal/core/domain/approver_validator.go` — \`EffectiveRequesterActorType\` + \`ClassifyRequesterActorSource\` + \`ActorTypeSource\` / \`GatewayClassification\` two-enum split
+- `internal/adapter/input/slack/handler.go` — \`handleApprovalAction\` 4 layer fail-closed
