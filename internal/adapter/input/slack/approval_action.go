@@ -25,6 +25,16 @@ type approvalActionValue struct {
 	// "gateway-service" / "workspace-daemon"). Unknown non-empty values
 	// are rejected by handleApprovalAction.
 	RequesterActorType string `json:"requester_actor_type,omitempty"`
+	// RequesterActorSource carries the gateway-internal classification
+	// derived at button-build time (per ADR 0037 §Axis 4). One of:
+	// "broker_verified" / "env_attested" / "unknown" / "spoofed_broker".
+	// Empty value is treated as "unknown" by handleApprovalAction.
+	RequesterActorSource string `json:"requester_actor_source,omitempty"`
+	// InitiatingActorType is the distal actor when RequesterActorType
+	// is workspace-daemon (per ADR 0037 §Axis 3). REQUIRED for HIGH
+	// severity Phase 4a approvals when RequesterActorType is
+	// workspace-daemon; empty otherwise.
+	InitiatingActorType string `json:"initiating_actor_type,omitempty"`
 }
 
 // ApprovalBodyDigest returns the digest used in approvalActionValue.BodyDigest
