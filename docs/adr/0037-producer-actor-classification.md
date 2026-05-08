@@ -61,6 +61,18 @@ Producers emit:
 - `requester_actor_type` = the **proximate** actor (= the daemon process itself: `workspace-daemon`)
 - `initiating_actor_type` = the **distal** actor (= the human / AI agent / gateway-service that scheduled the action), as a separate metadata key
 
+#### How `workspace-daemon` enters the producer (Axis 1 reconciliation)
+
+Axis 1 limits sources of `requester_actor_type` to two — broker (gateway-attached) and `RUNOPS_ACTOR_TYPE` env (producer-emittable). A daemon is no exception. The daemon does **not** self-classify by inspecting its own process role; that would be Axis 1's forbidden self-attestation path. Instead:
+
+- The supervisor that starts the daemon (= systemd unit, scheduled launcher, cdr-job runner) SHALL set `RUNOPS_ACTOR_TYPE=workspace-daemon` in the daemon process's environment **before exec**.
+- The daemon, when emitting a DMail, reads the env exactly like Axis 1.2 says, and emits `requester_actor_type=workspace-daemon` with `actor_type_source=env`.
+- A daemon process whose supervisor neglected to set the env emits empty `requester_actor_type` (= `actor_type_source=unknown`), exactly like a forgetting AI agent. The gateway handles per the §Migration window alignment policy and §Gateway policy table.
+
+Per-tool ADRs MUST document the supervisor unit / launcher path that sets the env, so that "the daemon classifies itself" never sneaks in as a substitute. There is no special daemon source vocabulary — `workspace-daemon` is just one of the canonical CallerType values that producers may emit via env.
+
+#### `initiating_actor_type` as the laundering closure
+
 For HIGH severity convergence DMails, **`initiating_actor_type` is REQUIRED when `requester_actor_type=workspace-daemon`**. The gateway rejects (= fail-closed at the ADR 0036 §Carry point 3 layer) when `requester_actor_type=workspace-daemon` AND `initiating_actor_type` is missing on a HIGH severity approval flow.
 
 This closes the laundering path codex (gpt-5.5) identified:
@@ -71,31 +83,60 @@ AI agent → schedules / triggers daemon
 → AI-vs-AI gate sees requester != ai-agent → invariant bypassed
 ```
 
+`initiating_actor_type` source rules mirror Axis 1: the supervisor that launches the daemon for a given action SHALL also set a second env var (proposed name: `RUNOPS_INITIATING_ACTOR_TYPE`) when the action is scheduled by a non-default actor, OR the broker context (when the daemon is broker-driven) attaches it via gateway-internal carriage. Producers do not infer the distal actor.
+
 For non-HIGH paths (= dispatch / canary deploy where ADR 0035 §Layer 2 governs via `ApproveAction`), `initiating_actor_type` remains optional. The mandatory boundary aligns with ADR 0036's HIGH severity scope.
 
-### Axis 4 — Metadata trust boundary (`actor_type_source` is gateway-attributed)
+### Axis 4 — Two enums: metadata input vs gateway-internal classification
 
-`requester_actor_type` is producer-attested at the trust boundary; `actor_type_source` distinguishes how the value was obtained. To prevent producer-originated `actor_type_source=broker` self-attestation, the trust rules are:
+Codex (gpt-5.5) v2 review flagged that mixing producer-writable values and gateway-derived values in a single `actor_type_source` enum invites implementer confusion (= "is `self_attested_broker_claim` something a producer can write?"). v3 splits the concept into two enums:
 
-- **`actor_type_source=broker` is gateway-only.** The gateway attaches this value when it injects `requester_actor_type` from an authenticated broker token in its own request context. A producer that emits `actor_type_source=broker` verbatim in DMail metadata is treated as **self-attested** (i.e., reclassified `actor_type_source=self_attested_broker_claim` for audit) and the broker-verified policy weight does NOT apply.
-- **`actor_type_source=env`** is the only producer-emittable source value. Producers that need to declare an actor type without broker context MUST use this source.
-- **`actor_type_source=unknown`** is the canonical value for empty / absent emission (= the producer had no source). This routes through ADR 0036's empty-handling.
-- **`actor_type_source=tool_default` is forbidden** (per Axis 1; the value does not appear in the source enum at all).
+#### Metadata input enum (= what producers may write)
 
-This means `actor_type_source` itself is part of the trust boundary, not just a passive breadcrumb. The enum is closed: `{ broker, env, unknown }`.
+Closed enum: `{ broker, env, unknown }`.
 
-### Gateway policy on actor_type_source (decided in this ADR, NOT deferred to 0038)
+- **`broker`**: producer attempted to write `broker`. Producers SHOULD NOT emit this — only the gateway-internal emit path (gateway-side composition) sets `broker`. If a downstream producer emits it, the gateway treats it as a spoof attempt at the classification step (see below).
+- **`env`**: producer set the value because `RUNOPS_ACTOR_TYPE` provided it (Axis 1.2). This is the canonical producer-side source.
+- **`unknown`**: producer had neither broker context nor env. The field is set to `unknown` (or the entire `actor_type_source` key may be absent — both are equivalent and treated as `unknown` by the gateway).
 
-For HIGH severity convergence approval paths governed by ADR 0036:
+#### Gateway-internal classification enum (= how the gateway interprets what arrived)
 
-| `actor_type_source` | Effective trust at gateway | HIGH approval gate |
+Closed enum: `{ broker_verified, env_attested, unknown, spoofed_broker }`.
+
+The gateway derives one of these from the arriving DMail metadata, the request context (= whether the inbound DMail came from a path the gateway itself authenticated), and the carry rules:
+
+- **`broker_verified`**: gateway-internal emit path (= the gateway itself wrote the metadata using its own broker context). Only this classification carries the broker-verified trust weight.
+- **`env_attested`**: producer-emitted `actor_type_source=env`. Self-attested but acknowledged.
+- **`unknown`**: producer-emitted `unknown` or absent. Unverified.
+- **`spoofed_broker`**: producer-emitted `actor_type_source=broker` from a path the gateway cannot verify (= producer is asserting broker provenance the gateway did not attach). Treated as a spoof attempt: fail-closed + audit log `actor_type_source_spoof_attempt`.
+
+Implementations MUST keep the two enums distinct (separate Go types in the gateway codebase, separate JSON keys if both ever appear in audit). v3 deliberately makes the input enum smaller than the classification enum so that adding a new gateway-internal interpretation later does not force a producer-side schema change.
+
+This ADR only governs the metadata input. The gateway-internal classification is implementation-defined; the table above is the **default mapping**, and a future ADR MAY refine it (e.g., adding nuance for `env_attested` with `ai-agent` value to require broker provenance) without forcing a producer rewrite.
+
+### Gateway policy on classification (decided in this ADR, NOT deferred to 0038)
+
+For HIGH severity convergence approval paths governed by ADR 0036, the gateway-internal classification produces these gate behaviors:
+
+| Gateway classification | HIGH approval gate | Audit / notes |
 |---|---|---|
-| `broker` | broker-verified | passes per ADR 0035/0036 narrowing rules |
-| `env` | self-attested | passes per ADR 0035/0036 narrowing rules; future ADR (0038 candidate) MAY tighten `ai-agent` to broker-only |
-| `unknown` (empty / no source) | unverified | fail-closed during migration window if HIGH severity, fail-closed always after 2026-06-01 |
-| `self_attested_broker_claim` (= producer wrote broker but gateway did not verify) | rejected | **immediately fail-closed at the gateway**, audit log `actor_type_source_spoof_attempt` |
+| `broker_verified` | passes per ADR 0035/0036 narrowing rules | trusted |
+| `env_attested` | passes per ADR 0035/0036 narrowing rules; future ADR (0038 candidate) MAY tighten `ai-agent` to broker-only | self-attested, accepted |
+| `unknown` | **fail-closed for HIGH severity throughout** — both during the §Migration window alignment and after 2026-06-01 | unverified — see §Migration window alignment for the rationale of fail-closed-from-day-one for HIGH paths |
+| `spoofed_broker` | **immediately fail-closed**, audit log `actor_type_source_spoof_attempt` | spoof attempt |
 
-For dispatch / canary deploy paths governed by ADR 0035 §Layer 2 (`ApproveAction`), the gateway continues to use the existing `ValidateApproverPermitted` semantics; `actor_type_source` is recorded for audit but does not block dispatch flows.
+For dispatch / canary deploy paths governed by ADR 0035 §Layer 2 (`ApproveAction`), the gateway continues to use the existing `ValidateApproverPermitted` semantics; classification is recorded for audit but does not block dispatch flows.
+
+### Carry-point extension to ADR 0036's `approvalActionValue` (this ADR amends)
+
+ADR 0036 §Carry point 2 added `RequesterActorType` to `approvalActionValue` so that Slack click-time policy can read it. v3's HIGH approval gate at click time also requires the gateway-internal classification AND `initiating_actor_type` to be available, but ADR 0036 does not carry them. This ADR amends `approvalActionValue` with two additional fields:
+
+- `RequesterActorSource string` (json: `requester_actor_source`) — carries the **classification value** the gateway derived at the time it built the button payload (one of `broker_verified` / `env_attested` / `unknown` / `spoofed_broker`). Note: this is the gateway-internal classification, not the producer-input enum.
+- `InitiatingActorType string` (json: `initiating_actor_type`, omitempty) — carries Axis 3's distal actor when the proximate `RequesterActorType` is `workspace-daemon`.
+
+The gateway's `buildButtonValues` (per ADR 0036 §Carry point 2) SHALL populate both fields from the source DMail metadata at button-build time. The Slack `handleApprovalAction` (per ADR 0036 §Carry point 3) reads them and applies the §Gateway policy on classification table at click time. Tests in §Tests proving coverage cover both carries.
+
+This addendum applies only to ADR 0036's `approvalActionValue` and does not require a separate amendment ADR; ADR 0036 §Carry point 2's button payload is explicitly extensible and the addition is additive (existing buttons without these fields decode cleanly via Go's `json.Unmarshal` ignore-unknown semantics, and the gateway interprets missing values as `unknown` / empty per the rules above).
 
 ## Enforcement inventory (per codex framework, 2026-05-08)
 
@@ -140,13 +181,18 @@ Architectural pin ADRs SHALL include this section so that "where can this behavi
 
 ## Migration window alignment
 
-ADR 0036 §Migration declared 2026-05-08 → 2026-05-31 as the window where empty `requester_actor_type` falls back to `human-operator`. ADR 0037 (this ADR) introduces non-empty `requester_actor_type` from producers, so during this window:
+ADR 0036 §Migration declared 2026-05-08 → 2026-05-31 as the window where empty `requester_actor_type` falls back to `human-operator`. ADR 0037 (this ADR) **narrows that allowance**: empty / `unknown` is fail-open only on **non-HIGH** paths (= dispatch / canary deploy where ADR 0035 §Layer 2 governs via `ApproveAction`). For HIGH severity convergence approval paths governed by ADR 0036 §Carry point 3, empty / `unknown` is fail-closed **from the day this ADR is Accepted** (i.e., before 2026-06-01).
 
-- Producers that have rolled out per ADR 0037 emit canonical values
-- Producers that have not yet rolled out continue to emit empty (= human fallback per ADR 0036)
-- Mix is safe: gateway processes both per ADR 0036 §Carry point 3
+The reasoning: ADR 0036's migration window was scoped to producer rollout time for low-severity flows. HIGH severity 4-eyes approval is the exact path where the AI-vs-AI invariant (ADR 0035) matters most; fail-open during the migration window for HIGH would mean "for 24 days, the invariant is best-effort". v3 of this ADR closes that gap.
 
-ADR 0036's 2026-06-01 fail-closed flip (the future ADR placeholder) SHALL only trigger after producer rollout is observably complete. Acceptance criteria for that flip is not in this ADR; a future ADR (0038 candidate) SHALL define the verification.
+| Severity / path | empty / `unknown` during migration window | post-2026-06-01 |
+|---|---|---|
+| HIGH severity 4-eyes (ADR 0036 path) | **fail-closed** (this ADR overrides ADR 0036's §Migration human-fallback for HIGH) | fail-closed |
+| dispatch / canary deploy (ADR 0035 §Layer 2 path via `ApproveAction`) | human-fallback per ADR 0036 §Migration (unchanged) | fail-closed (per ADR 0036's existing migration plan, 0038 candidate may further verify) |
+
+This ADR does NOT amend ADR 0036 §Migration directly; ADR 0036 stays correct for non-HIGH paths and remains the canonical reference for the dispatch path's migration end-state. v3 layers HIGH-path stricter handling on top — the union of ADR 0036 §Migration and this ADR §Migration window alignment is the actual operational contract.
+
+A future ADR (0038 candidate) SHALL define acceptance criteria for the 2026-06-01 dispatch-path flip (= when does ADR 0036 §Migration's "fall back to human" terminate for non-HIGH). v3 deliberately does not pin this; it covers only HIGH-path tightening.
 
 ## Consequences
 
@@ -194,9 +240,10 @@ Each producing tool SHALL ship a per-tool ADR after this one is Accepted, declar
 | Phase | Scope | Approx PR count |
 |---|---|---|
 | 0037 promote | Proposed → Accepted (this PR is Proposed only; promote is separate per ADR 0035 cadence) | 1 |
-| 0037 per-tool ADR | each tool drafts its own ADR pinning Axis 1.3 default + emit site + broker participation | 4 |
+| 0036 amendment for `approvalActionValue` extension | gateway-side: add `RequesterActorSource` + `InitiatingActorType` to `approvalActionValue`, populate in `buildButtonValues`, read in `handleApprovalAction` per §Gateway policy on classification | 1 |
+| 0037 per-tool ADR | each tool drafts its own ADR pinning emit site + broker participation + `initiating_actor_type` participation + `RUNOPS_ACTOR_TYPE` non-canonical handling. **No per-tool defaults** (this ADR forbids). | 4 |
 | 0037 per-tool implementation | each tool implements emit + tests per §Enforcement inventory | 4 (one per tool, possibly split phase) |
-| 0038 candidate (fail-closed flip + broker-only `ai-agent`) | revisit ADR 0036 migration end-state + broker-only AI classification | 1 (future, contingent on rollout coverage) |
+| 0038 candidate (dispatch-path fail-closed flip + broker-only `ai-agent`) | define ADR 0036 §Migration end-state for non-HIGH paths + broker-only `ai-agent` classification | 1 (future, contingent on rollout coverage) |
 
 ## Refs
 
