@@ -19,7 +19,11 @@ auth_boundary:
   - "internal/adapter/input/broker/**"
   - "internal/adapter/output/auth/**"
   - "internal/adapter/output/cache/**"
-  - "internal/adapter/output/registry/agent_session_registry*"
+  # Match both "agent_session_registry.go" and adapter prefixes
+  # like "in_memory_agent_session_registry.go" / "firestore_agent_session_registry.go".
+  # The original prefix-only glob was too narrow once the per-impl
+  # adapter files landed.
+  - "internal/adapter/output/registry/*agent_session*"
   - "internal/adapter/output/github/**"
 
   # AI agent session registry (plan v8 §5.2) — domain + port
