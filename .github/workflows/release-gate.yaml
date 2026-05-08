@@ -207,7 +207,55 @@ jobs:
           rc=$?
           set -e
           # rc=0: no findings; rc=1: findings present; rc>=2: error.
+          # ADR 0034 bootstrap exception: a Semgrep parse error on a
+          # rule-only self-fix PR is permitted, otherwise a broken
+          # rule on develop creates a permanent deadlock (= ADR 0033
+          # base-ref-read forces every PR to read the broken rule).
+          # Three predicates ALL must hold:
+          #  1. rc >= 2 (= the Semgrep parse error case itself)
+          #  2. PR's changed-paths set lives EXCLUSIVELY under
+          #     .semgrep/rules/release-gate/** AND touches at least
+          #     one of the rule YAML files
+          #  3. PR's changed-paths set does NOT touch the hard-coded
+          #     self-protection set (release-gate.yaml itself,
+          #     cd.yaml, paths.yaml, CODEOWNERS)
+          # When all three hold: pass with category=auth_boundary +
+          # reason="rule self-fix bootstrap exception (ADR 0034)".
+          # When any fails: original fail-closed behaviour preserved.
           if [ "$rc" -ge 2 ]; then
+            bootstrap_ok="false"
+            if [ -s /tmp/release-gate/changed.txt ]; then
+              # Predicate 2 + 3 in one awk pass.
+              bootstrap_ok=$(awk '
+                BEGIN { has_rule = 0; has_other = 0; has_meta = 0 }
+                /^\.github\/workflows\/release-gate\.yaml$/ { has_meta = 1; next }
+                /^\.github\/workflows\/cd\.yaml$/           { has_meta = 1; next }
+                /^\.github\/release-gate-paths\.yaml$/      { has_meta = 1; next }
+                /^\.github\/CODEOWNERS$/                    { has_meta = 1; next }
+                /^\.semgrep\/rules\/release-gate\/.+\.yaml$/ {
+                  has_rule = 1
+                  next
+                }
+                { has_other = 1 }
+                END {
+                  if (has_rule && !has_other && !has_meta) print "true"
+                  else print "false"
+                }
+              ' /tmp/release-gate/changed.txt)
+            fi
+            if [ "$bootstrap_ok" = "true" ]; then
+              echo "::warning::Semgrep parse error (exit $rc) accepted under ADR 0034 bootstrap exception (rule-only self-fix PR)." >&2
+              echo "rules_present=true" >> "$GITHUB_OUTPUT"
+              echo "hit=true" >> "$GITHUB_OUTPUT"
+              echo "error_count=0" >> "$GITHUB_OUTPUT"
+              echo "warning_count=0" >> "$GITHUB_OUTPUT"
+              echo "must_fail=false" >> "$GITHUB_OUTPUT"
+              echo "bootstrap_exception=true" >> "$GITHUB_OUTPUT"
+              # Skip the rest of the Semgrep step; let the decide step
+              # consume hit=true + bootstrap_exception=true so it
+              # publishes the right reason.
+              exit 0
+            fi
             echo "::error::Semgrep execution failed (exit $rc). Refusing to fall back to path-only classification (fail-closed)." >&2
             exit 1
           fi
@@ -373,8 +421,20 @@ jobs:
           YAML_PRESENT: ${{ steps.paths.outputs.yaml_present }}
           SEMGREP_RULES_PRESENT: ${{ steps.semgrep.outputs.rules_present }}
           SEMGREP_MUST_FAIL: ${{ steps.semgrep.outputs.must_fail }}
+          BOOTSTRAP_EXCEPTION: ${{ steps.semgrep.outputs.bootstrap_exception }}
         run: |
           set -euo pipefail
+          # ADR 0034 bootstrap exception: a Semgrep parse error on a
+          # rule-only self-fix PR was permitted by the Semgrep step
+          # itself (predicates checked there); decide just renders the
+          # right reason here. This branch supersedes the YAML/rules
+          # presence checks because the rule file is, by definition,
+          # broken at base ref in this case.
+          if [ "$BOOTSTRAP_EXCEPTION" = "true" ]; then
+            echo "category=auth_boundary" >> "$GITHUB_OUTPUT"
+            echo "reason=rule self-fix bootstrap exception (ADR 0034)" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           # Precedence: hard-coded > yaml auth > semgrep auth > schema > routing.
           if [ "$HARD_HIT" = "true" ]; then
             echo "category=auth_boundary" >> "$GITHUB_OUTPUT"
