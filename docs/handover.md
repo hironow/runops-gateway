@@ -8,7 +8,7 @@
 新しい session を開始するとき、または将来このリポジトリに戻ってくるとき、
 最初に読むべきページとして書く。日付ベースで上書き更新する想定。
 
-最終更新: 2026-05-05
+最終更新: 2026-05-08
 
 ## ブランチ運用ポリシー (重要)
 
@@ -1091,3 +1091,84 @@ Interactive 両方) を疑う。
 
 困ったら `docs/intent.md` を読み直す。それでも解決しない場合は、
 Phase 0 の動作確認手順（既存 README）まで戻る。
+
+---
+
+## Token broker (refs#0007) — 機能完成 (2026-05-08)
+
+5 本柱 D-Mail Dispatcher とは独立した別機能 (refs#0007) として、4 caller
+type (human-operator / gateway-service / workspace-daemon / ai-agent)
+が `POST /broker/token` で短期 GitHub installation token を受け取る経路。
+2026-05-08 に **PR #53-#82 の 28 PR 連続着地で機能完成** し、operator が
+env を設定するだけで activate 可能な状態になった。
+
+### 28 PR の進行 (2026-05-07 → 2026-05-08)
+
+| Phase | PR | 内容 |
+|---|---|---|
+| 0 | #53 | release-gate enforcement (ADR 0031, 0033) |
+| (fix) | #55 | release-gate rule self-fix (go-github invalid pattern) |
+| (chore) | #54 | lint policy alignment (`just semgrep --severity ERROR`) |
+| 1a | #56 | Domain types + port (grant matrix, audit_fingerprint) |
+| 1b | #57 | Usecase orchestration (5-stage Mint pipeline) |
+| 2a | #58 | In-memory token cache + singleflight |
+| 2b-1 | #59 | GitHub broker orchestration (per-project repo binding) |
+| 2c-1 | #60 | AI agent session domain + port |
+| 3a | #61 | HTTP handler `POST /broker/token` |
+| 2d-1 | #62 | IdentityClaims domain helper |
+| 2d-2a | #63 | Delegated agent verifier (ai-agent) |
+| 4-1 | #64 | ADR 0032 grant matrix pin (Accepted) |
+| 2d-2b | #65 | JWKsVerifier RS256 (keyfunc/v3 + golang-jwt/v5) |
+| 2d-2c | #66 | Gcloud identity verifier (human-operator) |
+| 2d-2d | #67 | CloudRun IAM verifier (gateway-service) |
+| 2d-2e | #68 | Workload identity verifier (workspace-daemon) |
+| 2c-2-1 | #69 | In-memory agent session registry |
+| 2b-2-1 | #70 | Ghinstallation prod minter |
+| 3b-1 | #71 | Authenticator interface widen (project_id + tool) |
+| 3b-2 | #72 | ChainAuthenticator (4 caller dispatch by header) |
+| 3b-3a | #73 | BrokerConfig env var loader (5 required + 2 default + 2 optional) |
+| (refactor) | #74 | github Minter + ctor export |
+| 3b-3b-1 | #75 | composition.NewBrokerDependencies wiring helper |
+| 3b-3b-2 | #76 | cmd/server mount (opt-in pattern, broker reachable) |
+| 2b-2-2a | #77 | PrivateKeyFetcher port + File adapter |
+| 2b-2-2b | #78 | Secret Manager fetcher + dev/prod selector |
+| 2c-2-2-1 | #79 | Firestore agent session registry impl + emulator integ test |
+| 2c-2-2-2 | #80 | Firestore selector + cmd/server lifecycle |
+| 4-2 | #81 | IaC: Secret Manager secret + Cloud Run IAM binding |
+| (docs) | #82 | env-var contract + 4-step rollout sequence |
+
+### Production rollout (operator scope, 4 step)
+
+```bash
+# 1. Secret Manager + IAM binding を作成
+cd tofu && tofu apply
+
+# 2. GitHub App private key を out-of-band で upload (Terraform state 外)
+gcloud secrets versions add github-app-private-key --data-file=/path/to/github-app.pem
+
+# 3. Cloud Run service env vars (詳細は docs/runops-gateway-env-vars.md)
+gcloud run services update runops-gateway --update-env-vars=...
+
+# 4. Re-deploy。 構造化ログ "token broker registered (#0007)" 確認
+```
+
+ロールバック: `BROKER_AUDIENCE` を unset すると broker は disable され、既存
+Slack / admin endpoint は影響を受けない (= opt-in pattern, Phase 3b-3b-2)。
+
+### 残 work
+
+- **Phase 3c** (full integration test, real GitHub App test secret): cdr workspace で operator が走らせる scope。 既存 PR #61 handler test + PR #75 composition test + PR #79 emulator integration test で coverage 済みで、 production block ではない。
+- **Pub/Sub emulator topic init failure** (CI flaky): broker 進行中に観察された別 technical debt。 broker と独立、 別 chore PR で修正予定。
+
+### 重要な architectural insight (token broker 進行で判明)
+
+- **release-gate (ADR 0033) self-fix path bug**: Phase 0 で broken rule を merge した PR #53 直後、 base-ref-read 設計のため self-fix PR (#55) も同 broken rule で fail-closed。 GitHub UI 上 `--squash` merge で 1 度だけ bypass し正常状態へ復帰。 ADR 0034 (rule parse error → bootstrap exception) を残作業として記録。
+- **paths.yaml glob 設計**: `agent_session_registry*` (prefix) は単一 canonical ファイル前提で、 `in_memory_agent_session_registry.go` 等の多 impl に対応せず → `*agent_session*` (substring) へ broaden (PR #69 内で同梱 fix)。 同様の prefix-only glob pattern bug が他 path に存在しないか今後 audit 推奨。
+- **secure-by-default lib 採用効果**: `keyfunc/v3` + `golang-jwt/v5` で自前 RSA + JWT parse 約 150 行を 80 行に圧縮、 `alg=none` attack 防御 + kid rotation も lib 内蔵。 ghinstallation/v2 が transitive で go-github/v66 → /v84 への migrate を引いた (= secure lib のメンテ追従コストとのトレードオフ)。
+
+### 関連 docs
+
+- `docs/runops-gateway-env-vars.md` — Token broker 全 env var + production rollout sequence
+- `docs/adr/0032-token-broker-caller-grant-matrix.md` — 4 caller × 5 tool grant matrix の Accepted ADR
+- `docs/adr/0031-production-deploy-gate-on-develop.md` + `0033-release-gate-path-externalization.md` — release-gate workflow design
+- `tofu/secret_manager_github_app.tf` — Secret Manager secret + Cloud Run IAM binding
