@@ -87,6 +87,37 @@ AI agent → schedules / triggers daemon
 
 For non-HIGH paths (= dispatch / canary deploy where ADR 0035 §Layer 2 governs via `ApproveAction`), `initiating_actor_type` remains optional. The mandatory boundary aligns with ADR 0036's HIGH severity scope.
 
+#### `effective_requester_actor_type` — carry is necessary but not sufficient
+
+Carrying `initiating_actor_type` only protects against laundering if the gateway **uses** it in the AI-vs-AI determination. Codex (gpt-5.5) v3 review flagged that v3 specified the carry but not the use, leaving this bypass open:
+
+```text
+AI agent → schedules / triggers daemon
+→ daemon emits requester_actor_type=workspace-daemon, initiating_actor_type=ai-agent
+→ AI approver clicks
+→ ValidateApproverPermitted receives requester_actor_type=workspace-daemon
+→ AI-vs-AI invariant does NOT fire → bypass via "I carry the truth but never look at it"
+```
+
+For HIGH severity Phase 4a approval, the gateway SHALL compute `effective_requester_actor_type` per the rule below and pass that value (not the raw `requester_actor_type`) to `ValidateApproverPermitted`:
+
+```text
+if requester_actor_type == workspace-daemon:
+    if initiating_actor_type is empty: fail-closed (per the laundering closure above)
+    effective_requester_actor_type = initiating_actor_type
+else:
+    effective_requester_actor_type = requester_actor_type
+
+handleApprovalAction calls ValidateApproverPermitted(effective_requester_actor_type, approverActorType).
+```
+
+Two consequences:
+
+- An AI-initiated daemon-driven action (= `requester_actor_type=workspace-daemon`, `initiating_actor_type=ai-agent`) clicked by an AI approver fires `ErrAIAgentCannotApproveAIAgent`. The daemon hop is no longer a laundering path.
+- A human-initiated daemon-driven action (= `initiating_actor_type=human-operator`) clicked by an AI approver passes the AI-vs-AI gate (because `effective_requester == human-operator`), exactly as it would if the human had clicked Approve directly.
+
+This rule applies only on Phase 4a HIGH severity paths. Dispatch / canary deploy paths (ADR 0035 §Layer 2 via `ApproveAction`) continue to use the raw `requester_actor_type` because their flows do not currently surface a `workspace-daemon` requester (= `ApproveAction` is invoked from CLI / Slack interactive, not from a daemon-driven inbox path). A future ADR MAY extend `effective_requester_actor_type` to those paths if a daemon-driven dispatch flow is added.
+
 ### Axis 4 — Two enums: metadata input vs gateway-internal classification
 
 Codex (gpt-5.5) v2 review flagged that mixing producer-writable values and gateway-derived values in a single `actor_type_source` enum invites implementer confusion (= "is `self_attested_broker_claim` something a producer can write?"). v3 splits the concept into two enums:
@@ -178,6 +209,8 @@ Architectural pin ADRs SHALL include this section so that "where can this behavi
 - gateway: receive DMail with `actor_type_source=broker` from producer → reclassify as `self_attested_broker_claim`, fail-closed for HIGH approval, audit log
 - gateway: receive HIGH severity DMail with `requester_actor_type=workspace-daemon` and `initiating_actor_type` empty → fail-closed
 - gateway: receive metadata with `actor_type_source=env` and `requester_actor_type=ai-agent`, second AI approver clicks → ADR 0035/0036 invariant fires
+- gateway (effective_requester_actor_type rule): receive HIGH DMail with `requester_actor_type=workspace-daemon`, `initiating_actor_type=ai-agent`, AI approver clicks → `ErrAIAgentCannotApproveAIAgent` (= effective requester resolves to `ai-agent` via the daemon hop, AI-vs-AI invariant fires)
+- gateway (effective_requester_actor_type narrowing): receive HIGH DMail with `requester_actor_type=workspace-daemon`, `initiating_actor_type=human-operator`, AI approver clicks → ack publishes (= effective requester resolves to `human-operator`, AI-vs-AI does NOT fire)
 
 ## Migration window alignment
 
@@ -202,12 +235,12 @@ A future ADR (0038 candidate) SHALL define acceptance criteria for the 2026-06-0
 - `actor_type_source` is **closed enum** `{ broker, env, unknown }` and gateway-attributed for `broker`, eliminating the v1 spoofing path codex (gpt-5.5) flagged.
 - `tool_default` is forbidden, so a forgotten env var produces empty `requester_actor_type` that ADR 0036's empty-handling can fail-close on. The "AI request silently classified as human via tool_default" path is structurally impossible.
 - `initiating_actor_type` is REQUIRED for HIGH severity workspace-daemon emissions, closing the daemon-laundering bypass.
-- AI-agent classification is opt-in via explicit env (Axis 2). Existing human CLIs that do not set the env produce empty (= unknown) emissions, which during the migration window stay human-fallback (ADR 0036 §Migration) and after 2026-06-01 fail-closed.
+- AI-agent classification is opt-in via explicit env (Axis 2). Existing human CLIs that do not set the env produce empty (= `unknown`) emissions. For HIGH severity paths these are fail-closed from ADR 0037 Accepted day; for non-HIGH paths they remain ADR 0036 §Migration human-fallback through 2026-06-01.
 
 ### Negative
 
-- Producer rollout is per-tool. Until each tool implements ADR 0037, that tool's emissions remain empty (= unknown), which during the migration window stays human-fallback. Post-2026-06-01 the same emissions become fail-closed for HIGH severity, so producer rollout is on the critical path before the flip.
-- AI agent runtime contract (Axis 2: "SHALL set RUNOPS_ACTOR_TYPE=ai-agent") is operator-discipline. A forgotten env var produces empty `requester_actor_type`. Post-2026-06-01 this fail-closes HIGH approvals, surfacing the discipline gap loudly rather than silently mis-classifying.
+- Producer rollout is per-tool. Until each tool implements ADR 0037, HIGH severity emissions from that tool fail-closed (= operator visible immediately) and non-HIGH emissions stay ADR 0036 §Migration human-fallback. Producer rollout is on the critical path for HIGH-severity coverage from the day this ADR is Accepted.
+- AI agent runtime contract (Axis 2: "SHALL set RUNOPS_ACTOR_TYPE=ai-agent") is operator-discipline. A forgotten env var produces empty `requester_actor_type` and fail-closes HIGH approvals from Accepted day, surfacing the discipline gap loudly rather than silently mis-classifying.
 - `actor_type_source` field broadens the audit log surface; ops dashboards will need to be updated to surface the new dimension and the new spoof-attempt audit event.
 
 ### Neutral
