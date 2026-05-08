@@ -4,7 +4,7 @@
 // project lookup, grant-matrix permission translation, per-project
 // repo binding (single-repo only — plan v8 §5.3), and response
 // construction including AuditFingerprint. The actual GitHub HTTP
-// call is hidden behind the unexported tokenMinter interface so
+// call is hidden behind the Minter interface so
 // the orchestration is unit-testable; Phase 2b-2 plugs in
 // ghinstallation/v2 + go-github's API client.
 package github
@@ -18,15 +18,15 @@ import (
 	"github.com/hironow/runops-gateway/internal/core/port"
 )
 
-// tokenMinter is the seam between the broker orchestration (this
-// file) and the actual GitHub App installation token mint call.
-// Phase 2b-2 will provide the production impl wrapping
-// ghinstallation/v2 + gogh.AppsService.CreateInstallationToken.
+// Minter is the seam between the broker orchestration (this file)
+// and the actual GitHub App installation token mint call. The
+// production implementation is *GhinstallationMinter (Phase 2b-2-1)
+// wrapping ghinstallation/v2 + gogh.AppsService.CreateInstallationToken.
 //
-// Kept unexported so callers must construct InstallationTokenBroker
-// via the package-internal wiring; this prevents accidental
-// composition with a non-broker tokenMinter.
-type tokenMinter interface {
+// Exported in Phase 3b-3b-1 so the composition root can build an
+// *InstallationTokenBroker without re-implementing the minter
+// interface in another package.
+type Minter interface {
 	Mint(ctx context.Context, installationID int64, opts *gogh.InstallationTokenOptions) (*gogh.InstallationToken, error)
 }
 
@@ -38,23 +38,22 @@ type tokenMinter interface {
 // and pins the mint request to that single repository. paintress
 // global / cross-project / multi-repo tokens cannot be produced.
 type InstallationTokenBroker struct {
-	minter   tokenMinter
+	minter   Minter
 	registry port.ProjectRegistry
 	policy   domain.GrantPolicy
 }
 
 // NewInstallationTokenBroker wires the dependencies the orchestration
-// needs. The tokenMinter is package-private for the reason above;
-// Phase 2b-2's production wiring will add a NewProductionBroker
-// constructor that builds the ghinstallation-backed minter inside
-// this package.
-func newInstallationTokenBroker(minter tokenMinter, registry port.ProjectRegistry, policy domain.GrantPolicy) *InstallationTokenBroker {
+// needs. The Minter argument lets the composition root inject either
+// the production *GhinstallationMinter or a test fake; the broker
+// itself stays free of GitHub HTTP / JWT concerns.
+func NewInstallationTokenBroker(minter Minter, registry port.ProjectRegistry, policy domain.GrantPolicy) *InstallationTokenBroker {
 	return &InstallationTokenBroker{minter: minter, registry: registry, policy: policy}
 }
 
 // Mint resolves the project's installation_id + repo binding,
 // translates the per-tool grant-matrix permissions to the GitHub
-// API shape, calls the upstream mint API via tokenMinter, and
+// API shape, calls the upstream mint API via Minter, and
 // returns a domain.InstallationToken whose AuditFingerprint is
 // already computed (so log / OTel surfaces never see the raw
 // token; plan v8 §5.5 leakage policy).

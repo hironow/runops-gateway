@@ -10,7 +10,7 @@ import (
 	gogh "github.com/google/go-github/v84/github"
 )
 
-// GhinstallationMinter is the production tokenMinter (Phase 2b-2-1).
+// GhinstallationMinter is the production Minter (Phase 2b-2-1).
 // It uses bradleyfalzon/ghinstallation/v2 to:
 //
 //  1. Construct a GitHub App JWT signed by the App's private key
@@ -20,10 +20,10 @@ import (
 //     The endpoint scopes the resulting token to the requested
 //     Repositories + Permissions.
 //
-// The struct satisfies the unexported `tokenMinter` interface used
+// The struct satisfies the unexported `Minter` interface used
 // by InstallationTokenBroker (Phase 2b-1, PR #59); production wiring
 // in Phase 3b composition root will inject this concrete type via
-// `newInstallationTokenBroker`.
+// `NewInstallationTokenBroker`.
 //
 // Phase 2b-2-1 ships the wiring + ctor failure paths only — the
 // real GitHub API call lands in Phase 3c integration tests with
@@ -92,5 +92,5 @@ var (
 )
 
 // Compile-time assertion that GhinstallationMinter satisfies the
-// unexported tokenMinter interface used by InstallationTokenBroker.
-var _ tokenMinter = (*GhinstallationMinter)(nil)
+// unexported Minter interface used by InstallationTokenBroker.
+var _ Minter = (*GhinstallationMinter)(nil)
