@@ -135,6 +135,12 @@ func main() {
 		slackHandler = slackHandler.WithApprovalPublisher(approvalPub)
 		slog.Info("Phase 4a approval_approve / approval_deny path enabled")
 	}
+	// ADR 0035 §Layer 3: enroll Slack bot user.ids that should be classified
+	// as AI agents. Empty env var disables the AI-vs-AI rule (safe default).
+	if aiBotIDs := slackadapter.ParseAIAgentBotUserIDs(os.Getenv("SLACK_AI_AGENT_BOT_USER_IDS")); len(aiBotIDs) > 0 {
+		slackHandler = slackHandler.WithAIAgentBotUserIDs(aiBotIDs)
+		slog.Info("ADR 0035 AI agent approver classification enabled", "bot_user_count", len(aiBotIDs))
+	}
 	// Multiplex project registry (#0008/#0009/#0011). Opt-in via env so
 	// non-multiplex deployments stay byte-identical. The cleanup is always
 	// non-nil; on env error we exit before any handler binds.
