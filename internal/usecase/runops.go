@@ -28,13 +28,29 @@ func NewRunOpsService(gcp port.GCPController, notifier port.Notifier, auth port.
 }
 
 // ApproveAction executes the approved operation described by req.
-func (s *RunOpsService) ApproveAction(ctx context.Context, req domain.ApprovalRequest, target port.NotifyTarget) error {
+//
+// Per ADR 0035, the AI-vs-AI approver/requester combination is rejected
+// before the auth check so the audit signal is precise even when the
+// approver would otherwise be a known operator.
+func (s *RunOpsService) ApproveAction(ctx context.Context, req domain.ApprovalRequest, target port.NotifyTarget, approverType domain.CallerType) error {
 	key := port.OperationKey(req)
 	if !s.store.TryLock(key) {
 		_ = s.notifier.SendEphemeral(ctx, target, req.ApproverID, "⚠️ この操作は既に実行中です。")
 		return fmt.Errorf("usecase: operation already in progress: %s", key)
 	}
 	defer s.store.Release(key)
+
+	if err := domain.ValidateApproverPermitted(req, approverType); err != nil {
+		slog.Warn("ai_approves_ai_attempt",
+			"approver_id", req.ApproverID,
+			"requester_actor", req.RequesterActorType,
+			"approver_actor", approverType,
+			"resource_names", req.ResourceNames)
+		if notifyErr := s.notifier.SendEphemeral(ctx, target, req.ApproverID, "AI agent は AI agent の承認操作はできません。"); notifyErr != nil {
+			slog.Error("SendEphemeral failed", "err", notifyErr)
+		}
+		return fmt.Errorf("usecase: %w", err)
+	}
 
 	if !s.auth.IsAuthorized(req.ApproverID) {
 		if err := s.notifier.SendEphemeral(ctx, target, req.ApproverID, "権限がありません。承認操作は許可されたユーザーのみ実行できます。"); err != nil {

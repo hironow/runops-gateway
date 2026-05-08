@@ -12,8 +12,13 @@ import (
 
 // RunOpsUseCase is the primary port driven by external actors (Slack, CLI).
 // Implementations live in the usecase layer and must not import adapter code.
+//
+// ApproveAction takes approverType (per ADR 0035) so the use case can
+// reject AI-agent-approves-AI-agent attempts before invoking auth.
+// Empty CallerType is treated as CallerHumanOperator for backwards
+// compatibility with construction sites that pre-date ADR 0035.
 type RunOpsUseCase interface {
-	ApproveAction(ctx context.Context, req domain.ApprovalRequest, target NotifyTarget) error
+	ApproveAction(ctx context.Context, req domain.ApprovalRequest, target NotifyTarget, approverType domain.CallerType) error
 	DenyAction(ctx context.Context, req domain.ApprovalRequest, target NotifyTarget) error
 }
 

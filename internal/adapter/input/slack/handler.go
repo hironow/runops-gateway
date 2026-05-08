@@ -244,7 +244,7 @@ func (h *InteractiveHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.goAsync(func() {
 			ctx, cancel := context.WithTimeout(context.Background(), responseURLTimeout)
 			defer cancel()
-			if err := h.useCase.ApproveAction(ctx, req, target); err != nil {
+			if err := h.useCase.ApproveAction(ctx, req, target, ""); err != nil {
 				slog.Error("ApproveAction failed", "error", err)
 				h.notifyIfTimeout(ctx, err, target)
 			}
