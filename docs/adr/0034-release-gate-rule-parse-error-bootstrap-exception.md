@@ -1,7 +1,7 @@
 # 0034. Release-gate rule parse error bootstrap exception
 
 **Date:** 2026-05-08
-**Status:** Proposed
+**Status:** Accepted
 
 ## Context
 
