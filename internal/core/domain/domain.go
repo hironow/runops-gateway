@@ -112,4 +112,9 @@ type ApprovalRequest struct {
 	// button so progress and rebuilt-prompt messages can show what's being deployed
 	// even after the operator has clicked through. Empty for legacy clients.
 	BuildInfo string
+	// RequesterActorType identifies whether the original requester was a
+	// human operator or an AI agent (per ADR 0035). Zero value (empty
+	// string) is treated as CallerHumanOperator so the 52 existing
+	// ApprovalRequest{...} construction sites remain backwards-compatible.
+	RequesterActorType CallerType
 }
