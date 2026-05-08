@@ -41,21 +41,14 @@ CURL_FLAGS=(
   --retry-connrefused
 )
 
-# Probe the emulator REST endpoint until it responds before issuing
-# any PUT. The healthy docker compose container does NOT guarantee
-# the REST API is up — they race. We GET the project listing as a
-# smoke read; ANY 2xx / 4xx response means the server is alive.
-# Connect refused / network errors trigger --retry-connrefused.
-echo "  Waiting for emulator REST API to respond..."
-probe_code=$(curl --silent --show-error --retry 10 --retry-delay 2 --retry-connrefused --max-time 5 \
-  --output /dev/null \
-  --write-out "%{http_code}" \
-  "${PUBSUB_BASE}/projects/${PROJECT}/topics" || echo "000")
-if [[ "${probe_code}" == "000" ]]; then
-  echo "ERROR: emulator REST API at ${PUBSUB_BASE} unreachable" >&2
-  exit 1
-fi
-echo "  Emulator REST API ready (probe http=${probe_code})"
+# NOTE: an explicit "probe" step turned out to be redundant — each
+# create_* call below uses --retry-connrefused, so a not-yet-ready
+# REST API is absorbed by the retry budget without an extra wait
+# loop. (The earlier probe attempt also had a curl --write-out
+# bug: %{http_code} is emitted once per retry, so 10 retries to a
+# connect-refused endpoint produced "000000000000000" which broke
+# the [[ == "000" ]] guard.) Keep the script lean: rely on the
+# per-call retry semantics.
 
 create_topic() {
   local name="$1"
@@ -67,6 +60,9 @@ create_topic() {
     --output /tmp/init-pubsub-resp.txt \
     --write-out "%{http_code}" \
     -X PUT "${PUBSUB_BASE}/projects/${PROJECT}/topics/${name}" || echo "000")
+  # Some curl versions emit %{http_code} once per retry; only the
+  # final attempt's status matters, so collapse to the last 3 chars.
+  http_code="${http_code: -3}"
   case "${http_code}" in
     200|201)
       echo "  Topic created: ${name}"
@@ -93,6 +89,7 @@ create_pull_sub() {
     --write-out "%{http_code}" \
     -X PUT "${PUBSUB_BASE}/projects/${PROJECT}/subscriptions/${name}" \
     -d "{\"topic\":\"projects/${PROJECT}/topics/${topic}\",\"ackDeadlineSeconds\":${ack_deadline}}" || echo "000")
+  http_code="${http_code: -3}"
   case "${http_code}" in
     200|201)
       echo "  Subscription created: ${name} -> ${topic}"
