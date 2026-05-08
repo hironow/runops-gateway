@@ -25,6 +25,7 @@ auth_boundary:
   # adapter files landed.
   - "internal/adapter/output/registry/*agent_session*"
   - "internal/adapter/output/github/**"
+  - "internal/adapter/output/secret/**"
 
   # AI agent session registry (plan v8 §5.2) — domain + port
   # carry the verify-time sentinel logic (SA mismatch / expired /

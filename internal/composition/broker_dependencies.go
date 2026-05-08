@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 
 	"github.com/hironow/runops-gateway/internal/adapter/output/auth"
 	"github.com/hironow/runops-gateway/internal/adapter/output/cache"
 	githubadapter "github.com/hironow/runops-gateway/internal/adapter/output/github"
 	"github.com/hironow/runops-gateway/internal/adapter/output/registry"
+	"github.com/hironow/runops-gateway/internal/adapter/output/secret"
 	"github.com/hironow/runops-gateway/internal/core/domain"
 	"github.com/hironow/runops-gateway/internal/core/port"
 	"github.com/hironow/runops-gateway/internal/usecase"
@@ -52,9 +52,13 @@ func NewBrokerDependencies(ctx context.Context, cfg *BrokerConfig, projectRegist
 		return nil, ErrBrokerDependenciesNilProjectRegistry
 	}
 
-	keyPEM, err := os.ReadFile(cfg.GitHubAppPrivateKeyPath)
+	keyFetcher, err := secret.NewFilePrivateKeyFetcher(cfg.GitHubAppPrivateKeyPath)
 	if err != nil {
-		return nil, fmt.Errorf("composition: read GitHub App private key: %w", err)
+		return nil, fmt.Errorf("composition: build private key fetcher: %w", err)
+	}
+	keyPEM, err := keyFetcher.Fetch(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("composition: fetch GitHub App private key: %w", err)
 	}
 
 	minter, err := githubadapter.NewGhinstallationMinter(cfg.GitHubAppID, keyPEM, nil)
