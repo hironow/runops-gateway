@@ -8,7 +8,7 @@
 新しい session を開始するとき、または将来このリポジトリに戻ってくるとき、
 最初に読むべきページとして書く。日付ベースで上書き更新する想定。
 
-最終更新: 2026-05-08
+最終更新: 2026-05-08 (後半: 0011 architectural pin 全 4 layer 着地 + drift 解消)
 
 ## ブランチ運用ポリシー (重要)
 
@@ -1191,3 +1191,38 @@ token broker 機能完成後の周辺整備として 4 PR + 1 fix-up 着地:
 - `docs/adr/0034-release-gate-rule-parse-error-bootstrap-exception.md` — Phase 0 self-fix path bug の Proposed ADR (implementation 待ち)
 - `tofu/secret_manager_github_app.tf` — Secret Manager secret + Cloud Run IAM binding
 - `scripts/init-pubsub.sh` — fail-loud + retry + REST API readiness probe (Pub/Sub flake fix 完了)
+
+### Follow-ups (2026-05-08 後半、 0011 architectural pin)
+
+ADR 0034 implementation + 0011 architectural pin の完成として 7 PR 着地:
+
+| PR | 内容 |
+|---|---|
+| #88 | **ADR 0034 implementation**: release-gate workflow に rule self-fix bootstrap exception を実装 (3 predicate evaluator: rc>=2 + 全 changed-paths が `.semgrep/rules/release-gate/**` 配下 + self-protection set 触らず) |
+| #89 | **ADR 0035 (Proposed)** — refs#0011 architectural pin。 「AI agent cannot approve another AI agent's convergence request」 invariant + 3 layer enforcement (domain / usecase / Slack inbound) の roadmap |
+| #90 | **ADR 0035 promote**: Proposed → Accepted。 implementation roadmap §Phase A-1 着手の前提 |
+| #91 | **Phase A-1**: domain layer。 `ApprovalRequest.RequesterActorType CallerType` field + `ValidateApproverPermitted` pure function + `ErrAIAgentCannotApproveAIAgent` sentinel + 13 case matrix test |
+| #92 | **Phase A-2**: use-case orchestration。 `RunOpsService.ApproveAction` に `approverType domain.CallerType` param 追加、 `auth.IsAuthorized` の前に `ValidateApproverPermitted` call、 AI-vs-AI rejection で `slog.Warn(\"ai_approves_ai_attempt\")` + ephemeral notice |
+| #93 | **Phase A-3**: Slack inbound adapter。 `ClassifyApproverActorType(userID, aiBotIDs) domain.CallerType` exact-match classifier + `SLACK_AI_AGENT_BOT_USER_IDS` env var (CSV) + `WithAIAgentBotUserIDs` Builder。 dispatch / canary deploy approval path で actor type を渡す |
+| #94 | **ADR 0036 + Phase A-4**: codex review (gpt-5.5) で発見された致命指摘 4 件 (Phase 4a path が `ApproveAction` を経由しない / button payload 非保持 / fail-open / carry point 不足) を ADR 0036 (Phase 4a approval path actor-type validation, extends ADR 0035) で形式化 + 4 carry point 実装。 `domain.MetadataKeyRequesterActorType` const、 `approvalActionValue.RequesterActorType`、 `buildButtonValues` carry、 `handleApprovalAction` 内 fail-closed validator + AI-vs-AI reject + audit log。 4 新 test |
+| (gofmt fixup) | PR #94 の Metadata map 手書き alignment が CI lint (golangci-lint) で reject、 `gofmt -w` 適用後 push (1 commit) |
+| #95 | **paths.yaml documentation hardening**: codex 提案の \"future ADR を range glob で pre-enrol\" は release-gate.yaml glob engine が character class を escape するため動作不可と判明。 代替として comment で \"per-number 明示 enrol が必須\" を documentation 化 (5 line) |
+
+### drift 解消 (2026-05-08、 cross-tool)
+
+paintress PR #206 / amadeus PR #207 が `just fmt + just lint auto-fixes` を単独適用 → canonical hash と乖離 → `tap/refs/scripts/check_substrate_drift.sh` の hash table 古いまま 3 tool 全 drift。 sightjack origin/main も既に PR #204 で fmt landed していた事実を発見し、 **canonical hash を新 fmt 値に bump** で着地 (refs `d45fb63`)。 加えて `tap/justfile` の `gap-check-ai-coding` recipe を fail-fast → 全 tool 走破に修正 (= drift 隠蔽 bug 解消)。
+
+### 0011 architectural pin で見えた追加 insight
+
+- **ADR は単 path 網羅の幻想**: ADR 0035 の Layer 2 spec (`ApproveAction.ValidateApproverPermitted`) は dispatch / canary path しかカバーしない。 Phase 4a 4-eyes approval flow (ADR 0019) は `handleApprovalAction` から直接 ack を publish し `ApproveAction` を経由しない gap が、 codex review で発見された。 解消は ADR 0036 という extension ADR を後追いで起案。 「ADR 1 つで全 path 網羅」 仮説は危険、 「ADR は 1 path を pin、 別 path は別 ADR で extension」 が安全 cadence。
+- **fail-open vs fail-closed の layer split**: Phase A-1〜A-3 は `RequesterActorType == \"\" → CallerHumanOperator` の zero-value default で 52 既存 ApprovalRequest construction site を未編集 backwards compat 維持 (= fail-open 寄り)。 同 default を Phase 4a path で踏襲すると HIGH severity 系で invariant 抜けるため、 ADR 0036 で migration window (2026-05-08〜2026-05-31) を経て fail-closed flip する future ADR を予告 — `★` 「security tightening は時間軸で段階的に」 という general pattern の具体例。
+- **release-gate auth_boundary 分類の繊細さ**: Phase A-1 (domain pure type 追加) は **routing** 分類、 Phase A-2 (auth flow に組み込み) と Phase A-3 (UI surface) は **auth_boundary glob match**、 Phase A-4 (paths.yaml 自体に 0036-* を追加) は **hard-coded self-protection set match**。 同 auth_boundary でも reason 文字列で audit 区分可能。
+- **gofmt fixup の自爆 pattern**: drift PR (refs `d45fb63`) で「gofmt 1.26.2 を canonical」 と固定したばかりの session 内で、 PR #94 の Metadata map alignment を手書きして同 root cause で CI fail。 `go vet` は style 検査せず、 pre-commit に `gofmt -d` を含めない限り再発する。
+
+### 関連 docs (0011 architectural pin)
+
+- `docs/adr/0035-ai-agent-cannot-approve-ai-agent.md` — Accepted、 architectural pin
+- `docs/adr/0036-phase-4a-approval-actor-validation.md` — Accepted、 ADR 0035 §Layer 2 を Phase 4a path に extension、 4 carry point + migration window
+- `internal/core/domain/approver_validator.go` + `_test.go` — sentinel + pure function (Phase A-1)
+- `internal/adapter/input/slack/actor_classifier.go` + `_test.go` — Slack user.id 分類 (Phase A-3)
+- `tap/refs/scripts/check_substrate_drift.sh` — canonical hash table (drift 解消で bump 済)
