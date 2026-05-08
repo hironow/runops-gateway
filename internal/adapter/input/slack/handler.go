@@ -82,6 +82,11 @@ type InteractiveHandler struct {
 	approvalPublisher port.DMailPublisher           // optional, Phase 4a (ADR 0019)
 	pending           *observability.PendingTracker // optional, Issue 0005 — when nil, falls back to bare `go`
 	signingSecret     string
+	// aiAgentBotUserIDs lists Slack user.id values that the operator has
+	// enrolled as AI agents (per ADR 0035 §Layer 3). Approver classification
+	// uses ClassifyApproverActorType against this list. Empty list is the
+	// safe default; the AI-vs-AI rule is then a no-op.
+	aiAgentBotUserIDs []string
 }
 
 // NewInteractiveHandler creates a new Slack interactive (button click) handler.
@@ -105,6 +110,15 @@ func NewInteractiveHandler(useCase port.RunOpsUseCase, dispatchUseCase DispatchU
 // Returns the same handler so callers can chain after NewInteractiveHandler.
 func (h *InteractiveHandler) WithApprovalPublisher(p port.DMailPublisher) *InteractiveHandler {
 	h.approvalPublisher = p
+	return h
+}
+
+// WithAIAgentBotUserIDs enrolls Slack user.ids that should be classified
+// as AI agents per ADR 0035 §Layer 3. The list is typically sourced from
+// the SLACK_AI_AGENT_BOT_USER_IDS env var (CSV); see ParseAIAgentBotUserIDs.
+// Returns the same handler so callers can chain after NewInteractiveHandler.
+func (h *InteractiveHandler) WithAIAgentBotUserIDs(ids []string) *InteractiveHandler {
+	h.aiAgentBotUserIDs = ids
 	return h
 }
 
@@ -244,7 +258,8 @@ func (h *InteractiveHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.goAsync(func() {
 			ctx, cancel := context.WithTimeout(context.Background(), responseURLTimeout)
 			defer cancel()
-			if err := h.useCase.ApproveAction(ctx, req, target, ""); err != nil {
+			approverType := ClassifyApproverActorType(slackPayload.User.ID, h.aiAgentBotUserIDs)
+			if err := h.useCase.ApproveAction(ctx, req, target, approverType); err != nil {
 				slog.Error("ApproveAction failed", "error", err)
 				h.notifyIfTimeout(ctx, err, target)
 			}
