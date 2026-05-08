@@ -71,6 +71,11 @@ auth_boundary:
   - ".github/CODEOWNERS"
   - ".github/release-gate-paths.yaml"
   - ".semgrep/rules/release-gate/**"
+  # Security-impacting ADRs are enrolled here per-number. The release-gate
+  # glob engine (release-gate.yaml::Apply YAML globs) only treats `**` and
+  # `*` as wildcards; character classes like `[4-9]` are escaped to literal,
+  # so range globs do NOT work. Always add new security-impacting ADRs as
+  # explicit per-number entries below. See ADR 0033 §verification.
   - "docs/adr/0031-*"
   - "docs/adr/0032-*"
   - "docs/adr/0033-*"
