@@ -41,14 +41,36 @@ CURL_FLAGS=(
   --retry-connrefused
 )
 
-# NOTE: an explicit "probe" step turned out to be redundant — each
-# create_* call below uses --retry-connrefused, so a not-yet-ready
-# REST API is absorbed by the retry budget without an extra wait
-# loop. (The earlier probe attempt also had a curl --write-out
-# bug: %{http_code} is emitted once per retry, so 10 retries to a
-# connect-refused endpoint produced "000000000000000" which broke
-# the [[ == "000" ]] guard.) Keep the script lean: rely on the
-# per-call retry semantics.
+# Probe the emulator REST API with bounded retries before issuing
+# any PUT. The docker compose container's health check passes once
+# the SUPERVISOR is up; the actual Pub/Sub REST listener on 9399
+# can lag a few seconds behind. We rely on curl's exit code (not
+# %{http_code}) so the per-attempt retry repetition bug from the
+# earlier rewrite cannot reappear.
+#
+#   exit 0  → server returned a response (any status; success-shaped)
+#   exit 7  → connect refused (= REST listener not up)
+#   exit 28 → timeout (= server slow / overloaded)
+#
+# Any non-zero exit is treated as not-ready and we retry up to 30
+# times (60 sec total at delay=2). 30 was chosen empirically after
+# observing emulator boots in the 8-15 sec range on ubuntu-24.04
+# CI runners; doubling the upper bound gives margin for slow
+# concurrent runs.
+echo "  Probing emulator REST API readiness..."
+ready=false
+for i in $(seq 1 30); do
+  if curl --silent --output /dev/null --max-time 2 "${PUBSUB_BASE}/projects/${PROJECT}/topics"; then
+    echo "  Emulator REST API ready (attempt ${i})"
+    ready=true
+    break
+  fi
+  sleep 2
+done
+if [[ "${ready}" != "true" ]]; then
+  echo "ERROR: emulator REST API at ${PUBSUB_BASE} did not respond after 60s" >&2
+  exit 1
+fi
 
 create_topic() {
   local name="$1"
