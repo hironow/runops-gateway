@@ -21,43 +21,81 @@ Without an ADR pinning these axes, the four producer tools (phonewave / sightjac
 
 Pin producer-side `requester_actor_type` classification along **four axes**, with `Enforcement inventory` (per the framework codex proposed in 2026-05-08 session retrospective) listed in §Enforcement inventory.
 
-### Axis 1 — Source of truth precedence
+### Axis 1 — Source of truth (no silent fallback)
 
-Classification source precedence, highest to lowest:
+Producers MAY emit `requester_actor_type` only when one of the two sources below provides it. **There is no `tool_default` fallback** — this is intentional, see §Why tool_default is forbidden below.
 
-1. **Broker-issued caller-type** (= Token broker per ADR 0032 §grant matrix). When the producer obtained its credential via the broker (= gateway `/broker/token` endpoint), the producer SHALL emit the broker's `caller_type` claim verbatim into `requester_actor_type`. This is the only path the gateway can independently verify.
-2. **`RUNOPS_ACTOR_TYPE` env var** (= explicit out-of-band signal). When the producer runs outside the broker path (= local CLI, cdr-job, AI agent runtime that pre-set env), the env var value SHALL be emitted verbatim. Audit log MUST include `actor_type_source=env` so the gateway can distinguish broker-verified from env-asserted.
-3. **Tool default** (= per-tool fallback). Each tool SHALL declare a per-tool default `CallerType` in its own ADR (per-tool ADR list in §Per-tool ADR placeholder). Audit log MUST include `actor_type_source=tool_default`.
+1. **Broker-issued caller-type** (= Token broker per ADR 0032 §grant matrix). When the producer's request flows through `/broker/token` and the broker's `caller_type` claim is available in the request context, the **gateway** itself attaches `actor_type_source=broker` (only the gateway can do this — see Axis 4). Producer-side `actor_type_source=broker` is rejected.
+2. **`RUNOPS_ACTOR_TYPE` env var** (= explicit out-of-band signal). When the producer runs outside the broker path and the env var is set to a canonical CallerType string, the producer emits the value verbatim with `actor_type_source=env`. Empty / unset env yields **no emission at all** for `requester_actor_type`.
 
-The gateway's ADR 0036 §Carry point 3 fail-closed handler interprets `actor_type_source != broker` as "self-attestation" and MAY weight downstream policy accordingly. ADR 0036 itself does not currently differentiate; a future ADR (0038 candidate) MAY tighten this.
+When neither source provides a value, the producer MUST emit `requester_actor_type` as **empty** (= the field is set to `""` or omitted from metadata). This routes the message into ADR 0036 §Carry point 3's empty-handling path — currently human-operator fallback during the migration window, fail-closed after the 2026-06-01 flip.
+
+### Why tool_default is forbidden
+
+A per-tool default (e.g., `human-operator` for sightjack producer, set when neither broker nor env provides a value) would defeat ADR 0036's fail-closed flip:
+
+```text
+AI agent invokes paintress CLI without RUNOPS_ACTOR_TYPE
+→ producer emits tool_default = "human-operator"
+→ requester_actor_type is non-empty
+→ ADR 0036's empty-fail-closed flip never triggers
+→ AI request approved as a human request (silent mis-classification)
+```
+
+This was a codex (gpt-5.5) finding on the pre-rewrite v1 of this ADR. The fix is not "audit log + downstream weighting", because audit log catches the bypass after the breach. The fix is to **never let the producer emit a non-empty value the producer cannot justify**.
 
 ### Axis 2 — AI driving human CLI distinction
 
 When an AI agent invokes a tool's human-facing CLI (e.g., `paintress run` from a Claude Code subprocess), process introspection alone cannot distinguish from a human invocation. The contract:
 
 - **AI agent runtime SHALL set `RUNOPS_ACTOR_TYPE=ai-agent` before executing any tool CLI.** This is the AI agent's responsibility, not the tool's — the tool cannot detect it via parent process / TTY / `os.Geteuid()` etc., and any heuristic produces false negatives.
-- **The tool's default SHALL NOT be `ai-agent`.** Defaulting to `ai-agent` would force every CLI invocation through fail-closed paths once ADR 0036 flips. Defaults are tool-specific (see §Per-tool ADR placeholder) but `ai-agent` is reserved for explicit signal only.
-- **Audit log MUST capture the actor_type_source.** A subsequent forensic audit can identify "AI agent forgot to set env" cases by `actor_type=human-operator` + `actor_type_source=tool_default` patterns.
+- **A forgotten env var produces empty `requester_actor_type`, not a default.** Per Axis 1, no tool_default exists. Empty propagates to ADR 0036's empty-handling, which (post-2026-06-01) is fail-closed for HIGH severity approval paths.
+- **The tool MUST never write `ai-agent` on its own** under any circumstance. `ai-agent` only appears via env (Axis 1.2) or via gateway-attached broker source (Axis 1.1). Producers writing `ai-agent` from heuristics are explicitly forbidden.
 
-### Axis 3 — Workspace daemon dual-actor carry
+### Axis 3 — Workspace daemon dual-actor carry (now mandatory for HIGH)
 
 A scheduled / triggered workspace daemon (e.g., phonewave courier launched at boot, scheduled cdr-job) is itself a `workspace-daemon` actor, but its actions originate from an upstream actor (the human / AI agent who created the schedule, or the broker that minted the trigger token).
 
-Producers SHALL emit:
+Producers emit:
 
 - `requester_actor_type` = the **proximate** actor (= the daemon process itself: `workspace-daemon`)
 - `initiating_actor_type` = the **distal** actor (= the human / AI agent / gateway-service that scheduled the action), as a separate metadata key
 
-The gateway MAY use `initiating_actor_type` for policy decisions where the proximate actor is uninformative (e.g., "an AI-initiated daemon-driven approval still cannot approve another AI-initiated request"). This carry is non-blocking for ADR 0037 acceptance — implementations MAY omit `initiating_actor_type` initially — but the key SHALL be reserved.
+For HIGH severity convergence DMails, **`initiating_actor_type` is REQUIRED when `requester_actor_type=workspace-daemon`**. The gateway rejects (= fail-closed at the ADR 0036 §Carry point 3 layer) when `requester_actor_type=workspace-daemon` AND `initiating_actor_type` is missing on a HIGH severity approval flow.
 
-### Axis 4 — Metadata trust boundary
+This closes the laundering path codex (gpt-5.5) identified:
 
-`requester_actor_type` is **producer-attested** at the trust boundary: the gateway receives it but cannot cryptographically verify it without the broker token chain. The interpretation:
+```text
+AI agent → schedules / triggers daemon
+→ daemon emits requester_actor_type=workspace-daemon, initiating_actor_type omitted
+→ AI-vs-AI gate sees requester != ai-agent → invariant bypassed
+```
 
-- **Broker-verified** (`actor_type_source=broker`): the gateway trusts this for security policy.
-- **Self-attested** (`actor_type_source=env|tool_default`): the gateway treats this as a hint; the security policy fail-closed flip (post-2026-06-01) SHALL still apply, but a future ADR (0038 candidate) MAY require broker-verified for `ai-agent` specifically (= "AI agents must obtain broker tokens to be classified as AI agents at all").
+For non-HIGH paths (= dispatch / canary deploy where ADR 0035 §Layer 2 governs via `ApproveAction`), `initiating_actor_type` remains optional. The mandatory boundary aligns with ADR 0036's HIGH severity scope.
 
-This decision intentionally stops short of mandating broker-only paths for all AI agent operations. The reason: many existing flows (= Claude Code local invocations, dev loops) cannot reasonably go through the broker today. Tightening to broker-only `ai-agent` is left as a future ADR contingent on broker rollout coverage.
+### Axis 4 — Metadata trust boundary (`actor_type_source` is gateway-attributed)
+
+`requester_actor_type` is producer-attested at the trust boundary; `actor_type_source` distinguishes how the value was obtained. To prevent producer-originated `actor_type_source=broker` self-attestation, the trust rules are:
+
+- **`actor_type_source=broker` is gateway-only.** The gateway attaches this value when it injects `requester_actor_type` from an authenticated broker token in its own request context. A producer that emits `actor_type_source=broker` verbatim in DMail metadata is treated as **self-attested** (i.e., reclassified `actor_type_source=self_attested_broker_claim` for audit) and the broker-verified policy weight does NOT apply.
+- **`actor_type_source=env`** is the only producer-emittable source value. Producers that need to declare an actor type without broker context MUST use this source.
+- **`actor_type_source=unknown`** is the canonical value for empty / absent emission (= the producer had no source). This routes through ADR 0036's empty-handling.
+- **`actor_type_source=tool_default` is forbidden** (per Axis 1; the value does not appear in the source enum at all).
+
+This means `actor_type_source` itself is part of the trust boundary, not just a passive breadcrumb. The enum is closed: `{ broker, env, unknown }`.
+
+### Gateway policy on actor_type_source (decided in this ADR, NOT deferred to 0038)
+
+For HIGH severity convergence approval paths governed by ADR 0036:
+
+| `actor_type_source` | Effective trust at gateway | HIGH approval gate |
+|---|---|---|
+| `broker` | broker-verified | passes per ADR 0035/0036 narrowing rules |
+| `env` | self-attested | passes per ADR 0035/0036 narrowing rules; future ADR (0038 candidate) MAY tighten `ai-agent` to broker-only |
+| `unknown` (empty / no source) | unverified | fail-closed during migration window if HIGH severity, fail-closed always after 2026-06-01 |
+| `self_attested_broker_claim` (= producer wrote broker but gateway did not verify) | rejected | **immediately fail-closed at the gateway**, audit log `actor_type_source_spoof_attempt` |
+
+For dispatch / canary deploy paths governed by ADR 0035 §Layer 2 (`ApproveAction`), the gateway continues to use the existing `ValidateApproverPermitted` semantics; `actor_type_source` is recorded for audit but does not block dispatch flows.
 
 ## Enforcement inventory (per codex framework, 2026-05-08)
 
@@ -75,25 +113,30 @@ Architectural pin ADRs SHALL include this section so that "where can this behavi
 
 ### Persistent / carried data needed at each emit site
 
-- broker token claim (`caller_type`) — when available via auth context
-- `RUNOPS_ACTOR_TYPE` env var — fallback layer 1
-- per-tool default `CallerType` — fallback layer 2
-- `actor_type_source` audit attribute — emitted alongside (= breadcrumb for forensic audit)
-- `initiating_actor_type` (optional, for daemons) — emitted as separate metadata key
+- broker token claim (`caller_type`) — only used by the gateway-internal emit path; producers do not have access
+- `RUNOPS_ACTOR_TYPE` env var — the **only** producer-side source of `requester_actor_type`
+- `actor_type_source` audit attribute — closed enum `{ broker, env, unknown }`; producer-side emit path can only set `env` or `unknown` (= empty / no value)
+- `initiating_actor_type` (REQUIRED for HIGH severity when `requester_actor_type=workspace-daemon`, optional otherwise) — emitted as separate metadata key
 
-### Bypass candidates (= "where can this go wrong?")
+### Bypass candidates (post-rewrite, codex closure)
 
-- AI agent runtime forgets to set `RUNOPS_ACTOR_TYPE=ai-agent` → tool defaults apply → potentially classified as `human-operator` → 2026-06-01 flip catches some cases via fail-closed but only when actor_type is explicitly empty; tool defaults will silently mis-classify
-- Daemon scheduled an AI-initiated action without `initiating_actor_type` → upstream context lost → AI-vs-AI gate cannot trigger
-- Producer emits `ai-agent` self-attested without broker token → gateway cannot verify; this ADR currently allows it (Axis 4) with audit logging, but a future ADR may forbid
-- Tool reads stale env var from previous invocation in long-lived process → classification drifts over invocations within the same process; tools SHALL re-read env per emit
+| Bypass | Closure |
+|---|---|
+| AI runtime forgets to set `RUNOPS_ACTOR_TYPE=ai-agent` | producer emits empty `requester_actor_type` → ADR 0036 empty-handling → fail-closed after 2026-06-01 (no tool_default silent mis-classification possible) |
+| Daemon-laundered AI action with `initiating_actor_type` missing | gateway fail-closed at ADR 0036 §Carry point 3 for HIGH severity when `requester_actor_type=workspace-daemon` AND `initiating_actor_type` empty |
+| Producer spoofs `actor_type_source=broker` | gateway reclassifies as `self_attested_broker_claim`, fail-closed immediately, audit log `actor_type_source_spoof_attempt` |
+| Tool reads stale env var in long-lived process | tools SHALL re-read env per emit (test coverage required per emit site) |
+| Producer emits `ai-agent` from heuristic | forbidden; tools MUST never write `ai-agent` outside of env (Axis 1.2) |
 
 ### Tests proving coverage (one per enforcement point)
 
 - per-tool: emit DMail with `RUNOPS_ACTOR_TYPE=ai-agent` set → metadata contains `requester_actor_type=ai-agent` + `actor_type_source=env`
-- per-tool: emit without env var, broker token absent → tool default + `actor_type_source=tool_default`
-- per-tool: emit with broker token (mock broker context) → broker `caller_type` + `actor_type_source=broker`
-- gateway: receive metadata with `actor_type_source=env` and `requester_actor_type=ai-agent`, second AI approver clicks → ADR 0035/0036 invariant fires (= integration test layered on top of existing ADR 0036 §Test)
+- per-tool: emit without env var → metadata contains `requester_actor_type=""` + `actor_type_source` either omitted or `unknown` (NO tool_default emission)
+- per-tool: emit with `RUNOPS_ACTOR_TYPE=invalid_value` → producer rejects emission (= refuses to silently coerce to canonical or default)
+- gateway-internal emit: receive authenticated request with broker token → emits with gateway-attached `actor_type_source=broker`
+- gateway: receive DMail with `actor_type_source=broker` from producer → reclassify as `self_attested_broker_claim`, fail-closed for HIGH approval, audit log
+- gateway: receive HIGH severity DMail with `requester_actor_type=workspace-daemon` and `initiating_actor_type` empty → fail-closed
+- gateway: receive metadata with `actor_type_source=env` and `requester_actor_type=ai-agent`, second AI approver clicks → ADR 0035/0036 invariant fires
 
 ## Migration window alignment
 
@@ -109,31 +152,34 @@ ADR 0036's 2026-06-01 fail-closed flip (the future ADR placeholder) SHALL only t
 
 ### Positive
 
-- The four axes are now decided once, not re-invented per tool, eliminating cross-tool drift in classification semantics.
-- `actor_type_source` audit breadcrumb makes self-attested vs broker-verified distinguishable post-hoc, even when the gateway treats both the same in current policy.
-- AI-agent classification is opt-in via explicit env (Axis 2), so existing CLIs do not regress to "everything is suddenly AI" classification when this ADR rolls out.
-- `initiating_actor_type` reserved key allows future tightening (= "daemon-laundered AI requests cannot bypass the AI-vs-AI invariant").
+- The four axes are decided once, not re-invented per tool, eliminating cross-tool drift in classification semantics.
+- `actor_type_source` is **closed enum** `{ broker, env, unknown }` and gateway-attributed for `broker`, eliminating the v1 spoofing path codex (gpt-5.5) flagged.
+- `tool_default` is forbidden, so a forgotten env var produces empty `requester_actor_type` that ADR 0036's empty-handling can fail-close on. The "AI request silently classified as human via tool_default" path is structurally impossible.
+- `initiating_actor_type` is REQUIRED for HIGH severity workspace-daemon emissions, closing the daemon-laundering bypass.
+- AI-agent classification is opt-in via explicit env (Axis 2). Existing human CLIs that do not set the env produce empty (= unknown) emissions, which during the migration window stay human-fallback (ADR 0036 §Migration) and after 2026-06-01 fail-closed.
 
 ### Negative
 
-- Producer rollout is per-tool. Until each tool implements ADR 0037, that tool's emissions remain in ADR 0036 migration-window human fallback.
-- AI agent runtime contract (Axis 2: "SHALL set RUNOPS_ACTOR_TYPE=ai-agent") is operator-discipline, not gateway-enforced. A forgotten env var produces silent mis-classification that only forensic audit catches.
-- `actor_type_source` field broadens the audit log surface; ops dashboards will need to be updated to surface the new dimension.
+- Producer rollout is per-tool. Until each tool implements ADR 0037, that tool's emissions remain empty (= unknown), which during the migration window stays human-fallback. Post-2026-06-01 the same emissions become fail-closed for HIGH severity, so producer rollout is on the critical path before the flip.
+- AI agent runtime contract (Axis 2: "SHALL set RUNOPS_ACTOR_TYPE=ai-agent") is operator-discipline. A forgotten env var produces empty `requester_actor_type`. Post-2026-06-01 this fail-closes HIGH approvals, surfacing the discipline gap loudly rather than silently mis-classifying.
+- `actor_type_source` field broadens the audit log surface; ops dashboards will need to be updated to surface the new dimension and the new spoof-attempt audit event.
 
 ### Neutral
 
 - ADR 0036 is NOT superseded. ADR 0037 provides the producer-side counterpart of ADR 0036's gateway-side enforcement. The two are paired.
-- Per-tool defaults are explicitly delegated to per-tool ADRs (see §Per-tool ADR placeholder). This ADR fixes the framework, not each tool's choice.
-- A future ADR (0038 candidate) will revisit (a) broker-only `ai-agent` classification and (b) ADR 0036 fail-closed flip verification criteria. ADR 0037 deliberately does not pin these so the rollout cadence remains flexible.
+- Per-tool ADRs (see §Per-tool ADR placeholder) declare emit site path + broker participation + `initiating_actor_type` participation. They do NOT declare per-tool defaults (this ADR forbids the concept).
+- A future ADR (0038 candidate) will revisit (a) broker-only `ai-agent` classification (= even `actor_type_source=env` with `ai-agent` may require broker provenance) and (b) ADR 0036 fail-closed flip verification criteria for the 2026-06-01 trigger. The 0038 set is genuinely deferrable because the v2 of this ADR has eliminated the silent-bypass paths that made v1 "0038 dependent".
 
 ## Per-tool ADR placeholder
 
 Each producing tool SHALL ship a per-tool ADR after this one is Accepted, declaring:
 
-- the tool's per-tool default `CallerType` (Axis 1.3)
 - the tool's emit site path (= row in §Enforcement inventory)
 - whether the tool participates in the broker token path (Axis 1.1)
-- whether the tool emits `initiating_actor_type` (Axis 3)
+- whether the tool emits `initiating_actor_type` (Axis 3) — REQUIRED for any tool that may emit HIGH severity convergence DMails as `workspace-daemon`
+- the tool's behavior when `RUNOPS_ACTOR_TYPE` is set to a non-canonical value (= reject the emission per Axis 1)
+
+**No per-tool defaults are permitted.** Per Axis 1, if neither broker context nor a canonical env value is available, the producer emits empty `requester_actor_type` and the gateway handles via ADR 0036 §Carry point 3.
 
 | Tool | Per-tool ADR | Status |
 |---|---|---|
