@@ -52,7 +52,7 @@ func NewBrokerDependencies(ctx context.Context, cfg *BrokerConfig, projectRegist
 		return nil, ErrBrokerDependenciesNilProjectRegistry
 	}
 
-	keyFetcher, err := secret.NewFilePrivateKeyFetcher(cfg.GitHubAppPrivateKeyPath)
+	keyFetcher, err := newPrivateKeyFetcher(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("composition: build private key fetcher: %w", err)
 	}
@@ -103,6 +103,21 @@ func NewBrokerDependencies(ctx context.Context, cfg *BrokerConfig, projectRegist
 	}, nil
 }
 
+// newPrivateKeyFetcher selects between the file-based and Secret
+// Manager-based fetcher per the BrokerConfig env-var split (Phase
+// 2b-2-2). LoadBrokerConfig already enforces "exactly one source",
+// so this function asserts the same invariant defensively.
+func newPrivateKeyFetcher(ctx context.Context, cfg *BrokerConfig) (secret.PrivateKeyFetcher, error) {
+	switch {
+	case cfg.GitHubAppPrivateKeySecretName != "":
+		return secret.NewSecretManagerPrivateKeyFetcher(ctx, cfg.GitHubAppPrivateKeySecretName)
+	case cfg.GitHubAppPrivateKeyPath != "":
+		return secret.NewFilePrivateKeyFetcher(cfg.GitHubAppPrivateKeyPath)
+	default:
+		return nil, ErrBrokerDependenciesPrivateKeySourceMissing
+	}
+}
+
 // cachedBroker decorates *githubadapter.InstallationTokenBroker with
 // the Phase 2a in-memory token cache. Same (project_id, tool,
 // actor.type, actor.user_email) tuples produce the same cache key,
@@ -136,6 +151,7 @@ func cacheKey(req port.BrokerRequest, actor domain.BrokerActor) string {
 
 // Sentinel errors raised by NewBrokerDependencies.
 var (
-	ErrBrokerDependenciesNilConfig          = errors.New("composition: BrokerConfig must be non-nil")
-	ErrBrokerDependenciesNilProjectRegistry = errors.New("composition: ProjectRegistry must be non-nil")
+	ErrBrokerDependenciesNilConfig               = errors.New("composition: BrokerConfig must be non-nil")
+	ErrBrokerDependenciesNilProjectRegistry      = errors.New("composition: ProjectRegistry must be non-nil")
+	ErrBrokerDependenciesPrivateKeySourceMissing = errors.New("composition: neither GitHubAppPrivateKeyPath nor GitHubAppPrivateKeySecretName is set")
 )
