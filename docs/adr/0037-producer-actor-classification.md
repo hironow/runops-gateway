@@ -1,7 +1,7 @@
 # 0037. Producer-side actor type classification (extends ADR 0036, refs#0011)
 
 **Date:** 2026-05-08
-**Status:** Proposed
+**Status:** Accepted
 
 ## Context
 
