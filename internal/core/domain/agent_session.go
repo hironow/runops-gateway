@@ -20,17 +20,17 @@ import (
 // drifts away from the registered value, even if the SessionID is
 // otherwise valid.
 type AgentSession struct {
-	SessionID         string
-	WorkspaceDaemonSA string
-	ProjectID         string
-	Tool              Tool
-	IssuedAt          time.Time
-	ExpiresAt         time.Time
+	SessionID         string    `firestore:"session_id"          json:"session_id"`
+	WorkspaceDaemonSA string    `firestore:"workspace_daemon_sa" json:"workspace_daemon_sa"`
+	ProjectID         string    `firestore:"project_id"          json:"project_id"`
+	Tool              Tool      `firestore:"tool"                json:"tool"`
+	IssuedAt          time.Time `firestore:"issued_at"           json:"issued_at"`
+	ExpiresAt         time.Time `firestore:"expires_at"          json:"expires_at"`
 	// RevokedAt is non-nil when the session has been explicitly
 	// revoked. Any non-nil value (regardless of whether it is in
 	// the past or future) means "revoked" — the field stores the
 	// audit timestamp, not a future-effective revocation date.
-	RevokedAt *time.Time
+	RevokedAt *time.Time `firestore:"revoked_at,omitempty" json:"revoked_at,omitempty"`
 }
 
 // NewAgentSession returns a fresh session with a random 32-char
