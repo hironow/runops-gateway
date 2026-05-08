@@ -54,6 +54,16 @@ rules:
       # is functionally equivalent: any code path that mints
       # installation tokens must import this package, so flagging
       # the import covers all use sites without parsing call sites.
+      - pattern: import "github.com/google/go-github/v84/github"
+      - pattern: import "github.com/google/go-github/v83/github"
+      - pattern: import "github.com/google/go-github/v82/github"
+      - pattern: import "github.com/google/go-github/v81/github"
+      - pattern: import "github.com/google/go-github/v80/github"
+      - pattern: import "github.com/google/go-github/v79/github"
+      - pattern: import "github.com/google/go-github/v78/github"
+      - pattern: import "github.com/google/go-github/v77/github"
+      - pattern: import "github.com/google/go-github/v76/github"
+      - pattern: import "github.com/google/go-github/v75/github"
       - pattern: import "github.com/google/go-github/v74/github"
       - pattern: import "github.com/google/go-github/v73/github"
       - pattern: import "github.com/google/go-github/v72/github"
