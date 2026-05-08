@@ -465,6 +465,48 @@ func (h *InteractiveHandler) handleApprovalAction(traceCtx context.Context, acti
 		return
 	}
 
+	// ADR 0036 §Carry point 3: actor-type validation. Reject unknown
+	// non-empty RequesterActorType values fail-closed; reject AI-vs-AI
+	// per ADR 0035 invariant. Both fire BEFORE the consumed-token check
+	// so a malformed / disallowed click does not waste the one-shot token.
+	if av.RequesterActorType != "" && !isCanonicalCallerType(av.RequesterActorType) {
+		slog.Warn("approval_actor_type_invalid",
+			"raw_value", av.RequesterActorType,
+			"clicker", clickerUserID,
+			"parent", av.ParentIdempotencyKey)
+		span.SetStatus(codes.Error, "approval_actor_type_invalid")
+		span.End()
+		h.goAsync(func() {
+			ctx, cancel := context.WithTimeout(traceCtx, 30*time.Second)
+			defer cancel()
+			if err := h.notifier.SendEphemeral(ctx, target, clickerUserID,
+				"🚫 invalid actor type、 承認を保留します (ADR 0036)"); err != nil {
+				slog.Error("approval invalid-actor ephemeral failed", "error", err)
+			}
+		})
+		return
+	}
+	clickerActorType := ClassifyApproverActorType(clickerUserID, h.aiAgentBotUserIDs)
+	synthetic := domain.ApprovalRequest{RequesterActorType: domain.CallerType(av.RequesterActorType)}
+	if vErr := domain.ValidateApproverPermitted(synthetic, clickerActorType); vErr != nil {
+		slog.Warn("ai_approves_ai_attempt",
+			"approver_id", clickerUserID,
+			"requester_actor", av.RequesterActorType,
+			"approver_actor", string(clickerActorType),
+			"parent", av.ParentIdempotencyKey)
+		span.SetStatus(codes.Error, "ai_approves_ai_attempt")
+		span.End()
+		h.goAsync(func() {
+			ctx, cancel := context.WithTimeout(traceCtx, 30*time.Second)
+			defer cancel()
+			if err := h.notifier.SendEphemeral(ctx, target, clickerUserID,
+				"🚫 AI agent は AI agent の承認操作はできません (ADR 0035)"); err != nil {
+				slog.Error("approval ai-vs-ai ephemeral failed", "error", err)
+			}
+		})
+		return
+	}
+
 	if action.ActionID == "approval_deny" {
 		span.SetAttributes(attribute.String("approval.outcome", "denied"))
 		span.End()
@@ -517,12 +559,14 @@ func (h *InteractiveHandler) handleApprovalAction(traceCtx context.Context, acti
 		IdempotencyKey: av.ParentIdempotencyKey + "/approved-by-" + clickerUserID,
 		Body:           fmt.Sprintf("HIGH severity approval granted by <@%s> at unix=%d", clickerUserID, time.Now().Unix()),
 		Metadata: map[string]string{
-			"parent_idempotency_key": av.ParentIdempotencyKey,
-			"original_requester_id":  av.OriginalRequesterID,
-			"approver_id":            clickerUserID,
-			"slack_channel_id":       target.ChannelID,
-			"slack_thread_ts":        target.ThreadTS,
-			"approval_decision":      "approved",
+			"parent_idempotency_key":               av.ParentIdempotencyKey,
+			"original_requester_id":                av.OriginalRequesterID,
+			"approver_id":                          clickerUserID,
+			"slack_channel_id":                     target.ChannelID,
+			"slack_thread_ts":                      target.ThreadTS,
+			"approval_decision":                    "approved",
+			domain.MetadataKeyRequesterActorType:   av.RequesterActorType,
+			"approver_actor_type":                  string(clickerActorType),
 		},
 	}
 
@@ -624,4 +668,20 @@ func firstNonEmpty(a, b string) string {
 		return a
 	}
 	return b
+}
+
+// isCanonicalCallerType reports whether s matches one of the four
+// domain.CallerType enum strings. Empty string is also accepted because
+// ADR 0036's migration window treats absence as CallerHumanOperator.
+// Used by handleApprovalAction to fail-closed on unknown values.
+func isCanonicalCallerType(s string) bool {
+	switch domain.CallerType(s) {
+	case "",
+		domain.CallerHumanOperator,
+		domain.CallerGatewayService,
+		domain.CallerAIAgent,
+		domain.CallerWorkspaceDaemon:
+		return true
+	}
+	return false
 }

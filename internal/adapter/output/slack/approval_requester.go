@@ -127,6 +127,14 @@ func (r *ApprovalRequester) buildButtonValues(mail domain.DMail) (string, string
 		"body_digest":            digest,
 		"issued_at":              0, // ID is in parent_idempotency_key; issued_at exists for replay-binding only
 	}
+	// ADR 0036 §Carry point 2: surface the producer-emitted requester actor
+	// type into the button payload so handleApprovalAction can validate the
+	// approver against it on click. Empty / absent metadata is preserved as
+	// empty string and treated as CallerHumanOperator downstream during the
+	// migration window.
+	if rat := mail.Metadata[domain.MetadataKeyRequesterActorType]; rat != "" {
+		value["requester_actor_type"] = rat
+	}
 	raw, err := json.Marshal(value)
 	if err != nil {
 		return "", "", err
