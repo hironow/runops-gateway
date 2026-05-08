@@ -549,6 +549,195 @@ func TestInteractiveHandler_ApprovalDeny_DoesNotPublish(t *testing.T) {
 	}
 }
 
+// TestInteractiveHandler_ApprovalApprove_RejectsAIvsAI confirms ADR 0036
+// §Carry point 3: when both the requester (per av.RequesterActorType) and
+// the approver (per SLACK_AI_AGENT_BOT_USER_IDS classification) are AI
+// agents, the ack DMail MUST NOT be published.
+func TestInteractiveHandler_ApprovalApprove_RejectsAIvsAI(t *testing.T) {
+	secret := "test-secret"
+	mock := newMockUseCase()
+	disp := &recordedDispatchUseCase{}
+	consumed := state.NewMemoryConsumedStore(time.Hour)
+	pub := &recordingApprovalPublisher{}
+	handler := NewInteractiveHandler(mock, disp, testNotifier, consumed, secret).
+		WithApprovalPublisher(pub).
+		WithAIAgentBotUserIDs([]string{"B_AI_BOT_APPROVER"})
+
+	av := approvalActionValue{
+		ParentIdempotencyKey: "parent-ai-001",
+		OriginalRequesterID:  "U_ORIG_AI",
+		Source:               "amadeus",
+		Target:               "sightjack",
+		BodyDigest:           "abcd1234deadbeef",
+		IssuedAt:             time.Now().Unix(),
+		RequesterActorType:   string(domain.CallerAIAgent),
+	}
+	payload := interactivePayload{}
+	payload.User.ID = "B_AI_BOT_APPROVER" // enrolled AI agent — different from OriginalRequester so 4-eyes passes
+	payload.ResponseURL = "https://hooks.slack.com/x"
+	payload.Channel.ID = "C_APR"
+	payload.Message.TS = "1700000000.000050"
+	payload.Actions = []interactiveAction{
+		{ActionID: "approval_approve", Value: makeApprovalPayload(t, av)},
+	}
+	payloadBytes, _ := json.Marshal(payload)
+
+	req := buildValidRequest(t, secret, string(payloadBytes))
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	time.Sleep(80 * time.Millisecond)
+	if got := pub.snapshot(); len(got) != 0 {
+		t.Errorf("AI-vs-AI must not publish ack; got %d (ADR 0036 §Carry point 3)", len(got))
+	}
+}
+
+// TestInteractiveHandler_ApprovalApprove_RejectsUnknownActorType confirms
+// ADR 0036 §Carry point 3: unknown non-empty RequesterActorType strings
+// are rejected fail-closed (no ack publish).
+func TestInteractiveHandler_ApprovalApprove_RejectsUnknownActorType(t *testing.T) {
+	secret := "test-secret"
+	mock := newMockUseCase()
+	disp := &recordedDispatchUseCase{}
+	consumed := state.NewMemoryConsumedStore(time.Hour)
+	pub := &recordingApprovalPublisher{}
+	handler := NewInteractiveHandler(mock, disp, testNotifier, consumed, secret).WithApprovalPublisher(pub)
+
+	av := approvalActionValue{
+		ParentIdempotencyKey: "parent-unk-001",
+		OriginalRequesterID:  "U_ORIG",
+		Source:               "amadeus",
+		Target:               "sightjack",
+		BodyDigest:           "abcd1234deadbeef",
+		IssuedAt:             time.Now().Unix(),
+		RequesterActorType:   "rogue-not-a-canonical-value",
+	}
+	payload := interactivePayload{}
+	payload.User.ID = "U_APPROVER"
+	payload.ResponseURL = "https://hooks.slack.com/x"
+	payload.Channel.ID = "C_APR"
+	payload.Message.TS = "1700000000.000050"
+	payload.Actions = []interactiveAction{
+		{ActionID: "approval_approve", Value: makeApprovalPayload(t, av)},
+	}
+	payloadBytes, _ := json.Marshal(payload)
+
+	req := buildValidRequest(t, secret, string(payloadBytes))
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	time.Sleep(80 * time.Millisecond)
+	if got := pub.snapshot(); len(got) != 0 {
+		t.Errorf("unknown actor type must not publish ack; got %d (ADR 0036 fail-closed)", len(got))
+	}
+}
+
+// TestInteractiveHandler_ApprovalApprove_AIRequester_HumanApprover_Publishes
+// confirms the narrowing rule: AI requester paired with a human approver
+// passes the ADR 0035 invariant (only AI-vs-AI is rejected). The ack
+// DMail metadata SHOULD include both actor types per ADR 0036 §Carry point 4.
+func TestInteractiveHandler_ApprovalApprove_AIRequester_HumanApprover_Publishes(t *testing.T) {
+	secret := "test-secret"
+	mock := newMockUseCase()
+	disp := &recordedDispatchUseCase{}
+	consumed := state.NewMemoryConsumedStore(time.Hour)
+	pub := &recordingApprovalPublisher{}
+	handler := NewInteractiveHandler(mock, disp, testNotifier, consumed, secret).WithApprovalPublisher(pub)
+
+	av := approvalActionValue{
+		ParentIdempotencyKey: "parent-mixed-001",
+		OriginalRequesterID:  "U_ORIG_AI",
+		Source:               "amadeus",
+		Target:               "sightjack",
+		BodyDigest:           "abcd1234deadbeef",
+		IssuedAt:             time.Now().Unix(),
+		RequesterActorType:   string(domain.CallerAIAgent),
+	}
+	payload := interactivePayload{}
+	payload.User.ID = "U_HUMAN_APPROVER"
+	payload.ResponseURL = "https://hooks.slack.com/x"
+	payload.Channel.ID = "C_APR"
+	payload.Message.TS = "1700000000.000050"
+	payload.Actions = []interactiveAction{
+		{ActionID: "approval_approve", Value: makeApprovalPayload(t, av)},
+	}
+	payloadBytes, _ := json.Marshal(payload)
+
+	req := buildValidRequest(t, secret, string(payloadBytes))
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) && len(pub.snapshot()) == 0 {
+		time.Sleep(10 * time.Millisecond)
+	}
+	mails := pub.snapshot()
+	if len(mails) != 1 {
+		t.Fatalf("expected 1 ack, got %d", len(mails))
+	}
+	if mails[0].Metadata[domain.MetadataKeyRequesterActorType] != string(domain.CallerAIAgent) {
+		t.Errorf("ack metadata missing requester_actor_type=ai-agent: %v (ADR 0036 §Carry point 4)", mails[0].Metadata)
+	}
+	if mails[0].Metadata["approver_actor_type"] != string(domain.CallerHumanOperator) {
+		t.Errorf("ack metadata missing approver_actor_type=human-operator: %v (ADR 0036 §Carry point 4)", mails[0].Metadata)
+	}
+}
+
+// TestInteractiveHandler_ApprovalApprove_LegacyEmpty_Publishes confirms
+// the migration window (ADR 0036 §Migration): empty RequesterActorType
+// is treated as CallerHumanOperator and passes the gate.
+func TestInteractiveHandler_ApprovalApprove_LegacyEmpty_Publishes(t *testing.T) {
+	secret := "test-secret"
+	mock := newMockUseCase()
+	disp := &recordedDispatchUseCase{}
+	consumed := state.NewMemoryConsumedStore(time.Hour)
+	pub := &recordingApprovalPublisher{}
+	handler := NewInteractiveHandler(mock, disp, testNotifier, consumed, secret).WithApprovalPublisher(pub)
+
+	av := approvalActionValue{
+		ParentIdempotencyKey: "parent-legacy-001",
+		OriginalRequesterID:  "U_ORIG",
+		Source:               "amadeus",
+		Target:               "sightjack",
+		BodyDigest:           "abcd1234deadbeef",
+		IssuedAt:             time.Now().Unix(),
+		// RequesterActorType: "" (legacy producer, ADR 0036 migration)
+	}
+	payload := interactivePayload{}
+	payload.User.ID = "U_APPROVER"
+	payload.ResponseURL = "https://hooks.slack.com/x"
+	payload.Channel.ID = "C_APR"
+	payload.Message.TS = "1700000000.000050"
+	payload.Actions = []interactiveAction{
+		{ActionID: "approval_approve", Value: makeApprovalPayload(t, av)},
+	}
+	payloadBytes, _ := json.Marshal(payload)
+
+	req := buildValidRequest(t, secret, string(payloadBytes))
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) && len(pub.snapshot()) == 0 {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := pub.snapshot(); len(got) != 1 {
+		t.Errorf("legacy empty actor type must still publish during migration window; got %d (ADR 0036 §Migration)", len(got))
+	}
+}
+
 func TestInteractiveHandler_DispatchApprove_RejectsReplay(t *testing.T) {
 	// given — same dispatchActionValue clicked twice (button replay or
 	// re-fired by a network retry). Second click must NOT trigger a second

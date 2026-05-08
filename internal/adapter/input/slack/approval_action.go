@@ -18,6 +18,13 @@ type approvalActionValue struct {
 	Target               string `json:"target"`                // 元 D-Mail の target (e.g. "sightjack")
 	BodyDigest           string `json:"body_digest"`           // SHA-256 prefix of original body — tamper guard
 	IssuedAt             int64  `json:"issued_at"`
+	// RequesterActorType is the actor type of the original requester
+	// (per ADR 0036 §Carry point 2). Empty value is treated as
+	// CallerHumanOperator during the migration window. Producers SHOULD
+	// emit a canonical CallerType string ("human-operator" / "ai-agent" /
+	// "gateway-service" / "workspace-daemon"). Unknown non-empty values
+	// are rejected by handleApprovalAction.
+	RequesterActorType string `json:"requester_actor_type,omitempty"`
 }
 
 // ApprovalBodyDigest returns the digest used in approvalActionValue.BodyDigest

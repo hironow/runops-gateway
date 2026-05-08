@@ -76,6 +76,7 @@ auth_boundary:
   - "docs/adr/0033-*"
   - "docs/adr/0034-*"
   - "docs/adr/0035-*"
+  - "docs/adr/0036-*"
 
 schema:
   # D-Mail / event / persistence schema. Forward-compatibility matters
