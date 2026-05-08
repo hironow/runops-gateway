@@ -44,7 +44,7 @@ type fakeAuthenticator struct {
 	err   error
 }
 
-func (f *fakeAuthenticator) Authenticate(_ *http.Request) (domain.BrokerActor, error) {
+func (f *fakeAuthenticator) Authenticate(_ *http.Request, _ string, _ domain.Tool) (domain.BrokerActor, error) {
 	return f.actor, f.err
 }
 

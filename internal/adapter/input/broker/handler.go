@@ -38,11 +38,18 @@ type BrokerService interface {
 }
 
 // Authenticator turns the inbound HTTP request into a verified
-// domain.BrokerActor. Phase 3a accepts any Authenticator;
-// Phase 3b wires the 4-caller chain (cloudrun_iam /
-// workload_identity / gcloud_identity / delegated_agent).
+// domain.BrokerActor. The signature accepts the schema-validated
+// projectID + tool from the request body so the AI agent verifier
+// (Phase 2d-2a's DelegatedAgentVerifier) can pin the
+// (workspace_daemon_sa, project_id, tool) triple at verify time
+// without re-parsing the body. The other 3 verifiers ignore these
+// arguments — they identify the caller solely from the bearer.
+//
+// Phase 3a wired a single Authenticator; Phase 3b will wire the
+// 4-caller chain (cloudrun_iam / workload_identity /
+// gcloud_identity / delegated_agent) behind a ChainAuthenticator.
 type Authenticator interface {
-	Authenticate(r *http.Request) (domain.BrokerActor, error)
+	Authenticate(r *http.Request, projectID string, tool domain.Tool) (domain.BrokerActor, error)
 }
 
 // Handler is the http.Handler for POST /broker/token.
@@ -109,7 +116,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	actor, err := h.auth.Authenticate(r)
+	actor, err := h.auth.Authenticate(r, typed.ProjectID, domain.Tool(typed.Tool))
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, "authentication failed")
 		return
