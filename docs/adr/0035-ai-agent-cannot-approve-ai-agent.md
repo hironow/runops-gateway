@@ -1,7 +1,7 @@
 # 0035. AI agent cannot approve AI agent (refs#0011)
 
 **Date:** 2026-05-08
-**Status:** Proposed
+**Status:** Accepted
 
 ## Context
 
