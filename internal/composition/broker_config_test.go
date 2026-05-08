@@ -69,7 +69,7 @@ func TestLoadBrokerConfig_RejectsMissingRequiredFields(t *testing.T) {
 		"missing gateway SAs":      {removeKey: "BROKER_GATEWAY_SERVICE_SAS", wantSentinel: composition.ErrBrokerConfigMissingGatewayServiceSAs},
 		"missing workspace SAs":    {removeKey: "BROKER_WORKSPACE_DAEMON_SAS", wantSentinel: composition.ErrBrokerConfigMissingWorkspaceDaemonSAs},
 		"missing app id":           {removeKey: "GITHUB_APP_ID", wantSentinel: composition.ErrBrokerConfigMissingGitHubAppID},
-		"missing private key path": {removeKey: "GITHUB_APP_PRIVATE_KEY_PATH", wantSentinel: composition.ErrBrokerConfigMissingPrivateKeyPath},
+		"missing private key path": {removeKey: "GITHUB_APP_PRIVATE_KEY_PATH", wantSentinel: composition.ErrBrokerConfigMissingPrivateKeySource},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -169,6 +169,39 @@ func TestLoadBrokerConfig_FirestoreFlagParsing(t *testing.T) {
 				t.Errorf("flag=%q got %v, want %v", raw, cfg.UseFirestoreRegistry, want)
 			}
 		})
+	}
+}
+
+// Setting both GITHUB_APP_PRIVATE_KEY_PATH and
+// GITHUB_APP_PRIVATE_KEY_SECRET_NAME is a misconfiguration —
+// production must pick exactly one source so the deployment intent
+// is unambiguous.
+func TestLoadBrokerConfig_RejectsBothPrivateKeySourcesSet(t *testing.T) {
+	envSet(t, happyEnv())
+	t.Setenv("GITHUB_APP_PRIVATE_KEY_SECRET_NAME", "projects/proj/secrets/key/versions/latest")
+	_, err := composition.LoadBrokerConfig()
+	if !errors.Is(err, composition.ErrBrokerConfigPrivateKeySourceConflict) {
+		t.Errorf("want ErrBrokerConfigPrivateKeySourceConflict, got %v", err)
+	}
+}
+
+// SecretManager-only config: PATH unset, SECRET_NAME set → accepted
+// and the resolved Config carries the secret name.
+func TestLoadBrokerConfig_AcceptsSecretManagerOnly(t *testing.T) {
+	env := happyEnv()
+	delete(env, "GITHUB_APP_PRIVATE_KEY_PATH")
+	envSet(t, env)
+	t.Setenv("GITHUB_APP_PRIVATE_KEY_PATH", "")
+	t.Setenv("GITHUB_APP_PRIVATE_KEY_SECRET_NAME", "projects/proj/secrets/key/versions/latest")
+	cfg, err := composition.LoadBrokerConfig()
+	if err != nil {
+		t.Fatalf("LoadBrokerConfig: %v", err)
+	}
+	if cfg.GitHubAppPrivateKeySecretName != "projects/proj/secrets/key/versions/latest" {
+		t.Errorf("GitHubAppPrivateKeySecretName = %q", cfg.GitHubAppPrivateKeySecretName)
+	}
+	if cfg.GitHubAppPrivateKeyPath != "" {
+		t.Errorf("GitHubAppPrivateKeyPath must be empty, got %q", cfg.GitHubAppPrivateKeyPath)
 	}
 }
 

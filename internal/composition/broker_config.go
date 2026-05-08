@@ -48,10 +48,14 @@ type BrokerConfig struct {
 	// GitHubAppID is the numeric GitHub App identifier.
 	GitHubAppID int64
 	// GitHubAppPrivateKeyPath points at a PEM-encoded RSA private
-	// key on disk. Phase 2b-2-2 will add a Secret Manager
-	// alternative; for Phase 3b-3a, the file path is the only
-	// supported sourcing mode.
+	// key on disk. Mutually exclusive with
+	// GitHubAppPrivateKeySecretName — exactly one must be set.
 	GitHubAppPrivateKeyPath string
+	// GitHubAppPrivateKeySecretName is the Cloud Secret Manager
+	// resource name for the GitHub App private key (Phase 2b-2-2b).
+	// Format: projects/<project>/secrets/<secret>/versions/<version>.
+	// Mutually exclusive with GitHubAppPrivateKeyPath.
+	GitHubAppPrivateKeySecretName string
 	// UseFirestoreRegistry selects between the Firestore-backed
 	// agent session registry (production) and the in-memory
 	// registry (dev / staging). Default is in-memory until Phase
@@ -99,20 +103,25 @@ func LoadBrokerConfig() (*BrokerConfig, error) {
 	}
 
 	keyPath := strings.TrimSpace(os.Getenv("GITHUB_APP_PRIVATE_KEY_PATH"))
-	if keyPath == "" {
-		return nil, ErrBrokerConfigMissingPrivateKeyPath
+	keySecret := strings.TrimSpace(os.Getenv("GITHUB_APP_PRIVATE_KEY_SECRET_NAME"))
+	switch {
+	case keyPath == "" && keySecret == "":
+		return nil, ErrBrokerConfigMissingPrivateKeySource
+	case keyPath != "" && keySecret != "":
+		return nil, ErrBrokerConfigPrivateKeySourceConflict
 	}
 
 	return &BrokerConfig{
-		Audience:                audience,
-		GoogleSTSIssuer:         issuer,
-		GoogleJWKSURL:           jwksURL,
-		OperatorEmails:          parseCSVNonEmpty(os.Getenv("BROKER_OPERATOR_EMAILS")),
-		GatewayServiceSAs:       gatewaySAs,
-		WorkspaceDaemonSAs:      workspaceSAs,
-		GitHubAppID:             appID,
-		GitHubAppPrivateKeyPath: keyPath,
-		UseFirestoreRegistry:    parseBool(os.Getenv("BROKER_USE_FIRESTORE_REGISTRY")),
+		Audience:                      audience,
+		GoogleSTSIssuer:               issuer,
+		GoogleJWKSURL:                 jwksURL,
+		OperatorEmails:                parseCSVNonEmpty(os.Getenv("BROKER_OPERATOR_EMAILS")),
+		GatewayServiceSAs:             gatewaySAs,
+		WorkspaceDaemonSAs:            workspaceSAs,
+		GitHubAppID:                   appID,
+		GitHubAppPrivateKeyPath:       keyPath,
+		GitHubAppPrivateKeySecretName: keySecret,
+		UseFirestoreRegistry:          parseBool(os.Getenv("BROKER_USE_FIRESTORE_REGISTRY")),
 	}, nil
 }
 
@@ -159,4 +168,6 @@ var (
 	ErrBrokerConfigMissingGitHubAppID        = errors.New("composition: GITHUB_APP_ID is required")
 	ErrBrokerConfigInvalidGitHubAppID        = errors.New("composition: GITHUB_APP_ID must be a positive integer")
 	ErrBrokerConfigMissingPrivateKeyPath     = errors.New("composition: GITHUB_APP_PRIVATE_KEY_PATH is required")
+	ErrBrokerConfigMissingPrivateKeySource   = errors.New("composition: exactly one of GITHUB_APP_PRIVATE_KEY_PATH or GITHUB_APP_PRIVATE_KEY_SECRET_NAME is required")
+	ErrBrokerConfigPrivateKeySourceConflict  = errors.New("composition: GITHUB_APP_PRIVATE_KEY_PATH and GITHUB_APP_PRIVATE_KEY_SECRET_NAME are mutually exclusive")
 )

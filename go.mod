@@ -6,11 +6,13 @@ require (
 	cloud.google.com/go/firestore v1.22.0
 	cloud.google.com/go/pubsub/v2 v2.6.0
 	cloud.google.com/go/run v1.20.0
+	cloud.google.com/go/secretmanager v1.20.0
 	github.com/MicahParks/keyfunc/v3 v3.8.0
 	github.com/bradleyfalzon/ghinstallation/v2 v2.18.0
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/go-github/v84 v84.0.0
+	github.com/googleapis/gax-go/v2 v2.22.0
 	github.com/spf13/cobra v1.10.2
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.68.0
 	go.opentelemetry.io/otel v1.43.0
@@ -44,7 +46,6 @@ require (
 	github.com/google/s2a-go v0.1.9 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.15 // indirect
-	github.com/googleapis/gax-go/v2 v2.22.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.28.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
