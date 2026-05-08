@@ -559,14 +559,14 @@ func (h *InteractiveHandler) handleApprovalAction(traceCtx context.Context, acti
 		IdempotencyKey: av.ParentIdempotencyKey + "/approved-by-" + clickerUserID,
 		Body:           fmt.Sprintf("HIGH severity approval granted by <@%s> at unix=%d", clickerUserID, time.Now().Unix()),
 		Metadata: map[string]string{
-			"parent_idempotency_key":               av.ParentIdempotencyKey,
-			"original_requester_id":                av.OriginalRequesterID,
-			"approver_id":                          clickerUserID,
-			"slack_channel_id":                     target.ChannelID,
-			"slack_thread_ts":                      target.ThreadTS,
-			"approval_decision":                    "approved",
-			domain.MetadataKeyRequesterActorType:   av.RequesterActorType,
-			"approver_actor_type":                  string(clickerActorType),
+			"parent_idempotency_key":             av.ParentIdempotencyKey,
+			"original_requester_id":              av.OriginalRequesterID,
+			"approver_id":                        clickerUserID,
+			"slack_channel_id":                   target.ChannelID,
+			"slack_thread_ts":                    target.ThreadTS,
+			"approval_decision":                  "approved",
+			domain.MetadataKeyRequesterActorType: av.RequesterActorType,
+			"approver_actor_type":                string(clickerActorType),
 		},
 	}
 
