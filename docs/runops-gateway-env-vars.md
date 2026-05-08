@@ -27,6 +27,43 @@ runops-gateway を構成する 4 つの binary (`cmd/server` / `cmd/runops` / `c
 | `OTEL_BSP_SCHEDULE_DELAY` | — | — | BatchSpanProcessor flush 間隔 (ms)。 Cloud Run の SIGTERM ロス対策で `2000` 推奨 |
 | `GOOGLE_CLOUD_PROJECT` | △ | — | Cloud Run が自動セット。 OTel resource attribute `gcp.project_id` に転用される (PR #21)。 **Cloud Trace OTLP 必須** で、 空だと `InvalidArgument` で span が reject される。 Local Jaeger では空で OK |
 
+### Token broker (#0007)
+
+`POST /broker/token` mount を opt-in 化する env。 `BROKER_AUDIENCE` が空または `ProjectRegistry` 未配線時はマウントせず、 既存 Slack / admin endpoint のみで動作する (Phase 3b-3b-2)。
+
+| 変数 | 必須 | デフォルト | 説明 |
+|---|---|---|---|
+| `BROKER_AUDIENCE` | ✓ (broker 有効化時) | — | 全 caller の identity token の `aud` claim にピンする broker URL。 設定されない限り broker は登録されない |
+| `BROKER_GATEWAY_SERVICE_SAS` | ✓ (broker 有効化時) | — | gateway-service caller の SA email allowlist (CSV)。 空 CSV は ctor 拒否 (= 設定漏れで startup fail) |
+| `BROKER_WORKSPACE_DAEMON_SAS` | ✓ (broker 有効化時) | — | workspace-daemon caller の SA email allowlist (CSV)。 同上、 空は ctor 拒否 |
+| `BROKER_OPERATOR_EMAILS` | — | — | human-operator caller の email allowlist (CSV)。 空 = 全 verified Google ID 受容 (bootstrap config のみ、 production は必須) |
+| `GITHUB_APP_ID` | ✓ (broker 有効化時) | — | GitHub App の数値 ID (positive int64) |
+| `GITHUB_APP_PRIVATE_KEY_PATH` | △ | — | dev / staging で PEM 鍵をマウントするファイルパス。 `GITHUB_APP_PRIVATE_KEY_SECRET_NAME` と排他 |
+| `GITHUB_APP_PRIVATE_KEY_SECRET_NAME` | △ | — | production で Secret Manager から fetch する resource name (`projects/<p>/secrets/<s>/versions/<v>`)。 `GITHUB_APP_PRIVATE_KEY_PATH` と排他 |
+| `BROKER_USE_FIRESTORE_REGISTRY` | — | `false` | `true` / `1` で Firestore-backed agent session registry を選択 (Cloud Run multi-instance 安全)。 `false` (default) で in-memory registry。 `true` 時は `GOOGLE_CLOUD_PROJECT` 必須 |
+| `GOOGLE_STS_ISSUER` | — | `https://accounts.google.com` | 4 verifier すべてが pin する issuer URL |
+| `GOOGLE_JWKS_URL` | — | `https://www.googleapis.com/oauth2/v3/certs` | JWKsVerifier (Phase 2d-2b) が公開鍵を fetch する URL |
+
+#### Production rollout 手順
+
+ADR 0032 の grant matrix と plan v8 §5.5 の token leakage policy に沿って、 4 step:
+
+```bash
+# 1. Secret Manager + Cloud Run IAM binding を作成 (Phase 4-2 IaC)
+cd tofu && tofu apply
+
+# 2. GitHub App private key を out-of-band で upload (Terraform state 外)
+gcloud secrets versions add github-app-private-key --data-file=/path/to/github-app.pem
+
+# 3. Cloud Run service env vars を上記表に従ってセット
+gcloud run services update runops-gateway \
+  --update-env-vars=BROKER_AUDIENCE=https://broker.example.com,BROKER_GATEWAY_SERVICE_SAS=...,BROKER_WORKSPACE_DAEMON_SAS=...,GITHUB_APP_ID=12345,GITHUB_APP_PRIVATE_KEY_SECRET_NAME=projects/proj/secrets/github-app-private-key/versions/latest,BROKER_USE_FIRESTORE_REGISTRY=true
+
+# 4. Re-deploy。 構造化ログ "token broker registered (#0007)" が出れば activation 成功
+```
+
+ロールバック: 上記 env を全て unset すると broker は disable され、 既存 Slack / admin endpoint は影響を受けない (= opt-in pattern)。
+
 ## dmail-receiver / dmail-emitter
 
 ADR 0023 の workspace VM placement で deploy される。 dotfiles 側 `exe/coder/templates/dotfiles-devcontainer/main.tf` の systemd unit が `Environment=...` で attach する。
