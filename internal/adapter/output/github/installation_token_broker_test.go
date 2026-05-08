@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	gogh "github.com/google/go-github/v66/github"
+	gogh "github.com/google/go-github/v84/github"
 
 	"github.com/hironow/runops-gateway/internal/core/domain"
 	"github.com/hironow/runops-gateway/internal/core/port"
