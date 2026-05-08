@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 
+	"cloud.google.com/go/firestore"
+
 	"github.com/hironow/runops-gateway/internal/adapter/output/auth"
 	"github.com/hironow/runops-gateway/internal/adapter/output/cache"
 	githubadapter "github.com/hironow/runops-gateway/internal/adapter/output/github"
@@ -37,19 +39,23 @@ type BrokerDependencies struct {
 }
 
 // NewBrokerDependencies wires every broker-side dependency from the
-// resolved BrokerConfig + the externally-supplied ProjectRegistry
-// (the project registry already exists in the gateway and is
-// shared with the rest of the app).
+// resolved BrokerConfig + the externally-supplied ProjectRegistry +
+// optional firestore.Client.
 //
-// The function reads the GitHub App private key from disk because
-// Phase 2b-2-2 (Secret Manager fetch) has not yet shipped; once
-// it does, the read will move behind a fetcher port.
-func NewBrokerDependencies(ctx context.Context, cfg *BrokerConfig, projectRegistry port.ProjectRegistry) (*BrokerDependencies, error) {
+// firestoreClient may be nil. When cfg.UseFirestoreRegistry is true,
+// the client MUST be non-nil — production callers (cmd/server) are
+// responsible for constructing the client + Close()ing it at
+// shutdown. When UseFirestoreRegistry is false, firestoreClient is
+// ignored and the in-memory agent session registry is used.
+func NewBrokerDependencies(ctx context.Context, cfg *BrokerConfig, projectRegistry port.ProjectRegistry, firestoreClient *firestore.Client) (*BrokerDependencies, error) {
 	if cfg == nil {
 		return nil, ErrBrokerDependenciesNilConfig
 	}
 	if projectRegistry == nil {
 		return nil, ErrBrokerDependenciesNilProjectRegistry
+	}
+	if cfg.UseFirestoreRegistry && firestoreClient == nil {
+		return nil, ErrBrokerDependenciesFirestoreClientRequired
 	}
 
 	keyFetcher, err := newPrivateKeyFetcher(ctx, cfg)
@@ -81,12 +87,21 @@ func NewBrokerDependencies(ctx context.Context, cfg *BrokerConfig, projectRegist
 		return nil, fmt.Errorf("composition: build workload_identity verifier: %w", err)
 	}
 
-	// Phase 2c-2-2 will replace the in-memory registry with the
-	// Firestore impl when cfg.UseFirestoreRegistry is true. Until
-	// then every deployment shares the in-memory variant — fine
-	// for dev / single-instance Cloud Run but unsafe for
-	// multi-instance (the Phase 2c-1 port comment documents this).
-	agentRegistry := registry.NewInMemoryAgentSessionRegistry()
+	// Select the agent session registry implementation per
+	// cfg.UseFirestoreRegistry (Phase 2c-2-2-2). Production +
+	// multi-instance Cloud Run uses the Firestore impl from
+	// Phase 2c-2-2-1; dev / single-instance keeps the in-memory
+	// variant from Phase 2c-2-1.
+	var agentRegistry port.AgentSessionRegistry
+	if cfg.UseFirestoreRegistry {
+		fsRegistry, err := registry.NewFirestoreAgentSessionRegistry(firestoreClient, "")
+		if err != nil {
+			return nil, fmt.Errorf("composition: build firestore agent session registry: %w", err)
+		}
+		agentRegistry = fsRegistry
+	} else {
+		agentRegistry = registry.NewInMemoryAgentSessionRegistry()
+	}
 	delegatedVerifier := auth.NewDelegatedAgentVerifier(cfg.Audience, agentRegistry, nil)
 
 	chain := auth.NewChainAuthenticator(gcloudVerifier, cloudrunVerifier, workloadVerifier, delegatedVerifier)
@@ -154,4 +169,5 @@ var (
 	ErrBrokerDependenciesNilConfig               = errors.New("composition: BrokerConfig must be non-nil")
 	ErrBrokerDependenciesNilProjectRegistry      = errors.New("composition: ProjectRegistry must be non-nil")
 	ErrBrokerDependenciesPrivateKeySourceMissing = errors.New("composition: neither GitHubAppPrivateKeyPath nor GitHubAppPrivateKeySecretName is set")
+	ErrBrokerDependenciesFirestoreClientRequired = errors.New("composition: firestore.Client is required when UseFirestoreRegistry is true")
 )
