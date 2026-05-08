@@ -65,6 +65,14 @@ lint-md:
 fmt:
     gofmt -w .
 
+# Verify code is gofmt-clean WITHOUT modifying files. Used as pre-commit /
+# pre-PR gate so manual struct alignment / spacing drift fails locally
+# before reaching CI's golangci-lint stage. Mirrors the canonical hash
+# bump policy from `tap/refs/scripts/check_substrate_drift.sh`: gofmt
+# 1.26.2's output is the canonical form, and any deviation is rejected.
+fmt-check:
+    @{{ if `gofmt -l . | head -1` == "" { "echo 'gofmt: clean'" } else { "echo 'gofmt: drift detected:' && gofmt -l . && exit 1" } }}
+
 # Build Docker image
 docker-build:
     docker build -t runops-gateway:local .
@@ -136,8 +144,11 @@ trace-view:
 test-scripts:
     go test ./internal/adapter/input/slack/... -run TestNotifyScript -v
 
-# Run all checks (used before commit)
-check: fmt lint lint-md test
+# Run all checks (used before commit). fmt-check (read-only) replaces
+# the prior `fmt` (write) so a stale alignment fails the gate locally
+# instead of silently rewriting and slipping into CI's golangci-lint.
+# To auto-fix locally: `just fmt && just check`.
+check: fmt-check lint lint-md test
 
 # ------------------------------
 # prek (j178/prek) — Rust reimplementation of pre-commit
