@@ -23,10 +23,10 @@ operator が production registry を触る経路が現状無い。
 ## 受入基準
 
 - [x] gateway server (Cloud Run main) に admin route を追加
-  - POST `/admin/projects` — body は Project struct JSON
-  - GET `/admin/projects` — query: `?status=active|archived|all`
-  - GET `/admin/projects/{id}` — show
-  - POST `/admin/projects/{id}/archive` — archive (idempotent)
+    - POST `/admin/projects` — body は Project struct JSON
+    - GET `/admin/projects` — query: `?status=active|archived|all`
+    - GET `/admin/projects/{id}` — show
+    - POST `/admin/projects/{id}/archive` — archive (idempotent)
 - [x] auth: **Bearer token (env-driven、 opt-in、 constant-time 比較)** — 既存 admin auth 前例なしのため新規 strategy を ADR 0030 で確立
 - [x] 内部実装は `port.ProjectRegistry` を直接呼ぶ (SQLite or Firestore は composition root の env で決まる)
 - [x] 4-eyes 不要 (registry mutation は high-severity でない判定)

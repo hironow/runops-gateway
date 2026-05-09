@@ -75,12 +75,12 @@ The previous draft mixed "merge to develop = production candidate" with "deploy 
 A release gate that can be silently weakened by a PR that touches the gate's own implementation defeats the purpose. The gate is itself an `auth-boundary` artifact. To prevent that escape hatch:
 
 - The following paths are **always classified `auth-boundary`** by the auto-detector, regardless of any other diff in the PR:
-  - `.github/workflows/release-gate.yaml`
-  - `.github/workflows/deploy*.yaml` (any deploy workflow)
-  - `.semgrep/rules/release-gate/**`
-  - `.github/CODEOWNERS` lines covering any of the above
-  - `docs/adr/0031-production-deploy-gate-on-develop.md` (this document — superseding requires a new ADR)
-  - **GitHub repository ruleset / branch protection / tag protection IaC**: `tofu/github_repository.tf` and any other Terraform / OpenTofu file declaring `github_repository_ruleset`, `github_branch_protection`, or `github_repository_tag_protection` resources. Without this, a PR that softens the `prod-*` tag protection ruleset can be classified as `routing` and bypass the gate entirely.
+    - `.github/workflows/release-gate.yaml`
+    - `.github/workflows/deploy*.yaml` (any deploy workflow)
+    - `.semgrep/rules/release-gate/**`
+    - `.github/CODEOWNERS` lines covering any of the above
+    - `docs/adr/0031-production-deploy-gate-on-develop.md` (this document — superseding requires a new ADR)
+    - **GitHub repository ruleset / branch protection / tag protection IaC**: `tofu/github_repository.tf` and any other Terraform / OpenTofu file declaring `github_repository_ruleset`, `github_branch_protection`, or `github_repository_tag_protection` resources. Without this, a PR that softens the `prod-*` tag protection ruleset can be classified as `routing` and bypass the gate entirely.
 - Branch protection on `develop` requires the `release-gate` status check to pass; that check itself is implemented under `.github/workflows/release-gate.yaml`, so the loop closes only because the path is in the auto-`auth-boundary` set above and changes there require a second human approver.
 - `CODEOWNERS` for the meta-gate paths must list at least two reviewers; a single reviewer cannot self-approve a gate-weakening PR.
 
@@ -102,10 +102,10 @@ A rollback ledger that allows force-push, delete, or re-creation is not a ledger
 - **Tag protection rule**: GitHub Repository Ruleset matching the pattern `prod-*` denies `delete` and `force-push` to anyone (including admins). The rule cannot be bypassed even with admin override; it has to be removed deliberately, and removing it is itself an `auth-boundary` change (the ruleset IaC paths are listed in the meta-gate above so any softening PR is auto-classified `auth-boundary`).
 - **Tag creation authority**: the same Repository Ruleset restricts `create` on `prod-*` tags to the deploy workflow's identity (a scoped GitHub App or deploy-key-equivalent token). Human operators cannot push `prod-*` tags from their workstations not because of policy alone, but because the GitHub Ruleset rejects the push at the API layer.
 - **Idempotency on retry, fail on conflict**: the deploy workflow's tag-creation step is **retry-safe**:
-  - If the target `prod-<YYYYMMDD>-<sha7>` tag does **not** exist, create it pointing at the expected previous-production commit and proceed.
-  - If the tag **exists and points at the expected previous-production commit**, treat as success (re-entering after a partial failure between tag creation and Cloud Run cutover) and proceed.
-  - If the tag **exists but points at a different commit**, fail loudly and require operator inspection. This catches accidental same-day same-sha clashes (extremely unlikely) and any external tampering before the protection rule was applied.
-  - The "expected previous-production commit" is read from the immutable Cloud Run revision label on the currently-serving revision, not from `docs/deploy-log.md`. The ledger is auxiliary and could be edited; the revision label cannot.
+    - If the target `prod-<YYYYMMDD>-<sha7>` tag does **not** exist, create it pointing at the expected previous-production commit and proceed.
+    - If the tag **exists and points at the expected previous-production commit**, treat as success (re-entering after a partial failure between tag creation and Cloud Run cutover) and proceed.
+    - If the tag **exists but points at a different commit**, fail loudly and require operator inspection. This catches accidental same-day same-sha clashes (extremely unlikely) and any external tampering before the protection rule was applied.
+    - The "expected previous-production commit" is read from the immutable Cloud Run revision label on the currently-serving revision, not from `docs/deploy-log.md`. The ledger is auxiliary and could be edited; the revision label cannot.
 - **SoT for rollback** = protected `prod-*` tag (immutable) + Cloud Run revision label `prod-<sha7>` (immutable on the revision). `docs/deploy-log.md` is an auxiliary human-readable ledger; if the log and the tags ever disagree, the protected tags + revision labels win.
 - The above rules are themselves part of the meta-gate (see "Meta-gate: protecting the gate itself"); changes to the tag protection ruleset, the deploy workflow's tag-creation step, or the IaC defining either are auto-classified `auth-boundary`.
 

@@ -65,7 +65,7 @@ rejects in three cases:
 - `ErrProjectNotFound` → ephemeral "project not registered: <id>"
 - non-active status → ephemeral "project is archived: <id>"
 - registry disabled (handler instantiated without `WithProjectRegistry`)
-  + `--project` supplied → ephemeral "registry disabled" — fail-closed
+    - `--project` supplied → ephemeral "registry disabled" — fail-closed
 
 Validation runs **before** the button payload is built, so an unknown
 project_id never reaches Pub/Sub, never gets stored in a button value
