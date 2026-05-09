@@ -23,7 +23,7 @@ func newTestPendingStore(t *testing.T) (port.PendingStore, func()) {
 	return store, func() { _ = db.Close() }
 }
 
-func samplePending(key string) domain.PendingApproval {
+func sqliteSamplePending(key string) domain.PendingApproval {
 	return domain.PendingApproval{
 		IdempotencyKey:     key,
 		Op:                 domain.PendingOpAdd,
@@ -37,7 +37,7 @@ func TestSQLitePendingStore_CreateThenGet(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	created, err := store.CreateIfNotExists(ctx, samplePending("k1"))
+	created, err := store.CreateIfNotExists(ctx, sqliteSamplePending("k1"))
 	if err != nil {
 		t.Fatalf("CreateIfNotExists: %v", err)
 	}
@@ -64,10 +64,10 @@ func TestSQLitePendingStore_CreateIfNotExists_Idempotent(t *testing.T) {
 	store, cleanup := newTestPendingStore(t)
 	defer cleanup()
 	ctx := context.Background()
-	if _, err := store.CreateIfNotExists(ctx, samplePending("k_idem")); err != nil {
+	if _, err := store.CreateIfNotExists(ctx, sqliteSamplePending("k_idem")); err != nil {
 		t.Fatalf("first Create: %v", err)
 	}
-	existing, err := store.CreateIfNotExists(ctx, samplePending("k_idem"))
+	existing, err := store.CreateIfNotExists(ctx, sqliteSamplePending("k_idem"))
 	if !errors.Is(err, port.ErrPendingAlreadyExists) {
 		t.Fatalf("second Create err = %v, want ErrPendingAlreadyExists", err)
 	}
@@ -89,7 +89,7 @@ func TestSQLitePendingStore_Transition_PendingToApprovedApplied(t *testing.T) {
 	store, cleanup := newTestPendingStore(t)
 	defer cleanup()
 	ctx := context.Background()
-	if _, err := store.CreateIfNotExists(ctx, samplePending("k_apply")); err != nil {
+	if _, err := store.CreateIfNotExists(ctx, sqliteSamplePending("k_apply")); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	now := time.Now().UTC().Truncate(time.Second)
@@ -112,7 +112,7 @@ func TestSQLitePendingStore_Transition_TerminalRejected(t *testing.T) {
 	store, cleanup := newTestPendingStore(t)
 	defer cleanup()
 	ctx := context.Background()
-	if _, err := store.CreateIfNotExists(ctx, samplePending("k_term")); err != nil {
+	if _, err := store.CreateIfNotExists(ctx, sqliteSamplePending("k_term")); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	if err := store.Transition(ctx, "k_term", domain.PendingStatusDenied, nil); err != nil {
@@ -141,7 +141,7 @@ func TestSQLitePendingStore_Transition_AppliedAtValidation(t *testing.T) {
 	store, cleanup := newTestPendingStore(t)
 	defer cleanup()
 	ctx := context.Background()
-	if _, err := store.CreateIfNotExists(ctx, samplePending("k_val")); err != nil {
+	if _, err := store.CreateIfNotExists(ctx, sqliteSamplePending("k_val")); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	// approved_applied without appliedAt must fail
