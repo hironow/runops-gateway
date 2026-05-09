@@ -63,6 +63,7 @@ phonewave outbox に atomic write (temp + rename) する。**
 ```
 
 Legend / 凡例:
+
 - pub: Cloud Pub/Sub publish (synchronous RPC, 50-100ms in asia-northeast1)
 - pull: Cloud Pub/Sub StreamingPull subscriber (gRPC long-lived)
 - DLQ: Dead Letter Queue (max delivery attempts 5)

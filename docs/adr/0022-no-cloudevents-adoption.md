@@ -132,8 +132,8 @@ Pub/Sub message attribute schema を CloudEvents v1.0 に寄せる選択肢を
 
 - [`experiments/2026-05-05_cloudevents-adoption.md`](../../experiments/2026-05-05_cloudevents-adoption.md)
   — 詳細な調査ノート (公式 URL リスト付き)
-- https://cloudevents.io/ — CloudEvents プロジェクト
-- https://github.com/cloudevents/spec/blob/v1.0.2/cloudevents/spec.md — v1.0.2 spec
-- https://pkg.go.dev/github.com/cloudevents/sdk-go/protocol/pubsub/v2 — Go SDK Pub/Sub binding
-- https://github.com/googleapis/google-cloudevents/blob/main/docs/spec/pubsub.md — Google Pub/Sub binding (working draft)
-- https://docs.cloud.google.com/eventarc/docs/cloudevents — Eventarc CloudEvents format
+- <https://cloudevents.io/> — CloudEvents プロジェクト
+- <https://github.com/cloudevents/spec/blob/v1.0.2/cloudevents/spec.md> — v1.0.2 spec
+- <https://pkg.go.dev/github.com/cloudevents/sdk-go/protocol/pubsub/v2> — Go SDK Pub/Sub binding
+- <https://github.com/googleapis/google-cloudevents/blob/main/docs/spec/pubsub.md> — Google Pub/Sub binding (working draft)
+- <https://docs.cloud.google.com/eventarc/docs/cloudevents> — Eventarc CloudEvents format

@@ -19,6 +19,7 @@ installation token を fetch して経路に流す。
 を採用 (hironow 決定 2026-05-06)。
 
 戦略 1 の理由:
+
 - scope 細やか (project 単位 install)
 - audit 強い (GitHub App 単位)
 - token rotation 自動 (installation token は 1 時間)

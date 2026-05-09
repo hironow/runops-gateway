@@ -5,6 +5,7 @@ D-Mail Pub/Sub bridge (ADR 0013 / 0018) で `max_delivery_attempts=5` を
 発火後 5 分以内に operator が取るべき triage 手順を定める。
 
 関連:
+
 - 設計の意図: `docs/intent.md`
 - bridge 構成: `docs/adr/0013-pubsub-bridge-for-outbox.md`
 - DLQ sink 採用根拠: `experiments/2026-05-05_pubsub-dlq-terminal-sink.md`

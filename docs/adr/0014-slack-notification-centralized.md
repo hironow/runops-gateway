@@ -61,6 +61,7 @@ paintress companion は Phase 1〜4 の範囲では使わない。**
 ```
 
 Legend / 凡例:
+
 - archive/: phonewave が delivery 完了後に保管する永続ディレクトリ
 - dmail-emitter: archive を監視して Pub/Sub に流す daemon (本リポジトリで管理)
 - response_url: 30 分以内なら使用、超えるなら chat.postMessage

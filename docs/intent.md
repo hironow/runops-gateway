@@ -555,6 +555,7 @@ Slack 通知は全て runops-gateway 側で実装する。
 ```
 
 Legend / 凡例:
+
 - runops-gateway: 既存の Slack ChatOps gateway (Cloud Run)
 - Pub/Sub: GCP Pub/Sub (inbound topic と outbound topic の 2 本)
 - dmail-receiver: Pub/Sub から phonewave outbox に書き出す bridge daemon

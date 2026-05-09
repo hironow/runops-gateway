@@ -9,17 +9,18 @@
 
 ## 概要
 
-#0009 で確立した `port.ProjectRegistry` interface に対し、
+# 0009 で確立した `port.ProjectRegistry` interface に対し、
 **Firestore native adapter** を実装。これが Cloud Run multi-instance での
 production deploy を可能にする (managed persistence)。
 
 ADR 0025 で採用した dual adapter strategy の片方:
+
 - SQLite (`#0009` 着地済): dev / test / operator local Mac
 - **Firestore (本 issue)**: production / staging Cloud Run
 
 ## 動機
 
-#0009 着地時点で `RUNOPS_PROJECT_REGISTRY=firestore` は
+# 0009 着地時点で `RUNOPS_PROJECT_REGISTRY=firestore` は
 `errors.New("firestore adapter not implemented yet, see issue #0011")` を返す
 fail-closed stub。本 issue で実装することで production cutover が可能になる。
 

@@ -93,6 +93,7 @@ runops-gateway/
 ```
 
 Legend / 凡例:
+
 - `cmd/dmail-receiver/`: exe-coder VM 上で動く receiver の entry point
 - `cmd/dmail-emitter/`: exe-coder VM 上で動く emitter の entry point
 - `internal/adapter/output/pubsub/`: Pub/Sub クライアントの共通実装（gateway も使う）

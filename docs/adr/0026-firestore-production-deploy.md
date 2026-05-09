@@ -135,6 +135,7 @@ mismatch in production is the worst possible time.
    captures the row data (e.g. as JSON via a one-off script).
 4. For each row, operator runs `runops project add ...` against a
    shell configured for Firestore:
+
    ```bash
    export RUNOPS_PROJECT_REGISTRY=firestore
    export GOOGLE_CLOUD_PROJECT=hironow-runops-prod
@@ -142,6 +143,7 @@ mismatch in production is the worst possible time.
    gcloud auth application-default login   # one-time
    runops project add ...
    ```
+
 5. Operator updates the production gateway tofu module to set
    `RUNOPS_PROJECT_REGISTRY=firestore` and
    `RUNOPS_FIRESTORE_DATABASE=runops-registry` in cloud_run env, then

@@ -24,27 +24,27 @@ Cloud Pub/Sub の subscriber 形式は 2 つ:
 Cloud Run 内に StreamingPull の goroutine を常駐させる。
 
 - メリット:
-  - **emulator サポートが素直**: Firebase Pub/Sub emulator も Subscriber.Receive
+    - **emulator サポートが素直**: Firebase Pub/Sub emulator も Subscriber.Receive
     が普通に動く → local TDD で完結
-  - 実装がシンプル: `dmail-receiver` daemon と同じパターンの再利用
-  - 認証経路が単一 (Cloud Run runtime SA に subscriber 権限)
-  - Slack 経路の失敗を Pub/Sub に nack して再配送できる (retry 容易)
+    - 実装がシンプル: `dmail-receiver` daemon と同じパターンの再利用
+    - 認証経路が単一 (Cloud Run runtime SA に subscriber 権限)
+    - Slack 経路の失敗を Pub/Sub に nack して再配送できる (retry 容易)
 - デメリット:
-  - **Cloud Run min-instances=1 必須** (autoscale 中は他 instance に分散しない)
-  - 1 instance の preempt 中は受信が止まる (Pub/Sub 側に貯まるだけなので message loss は無い)
+    - **Cloud Run min-instances=1 必須** (autoscale 中は他 instance に分散しない)
+    - 1 instance の preempt 中は受信が止まる (Pub/Sub 側に貯まるだけなので message loss は無い)
 
 #### 案 B: push subscription
 
 Pub/Sub から gateway の HTTP endpoint (`/pubsub/dmail-outbound` 等) に POST。
 
 - メリット:
-  - Cloud Run の autoscale と相性が良い (任意 instance で受信可能)
-  - 受信負荷に応じて自動スケール
+    - Cloud Run の autoscale と相性が良い (任意 instance で受信可能)
+    - 受信負荷に応じて自動スケール
 - デメリット:
-  - **emulator サポートが弱い**: Firebase Pub/Sub emulator の push は endpoint
+    - **emulator サポートが弱い**: Firebase Pub/Sub emulator の push は endpoint
     URL を起動時に設定する必要があり、local TDD のセットアップが煩雑
-  - OIDC token 検証ロジックを gateway 側に実装する必要 (Slack HMAC とは別経路)
-  - Pub/Sub の retry policy と HTTP 接続失敗の挙動を別々に把握する必要
+    - OIDC token 検証ロジックを gateway 側に実装する必要 (Slack HMAC とは別経路)
+    - Pub/Sub の retry policy と HTTP 接続失敗の挙動を別々に把握する必要
 
 ### 案 B の問題点
 
@@ -77,6 +77,7 @@ Cloud Run runtime SA に `pubsub.subscriber` 権限を `runops-gateway-sub`
 ```
 
 Legend / 凡例:
+
 - 5本柱 → archive: 既存 phonewave delivery (Phase 2c で外への bridge)
 - dmail-outbound: Phase 2c で publish される topic
 - OutboundSubscriber: 新規 (Phase 3 実装)
