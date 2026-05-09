@@ -24,6 +24,7 @@ require (
 	google.golang.org/api v0.277.0
 	google.golang.org/grpc v1.81.0
 	modernc.org/sqlite v1.50.0
+	sigs.k8s.io/yaml v1.6.0
 )
 
 require (
@@ -58,6 +59,7 @@ require (
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.67.0 // indirect
 	go.opentelemetry.io/otel/metric v1.43.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.10.0 // indirect
+	go.yaml.in/yaml/v2 v2.4.2 // indirect
 	golang.org/x/crypto v0.50.0 // indirect
 	golang.org/x/net v0.53.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
