@@ -389,6 +389,12 @@ func TestInteractiveHandler_ApprovalApprove_PublishesAckWhenAllGuardsPass(t *tes
 		Target:               "sightjack",
 		BodyDigest:           "abcd1234deadbeef",
 		IssuedAt:             time.Now().Unix(),
+		// ADR 0037 §Migration window alignment + ADR 0038 §3.4: HIGH path
+		// requires non-empty RequesterActorType. Use human-operator with
+		// a verified-source classification so the "all guards pass" path
+		// remains representative.
+		RequesterActorType:   string(domain.CallerHumanOperator),
+		RequesterActorSource: string(domain.GatewayClassificationBrokerVerified),
 	}
 	payload := interactivePayload{}
 	payload.User.ID = "U_APPROVER" // distinct from U_ORIG
@@ -483,6 +489,10 @@ func TestInteractiveHandler_ApprovalApprove_RejectsReplay(t *testing.T) {
 		Source:               "amadeus",
 		Target:               "sightjack",
 		IssuedAt:             time.Now().Unix(),
+		// ADR 0037 §Migration window alignment + ADR 0038 §3.4: HIGH
+		// path requires non-empty RequesterActorType.
+		RequesterActorType:   string(domain.CallerHumanOperator),
+		RequesterActorSource: string(domain.GatewayClassificationBrokerVerified),
 	}
 	build := func() *http.Request {
 		payload := interactivePayload{}
@@ -694,10 +704,16 @@ func TestInteractiveHandler_ApprovalApprove_AIRequester_HumanApprover_Publishes(
 	}
 }
 
-// TestInteractiveHandler_ApprovalApprove_LegacyEmpty_Publishes confirms
-// the migration window (ADR 0036 §Migration): empty RequesterActorType
-// is treated as CallerHumanOperator and passes the gate.
-func TestInteractiveHandler_ApprovalApprove_LegacyEmpty_Publishes(t *testing.T) {
+// TestInteractiveHandler_ApprovalApprove_EmptyActorType_FailsClosed asserts
+// the ADR 0037 §Migration window alignment + ADR 0038 §3.4 spec-vs-impl
+// alignment: HIGH 4-eyes approval rejects empty RequesterActorType
+// fail-closed. Previously (during the ADR 0036 §Migration window draft)
+// this fixture asserted the legacy CallerHumanOperator fallback at the
+// HIGH path; that fixture documented an implementation gap that ADR
+// 0038 §3.4 closes by routing this code path through the new empty-check
+// in handleApprovalAction. ADR 0036's CallerHumanOperator fallback is
+// scoped to non-HIGH (= ApproveAction dispatch / canary) only.
+func TestInteractiveHandler_ApprovalApprove_EmptyActorType_FailsClosed(t *testing.T) {
 	secret := "test-secret"
 	mock := newMockUseCase()
 	disp := &recordedDispatchUseCase{}
@@ -706,13 +722,14 @@ func TestInteractiveHandler_ApprovalApprove_LegacyEmpty_Publishes(t *testing.T) 
 	handler := NewInteractiveHandler(mock, disp, testNotifier, consumed, secret).WithApprovalPublisher(pub)
 
 	av := approvalActionValue{
-		ParentIdempotencyKey: "parent-legacy-001",
+		ParentIdempotencyKey: "parent-empty-actortype-001",
 		OriginalRequesterID:  "U_ORIG",
 		Source:               "amadeus",
 		Target:               "sightjack",
 		BodyDigest:           "abcd1234deadbeef",
 		IssuedAt:             time.Now().Unix(),
-		// RequesterActorType: "" (legacy producer, ADR 0036 migration)
+		// RequesterActorType: "" — must fail-closed at HIGH per ADR 0037
+		// §Migration window alignment + ADR 0038 §3.4.
 	}
 	payload := interactivePayload{}
 	payload.User.ID = "U_APPROVER"
@@ -731,12 +748,17 @@ func TestInteractiveHandler_ApprovalApprove_LegacyEmpty_Publishes(t *testing.T) 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rr.Code)
 	}
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) && len(pub.snapshot()) == 0 {
-		time.Sleep(10 * time.Millisecond)
+	// HIGH path must NOT publish on empty actor type. Wait briefly to
+	// ensure no async publish would have fired.
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if got := pub.snapshot(); len(got) > 0 {
+			t.Fatalf("empty actor type must fail-closed at HIGH; got %d publish (ADR 0037 §Migration window alignment + ADR 0038 §3.4)", len(got))
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
-	if got := pub.snapshot(); len(got) != 1 {
-		t.Errorf("legacy empty actor type must still publish during migration window; got %d (ADR 0036 §Migration)", len(got))
+	if got := pub.snapshot(); len(got) != 0 {
+		t.Errorf("empty actor type must fail-closed; expected 0 publish, got %d", len(got))
 	}
 }
 

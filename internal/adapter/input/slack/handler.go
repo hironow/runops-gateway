@@ -465,11 +465,36 @@ func (h *InteractiveHandler) handleApprovalAction(traceCtx context.Context, acti
 		return
 	}
 
+	// ADR 0037 §Migration window alignment + ADR 0038 §3.4: HIGH paths
+	// fail-closed for empty RequesterActorType from ADR 0037 Accepted day.
+	// ADR 0036 §Migration's CallerHumanOperator fallback is scoped to
+	// non-HIGH (= ApproveAction dispatch / canary) only; HIGH 4-eyes
+	// approval rejects empty here. This implementation closes the
+	// spec-vs-impl gap that ADR 0038 codex review v2 surfaced as a
+	// blocker for the non-HIGH flip.
+	if av.RequesterActorType == "" {
+		slog.Warn("approval_actor_type_empty",
+			"clicker", clickerUserID,
+			"parent", av.ParentIdempotencyKey)
+		span.SetStatus(codes.Error, "approval_actor_type_empty")
+		span.End()
+		h.goAsync(func() {
+			ctx, cancel := context.WithTimeout(traceCtx, 30*time.Second)
+			defer cancel()
+			if err := h.notifier.SendEphemeral(ctx, target, clickerUserID,
+				"🚫 actor type が空です、 HIGH approval を保留します (ADR 0037)"); err != nil {
+				slog.Error("approval empty-actor ephemeral failed", "error", err)
+			}
+		})
+		return
+	}
 	// ADR 0036 §Carry point 3: actor-type validation. Reject unknown
 	// non-empty RequesterActorType values fail-closed; reject AI-vs-AI
 	// per ADR 0035 invariant. Both fire BEFORE the consumed-token check
 	// so a malformed / disallowed click does not waste the one-shot token.
-	if av.RequesterActorType != "" && !isCanonicalCallerType(av.RequesterActorType) {
+	// (= empty is rejected by the previous block; this block handles
+	// non-empty but invalid values.)
+	if !isCanonicalCallerType(av.RequesterActorType) {
 		slog.Warn("approval_actor_type_invalid",
 			"raw_value", av.RequesterActorType,
 			"clicker", clickerUserID,
