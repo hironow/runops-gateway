@@ -1,8 +1,10 @@
 name: CI
 
 on:
+  # Restrict push to long-lived branches so feature branch pushes do
+  # not duplicate the pull_request run (= release-gate.yaml と同 pattern)。
   push:
-    branches: ["**"]
+    branches: [develop, main]
   pull_request:
     branches: [develop, main]
 
