@@ -179,6 +179,6 @@ ADR 0018 で min-instances=1 を要求済み。本 ADR では追加要件なし
 
 ## 参照
 
-- `/Users/nino/tap/amadeus/README.md` の severity routing
-- `/Users/nino/tap/paintress/docs/approval-contract.md`
-- `/Users/nino/dotfiles/exe/` (将来 production deploy 時の SA / IAM 参考)
+- `tap/amadeus/README.md` の severity routing
+- `tap/paintress/docs/approval-contract.md`
+- `dotfiles/exe/` (将来 production deploy 時の SA / IAM 参考)

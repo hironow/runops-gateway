@@ -8,7 +8,7 @@
 paintress には `paintress-slack`, `paintress-tg`, `paintress-discord` という
 **companion binary** が同梱されており、`--notify-cmd` / `--approve-cmd` を介して
 Slack / Telegram / Discord に通知・承認を送る仕組みが既に存在する
-（[`/Users/nino/tap/paintress/README.md`](file:///Users/nino/tap/paintress/README.md)
+（[`tap/paintress/README.md`](../../../tap/paintress/README.md)
 の「Companion Binaries」章）。
 
 5本柱拡張（[`docs/intent.md`](../intent.md) の「拡張意図: 5本柱 D-Mail Dispatcher 化」章）
@@ -134,5 +134,5 @@ companion は呼ばれない。
 
 - [`docs/intent.md`](../intent.md) — 「拡張意図: 5本柱 D-Mail Dispatcher 化」章
 - [`docs/handover.md`](../handover.md) — Phase 3 / Phase 4 の通知・承認設計
-- `/Users/nino/tap/paintress/README.md` — Companion Binaries 章
-- `/Users/nino/tap/paintress/docs/approval-contract.md` — Three-way approval contract
+- `tap/paintress/README.md` — Companion Binaries 章
+- `tap/paintress/docs/approval-contract.md` — Three-way approval contract

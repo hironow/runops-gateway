@@ -160,4 +160,4 @@ tofu に明記する。追加コスト ~$5/月。
 ## 参照
 
 - `internal/adapter/input/pubsub/receiver.go` (`dmail-receiver` の実装、本 ADR でも参考)
-- exe.hironow.dev の `dmail-emitter` systemd unit (`/Users/nino/dotfiles/exe`)
+- exe.hironow.dev の `dmail-emitter` systemd unit (`dotfiles/exe`)
