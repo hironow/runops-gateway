@@ -1,7 +1,7 @@
 # 0039. Admin endpoint severity-aware approval gate
 
 **Date:** 2026-05-10
-**Status:** Proposed
+**Status:** Superseded by ADR 0040 (= JSON-RPC + transport abstraction で再 design)
 
 ## Context
 
