@@ -149,11 +149,11 @@ func (s *SQLitePendingStore) Transition(
 // scanPendingApproval is shared by Get (sql.Row.Scan).
 func scanPendingApproval(scan func(...any) error) (domain.PendingApproval, error) {
 	var (
-		p           domain.PendingApproval
-		opStr       string
-		createdStr  string
-		statusStr   string
-		appliedStr  sql.NullString
+		p          domain.PendingApproval
+		opStr      string
+		createdStr string
+		statusStr  string
+		appliedStr sql.NullString
 	)
 	if err := scan(
 		&p.IdempotencyKey, &opStr, &p.BodyJSON, &p.RequesterActorType,
