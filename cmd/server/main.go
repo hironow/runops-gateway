@@ -187,6 +187,33 @@ func main() {
 			"admin_token_set", adminToken != "")
 	}
 
+	// JSON-RPC /rpc endpoint (ADR 0040 §B-3) is opt-in: registered only
+	// when RUNOPS_RPC_ENDPOINT_ENABLED=1 AND a parseable multi-token admin
+	// registry file is provided. §B-3 intentionally has no methods
+	// registered; §B-4/§B-5 will plug in project read-only / mutation
+	// handlers via the same dispatcher.
+	rpcCfg := rpcWiringConfig{
+		flagEnabled:  os.Getenv("RUNOPS_RPC_ENDPOINT_ENABLED") == "1",
+		registryPath: os.Getenv("RUNOPS_ADMIN_TOKENS_REGISTRY_FILE"),
+	}
+	rpcWired, rpcErr := wireRPCEndpoint(mux, rpcCfg)
+	if rpcErr != nil {
+		// fail-closed (= ADR 0040 §identity contract): a misconfigured
+		// registry must not silently fall through to default permissive
+		// behaviour. The server is aborted at startup.
+		slog.Error("rpc endpoint wiring failed", "error", rpcErr)
+		os.Exit(1)
+	}
+	if rpcWired {
+		slog.Info("rpc endpoint registered (ADR 0040 §B-3)",
+			"endpoints", []string{"POST /rpc"},
+			"registry_path", rpcCfg.registryPath)
+	} else {
+		slog.Info("rpc endpoint not registered",
+			"flag_enabled", rpcCfg.flagEnabled,
+			"registry_path_set", rpcCfg.registryPath != "")
+	}
+
 	// Token broker endpoint (#0007) is opt-in: registered only when
 	// BROKER_AUDIENCE is set AND the project registry is wired.
 	// Without one of these the broker stays disabled so dev /
