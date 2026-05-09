@@ -30,7 +30,7 @@ ADR 0039 (Proposed) に対する設計 review で、 admin endpoint の HIGH sev
 
 - envelope: `{jsonrpc: "2.0", method: string, params: object|array, id: string|number|null}`
 - response: `{jsonrpc: "2.0", result: any, id: ...}` or `{jsonrpc: "2.0", error: {code, message, data?}, id: ...}`
-- notification (= `id` 不在) は admin endpoint では **不採用** (= mutation で response 必須、 notification 受信は 400 で reject)
+- notification (= `id` 不在) は admin endpoint では **不採用** (= mutation で response 必須、 notification 受信は JSON-RPC error envelope `CodeInvalidRequest` -32600 で reject、 HTTP 層は §HTTP transport の `200 OK always` に従い envelope 内 error として表現)
 - batch request は **Phase 1 で不採用** (= 複雑度 / approval gate との相互作用回避、 future PR で検討)
 - error code は spec 準拠 (= -32700 parse, -32600 invalid request, -32601 method not found, -32602 invalid params, -32603 internal error) + 独自 application error は -32000 〜 -32099 の reserved range で定義
 
