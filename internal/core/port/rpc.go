@@ -1,6 +1,10 @@
 package port
 
-import "context"
+import (
+	"context"
+
+	domainrpc "github.com/hironow/runops-gateway/internal/core/domain/rpc"
+)
 
 // RPCTransport is the primary port driven by transport adapters (HTTP / WebSocket
 // / WebRTC). Per ADR 0040 §JSON-RPC 2.0 spec, every transport adapter consumes
@@ -20,4 +24,19 @@ type RPCTransport interface {
 	// marshal failure) and the caller should map it to the transport's
 	// fail-closed status (= HTTP 500).
 	ServeRPC(ctx context.Context, raw []byte) ([]byte, error)
+}
+
+// OperatorLookup resolves an Authorization Bearer token to an authenticated
+// Operator (= human admin operator) via the multi-token admin registry per
+// ADR 0040 §identity contract.
+//
+// The submitted token is opaque to the caller; implementations are expected
+// to apply the strict-bearer parsing rules from ADR 0030 §4 before invoking
+// this lookup, and to hash (SHA256) the value before consulting their
+// internal store.
+//
+// Lookup MUST be side-effect free; it returns the zero-value Operator and
+// false on miss.
+type OperatorLookup interface {
+	Lookup(submittedToken string) (domainrpc.Operator, bool)
 }
