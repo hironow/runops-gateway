@@ -69,8 +69,14 @@ type Error struct {
 ### §HTTP transport (Phase 1)
 
 - POST `/rpc` 単一 endpoint (= REST `/admin/*` とは別 path、 並行運用)
-- Body: JSON-RPC 2.0 envelope
-- Response: 200 OK always (= success/error は envelope 内で表現)
+- Body: JSON-RPC 2.0 envelope (= `Content-Type: application/json`)
+- HTTP status の二層分離:
+  - **transport-layer reject** (= dispatcher 到達前) は HTTP status を返す:
+    - `405 Method Not Allowed`: GET 等 POST 以外
+    - `415 Unsupported Media Type`: 非 application/json
+    - `401 Unauthorized`: Authorization header 不在 / malformed / token registry miss
+  - **JSON-RPC layer 到達後** (= parse error / unknown method / handler error / handler success) は **200 OK + envelope** で返す
+  - **server-internal failure** (= 500) のみ envelope を出さず raw text
 - Auth: `RUNOPS_ADMIN_TOKENS_REGISTRY_FILE` で multi-token (= §identity contract 参照)
 
 ### §method 命名規約
@@ -108,6 +114,8 @@ tokens:
 2. token を SHA-256 hash → registry lookup
 3. hit → `effective_requester_id = operator_id` 確定 + `requester_actor_type = "human-operator"` 固定 (= admin token は human-bound、 AI agent path は別 endpoint)
 4. miss → 401 unauthorized
+
+token lookup strategy: SHA256(submitted_token) を 64 char hex に変換、 registry の `map[hex]Operator` で O(1) lookup。 strict constant-time scan は採用しない (= network latency が dominant で、 map non-constant-time の余地は実害無視可能)。
 
 `RUNOPS_ADMIN_TOKENS_REGISTRY_FILE` 不在時:
 
@@ -184,13 +192,13 @@ tokens:
 2. **AI agent が admin token を取得して使う (= laundering)**: server side で防げない領域だが、 token rotation 運用 + log で検知可能。 ADR 0040 §identity contract で「admin token は human-operator-bound、 AI agent path は別 endpoint」 と明示。
 3. **registry 不在で HIGH mutation を許可してしまう**: registry 不在時は flag に関係なく HIGH mutation block (= fail-closed、 §identity contract carry)。
 4. **`effective_requester_id` と `approver_id` の namespace 不一致**: 両方 Slack user_id 名前空間で確定 (= registry の operator_id = Slack user_id、 approval-ack の approver = Slack click user_id)。
-5. **JSON-RPC notification (= id 不在) で side effect を許してしまう**: admin endpoint では notification を 400 で reject (= response 必須)。
+5. **JSON-RPC notification (= id 不在) で side effect を許してしまう**: admin endpoint では notification を JSON-RPC error envelope (`CodeInvalidRequest` -32600) で reject、 HTTP 層は §HTTP transport の `200 OK always` に従い envelope 内 error として表現 (= dispatcher 到達後の reject なので transport-layer 401/415 とは別 path)。
 6. **JSON-RPC batch request で複数 mutation を atomic に走らせる脱法**: batch は Phase 1 で不採用。
 
 ### Tests proving coverage
 
-1. `TestRPCDispatcher_NotificationRejected` = id 不在 envelope を 400 reject
-2. `TestRPCDispatcher_BatchRejected` = batch envelope を 400 reject (Phase 1 不採用)
+1. `TestRPCDispatcher_NotificationRejected` = id 不在 envelope を JSON-RPC error -32600 + HTTP 200 で reject (= §B-2 で実装済)
+2. `TestRPCDispatcher_BatchRejected` = batch envelope を JSON-RPC error -32600 + HTTP 200 で reject (= Phase 1 不採用、 §B-2 で実装済)
 3. `TestRPCAuth_TokenRegistryHit_ExtractsOperatorID` = registry hit → effective_requester_id 確定
 4. `TestRPCAuth_TokenRegistryMiss_401` = registry miss → 401
 5. `TestRPCAuth_RegistryFileAbsent_HighMutationBlocked` = registry 不在 + flag on でも HIGH method は -32000 block
