@@ -32,7 +32,32 @@ func NewRunOpsService(gcp port.GCPController, notifier port.Notifier, auth port.
 // Per ADR 0035, the AI-vs-AI approver/requester combination is rejected
 // before the auth check so the audit signal is precise even when the
 // approver would otherwise be a known operator.
+//
+// ADR 0036 §Migration scheduled an `approval_actor_type_missing` warn log
+// from 2026-06-01 to surface non-HIGH dispatches that still arrive with
+// empty `RequesterActorType` after producer rollout. ADR 0038 §3.0 + §3.3
+// realize that log here together with a shadow log
+// `approval_actor_type_empty_rejected` so the eventual non-HIGH flip
+// (= ADR 0038 Accepted) has two independent telemetry signals to verify
+// "14 days of zero" before behaviour changes. Both logs are observe-only
+// in the shadow phase; behaviour stays the legacy `CallerHumanOperator`
+// fallback inside ValidateApproverPermitted.
 func (s *RunOpsService) ApproveAction(ctx context.Context, req domain.ApprovalRequest, target port.NotifyTarget, approverType domain.CallerType) error {
+	// ADR 0038 Phase 1 / shadow phase: observability for the non-HIGH
+	// fail-closed flip. Two independent log lines so a single-source
+	// telemetry bug cannot falsify the "14 days of zero" trigger.
+	if req.RequesterActorType == "" {
+		slog.Warn("approval_actor_type_missing",
+			"approver_id", req.ApproverID,
+			"resource_names", req.ResourceNames,
+			"reason", "ADR 0036 §Migration scheduled signal — empty requester_actor_type during non-HIGH dispatch")
+		slog.Warn("approval_actor_type_empty_rejected",
+			"approver_id", req.ApproverID,
+			"resource_names", req.ResourceNames,
+			"phase", "shadow",
+			"adr", "ADR 0038 §3.3 — observe-only until §3.0-§3.4 trigger conditions clear")
+	}
+
 	key := port.OperationKey(req)
 	if !s.store.TryLock(key) {
 		_ = s.notifier.SendEphemeral(ctx, target, req.ApproverID, "⚠️ この操作は既に実行中です。")
