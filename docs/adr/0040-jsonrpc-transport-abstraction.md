@@ -30,7 +30,7 @@ ADR 0039 (Proposed) に対する設計 review で、 admin endpoint の HIGH sev
 
 - envelope: `{jsonrpc: "2.0", method: string, params: object|array, id: string|number|null}`
 - response: `{jsonrpc: "2.0", result: any, id: ...}` or `{jsonrpc: "2.0", error: {code, message, data?}, id: ...}`
-- notification (= `id` 不在) は admin endpoint では **不採用** (= mutation で response 必須、 notification 受信は JSON-RPC error envelope `CodeInvalidRequest` -32600 で reject、 HTTP 層は §HTTP transport の `200 OK always` に従い envelope 内 error として表現)
+- notification (= `id` 不在) は admin endpoint では **不採用** (= mutation で response 必須、 notification 受信は JSON-RPC error envelope `CodeInvalidRequest` -32600 で reject、 HTTP 層は §HTTP transport の二層分離 rule に従い JSON-RPC layer 到達後の reject なので 200 + envelope で表現)
 - batch request は **Phase 1 で不採用** (= 複雑度 / approval gate との相互作用回避、 future PR で検討)
 - error code は spec 準拠 (= -32700 parse, -32600 invalid request, -32601 method not found, -32602 invalid params, -32603 internal error) + 独自 application error は -32000 〜 -32099 の reserved range で定義
 
@@ -192,7 +192,7 @@ token lookup strategy: SHA256(submitted_token) を 64 char hex に変換、 regi
 2. **AI agent が admin token を取得して使う (= laundering)**: server side で防げない領域だが、 token rotation 運用 + log で検知可能。 ADR 0040 §identity contract で「admin token は human-operator-bound、 AI agent path は別 endpoint」 と明示。
 3. **registry 不在で HIGH mutation を許可してしまう**: registry 不在時は flag に関係なく HIGH mutation block (= fail-closed、 §identity contract carry)。
 4. **`effective_requester_id` と `approver_id` の namespace 不一致**: 両方 Slack user_id 名前空間で確定 (= registry の operator_id = Slack user_id、 approval-ack の approver = Slack click user_id)。
-5. **JSON-RPC notification (= id 不在) で side effect を許してしまう**: admin endpoint では notification を JSON-RPC error envelope (`CodeInvalidRequest` -32600) で reject、 HTTP 層は §HTTP transport の `200 OK always` に従い envelope 内 error として表現 (= dispatcher 到達後の reject なので transport-layer 401/415 とは別 path)。
+5. **JSON-RPC notification (= id 不在) で side effect を許してしまう**: admin endpoint では notification を JSON-RPC error envelope (`CodeInvalidRequest` -32600) で reject、 HTTP 層は §HTTP transport の二層分離 rule に従い JSON-RPC layer 到達後の reject なので 200 + envelope で表現 (= transport-layer 401/415 とは別 path)。
 6. **JSON-RPC batch request で複数 mutation を atomic に走らせる脱法**: batch は Phase 1 で不採用。
 
 ### Tests proving coverage
