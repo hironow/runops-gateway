@@ -187,14 +187,28 @@ func main() {
 			"admin_token_set", adminToken != "")
 	}
 
-	// JSON-RPC /rpc endpoint (ADR 0040 §B-3) is opt-in: registered only
-	// when RUNOPS_RPC_ENDPOINT_ENABLED=1 AND a parseable multi-token admin
-	// registry file is provided. §B-3 intentionally has no methods
-	// registered; §B-4/§B-5 will plug in project read-only / mutation
-	// handlers via the same dispatcher.
+	// JSON-RPC /rpc endpoint (ADR 0040 §B-3 + §B-4) is opt-in: registered
+	// only when RUNOPS_RPC_ENDPOINT_ENABLED=1 AND a parseable multi-token
+	// admin registry is configured. §B-4 adds project read-only methods
+	// (get / list / pending.get) on top of the §B-3 transport. §B-5 will
+	// register mutation methods + admin approval orchestrator.
+	pendingStore, pendingCleanup, pendingErr := state.ResolvePendingStoreFromEnv(context.Background())
+	if pendingErr != nil {
+		_ = pendingCleanup()
+		slog.Error("pending store init failed", "error", pendingErr)
+		os.Exit(1)
+	}
+	defer func() {
+		if err := pendingCleanup(); err != nil {
+			slog.Error("pending store cleanup failed", "error", err)
+		}
+	}()
+
 	rpcCfg := rpcWiringConfig{
-		flagEnabled:  os.Getenv("RUNOPS_RPC_ENDPOINT_ENABLED") == "1",
-		registryPath: os.Getenv("RUNOPS_ADMIN_TOKENS_REGISTRY_FILE"),
+		flagEnabled:     os.Getenv("RUNOPS_RPC_ENDPOINT_ENABLED") == "1",
+		registryPath:    os.Getenv("RUNOPS_ADMIN_TOKENS_REGISTRY_FILE"),
+		projectRegistry: registry,
+		pendingStore:    pendingStore,
 	}
 	rpcWired, rpcErr := wireRPCEndpoint(mux, rpcCfg)
 	if rpcErr != nil {
@@ -205,13 +219,20 @@ func main() {
 		os.Exit(1)
 	}
 	if rpcWired {
-		slog.Info("rpc endpoint registered (ADR 0040 §B-3)",
+		slog.Info("rpc endpoint registered (ADR 0040 §B-4)",
 			"endpoints", []string{"POST /rpc"},
+			"methods", []string{
+				"runops.admin.project.get",
+				"runops.admin.project.list",
+				"runops.admin.project.pending.get",
+			},
 			"registry_path", rpcCfg.registryPath)
 	} else {
 		slog.Info("rpc endpoint not registered",
 			"flag_enabled", rpcCfg.flagEnabled,
-			"registry_path_set", rpcCfg.registryPath != "")
+			"registry_path_set", rpcCfg.registryPath != "",
+			"project_registry_wired", rpcCfg.projectRegistry != nil,
+			"pending_store_wired", rpcCfg.pendingStore != nil)
 	}
 
 	// Token broker endpoint (#0007) is opt-in: registered only when
