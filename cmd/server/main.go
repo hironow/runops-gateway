@@ -32,6 +32,7 @@ import (
 	"github.com/hironow/runops-gateway/internal/composition"
 	"github.com/hironow/runops-gateway/internal/core/port"
 	"github.com/hironow/runops-gateway/internal/usecase"
+	"github.com/hironow/runops-gateway/internal/usecase/admin_approval"
 )
 
 const slackChatPostMessageURL = "https://slack.com/api/chat.postMessage"
@@ -141,6 +142,10 @@ func main() {
 		slackHandler = slackHandler.WithAIAgentBotUserIDs(aiBotIDs)
 		slog.Info("ADR 0035 AI agent approver classification enabled", "bot_user_count", len(aiBotIDs))
 	}
+	// ADR 0040 §B-5.4b admin-mutation consumer wire-up: the orchestrator
+	// is constructed after registry + pendingStore are resolved, so we
+	// defer the actual injection until after that block. See "rpc
+	// endpoint wiring" below for the construction site.
 	// Multiplex project registry (#0008/#0009/#0011). Opt-in via env so
 	// non-multiplex deployments stay byte-identical. The cleanup is always
 	// non-nil; on env error we exit before any handler binds.
@@ -214,12 +219,45 @@ func main() {
 		}
 	}()
 
+	// ADR 0040 §B-5.4b admin approval wire-up. The orchestrator depends
+	// on both pendingStore and registry, and is shared between the rpc
+	// producer (mutation methods that publish convergence D-Mail) and
+	// the slack consumer (handleApprovalAck/Deny).
+	var adminOrchestrator *admin_approval.Orchestrator
+	if registry != nil && pendingStore != nil {
+		adminOrchestrator = admin_approval.NewOrchestrator(pendingStore, registry)
+	}
+	if adminOrchestrator != nil {
+		// Mutates slackHandler in place; mux.Handle above already holds
+		// the same pointer so the orchestrator is visible immediately.
+		slackHandler.WithAdminApprovalOrchestrator(adminOrchestrator)
+		slog.Info("ADR 0040 §B-5 admin approval consumer enabled")
+	}
+
+	// Producer-side ApprovalRequester for admin mutations. Reuses the
+	// same Slack chat.postMessage path as the Phase 4a convergence flow
+	// but posts into the configured admin approval channel (= ADR 0040
+	// §B-5.4b).
+	var adminApprovalRequester port.ApprovalRequester
+	var adminApprovalTarget port.NotifyTarget
+	adminChannel := os.Getenv("RUNOPS_ADMIN_APPROVAL_CHANNEL")
+	if cfg.slackBotToken != "" && adminChannel != "" {
+		adminApprovalRequester = slacknotifier.NewApprovalRequester(slackChatPostMessageURL, cfg.slackBotToken)
+		adminApprovalTarget = port.NotifyTarget{
+			Mode:      port.ModeSlack,
+			ChannelID: adminChannel,
+		}
+		slog.Info("ADR 0040 §B-5 admin approval producer enabled", "channel", adminChannel)
+	}
+
 	rpcCfg := rpcWiringConfig{
-		flagEnabled:         os.Getenv("RUNOPS_RPC_ENDPOINT_ENABLED") == "1",
-		registryPath:        os.Getenv("RUNOPS_ADMIN_TOKENS_REGISTRY_FILE"),
-		projectRegistry:     registry,
-		pendingStore:        pendingStore,
-		highMutationEnabled: os.Getenv("RUNOPS_RPC_HIGH_MUTATION_ENABLED") == "1",
+		flagEnabled:            os.Getenv("RUNOPS_RPC_ENDPOINT_ENABLED") == "1",
+		registryPath:           os.Getenv("RUNOPS_ADMIN_TOKENS_REGISTRY_FILE"),
+		projectRegistry:        registry,
+		pendingStore:           pendingStore,
+		highMutationEnabled:    os.Getenv("RUNOPS_RPC_HIGH_MUTATION_ENABLED") == "1",
+		adminApprovalRequester: adminApprovalRequester,
+		adminApprovalTarget:    adminApprovalTarget,
 	}
 	rpcWired, rpcErr := wireRPCEndpoint(mux, rpcCfg)
 	if rpcErr != nil {
