@@ -47,11 +47,11 @@ func (s *SQLitePendingStore) CreateIfNotExists(
 	}
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO pending_approvals (
-			idempotency_key, op, body_json, requester_actor_type,
-			created_at, status
-		) VALUES (?, ?, ?, ?, ?, ?)
-	`, p.IdempotencyKey, string(p.Op), p.BodyJSON, p.RequesterActorType,
-		formatSQLiteDatetime(createdAt), string(p.Status))
+			idempotency_key, op, body_json, effective_requester_id,
+			requester_actor_type, created_at, status
+		) VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, p.IdempotencyKey, string(p.Op), p.BodyJSON, p.EffectiveRequesterID,
+		p.RequesterActorType, formatSQLiteDatetime(createdAt), string(p.Status))
 	if err != nil {
 		if isUniqueConstraintViolation(err) {
 			existing, getErr := s.Get(ctx, p.IdempotencyKey)
@@ -74,8 +74,8 @@ func (s *SQLitePendingStore) Get(
 	idempotencyKey string,
 ) (domain.PendingApproval, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT idempotency_key, op, body_json, requester_actor_type,
-			created_at, status, applied_at
+		SELECT idempotency_key, op, body_json, effective_requester_id,
+			requester_actor_type, created_at, status, applied_at
 		FROM pending_approvals WHERE idempotency_key = ?
 	`, idempotencyKey)
 	p, err := scanPendingApproval(row.Scan)
@@ -156,8 +156,8 @@ func scanPendingApproval(scan func(...any) error) (domain.PendingApproval, error
 		appliedStr sql.NullString
 	)
 	if err := scan(
-		&p.IdempotencyKey, &opStr, &p.BodyJSON, &p.RequesterActorType,
-		&createdStr, &statusStr, &appliedStr,
+		&p.IdempotencyKey, &opStr, &p.BodyJSON, &p.EffectiveRequesterID,
+		&p.RequesterActorType, &createdStr, &statusStr, &appliedStr,
 	); err != nil {
 		return domain.PendingApproval{}, err
 	}

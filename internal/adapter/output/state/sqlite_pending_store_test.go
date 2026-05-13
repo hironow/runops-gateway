@@ -25,10 +25,11 @@ func newTestPendingStore(t *testing.T) (port.PendingStore, func()) {
 
 func sqliteSamplePending(key string) domain.PendingApproval {
 	return domain.PendingApproval{
-		IdempotencyKey:     key,
-		Op:                 domain.PendingOpAdd,
-		BodyJSON:           []byte(`{"id":"foo","github_org":"acme"}`),
-		RequesterActorType: "human-operator",
+		IdempotencyKey:       key,
+		Op:                   domain.PendingOpAdd,
+		BodyJSON:             []byte(`{"id":"foo","github_org":"acme"}`),
+		EffectiveRequesterID: "U01234ABCD",
+		RequesterActorType:   "human-operator",
 	}
 }
 
@@ -57,6 +58,9 @@ func TestSQLitePendingStore_CreateThenGet(t *testing.T) {
 	}
 	if string(got.BodyJSON) != `{"id":"foo","github_org":"acme"}` {
 		t.Errorf("BodyJSON roundtrip mismatch: %q", got.BodyJSON)
+	}
+	if got.EffectiveRequesterID != "U01234ABCD" {
+		t.Errorf("EffectiveRequesterID roundtrip mismatch: %q", got.EffectiveRequesterID)
 	}
 }
 
