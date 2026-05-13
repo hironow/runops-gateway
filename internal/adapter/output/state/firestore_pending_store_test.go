@@ -38,10 +38,11 @@ func newFirestorePendingStoreTest(t *testing.T) (port.PendingStore, func()) {
 
 func samplePending(idempotencyKey string) domain.PendingApproval {
 	return domain.PendingApproval{
-		IdempotencyKey:     idempotencyKey,
-		Op:                 domain.PendingOpAdd,
-		BodyJSON:           []byte(`{"id":"foo","github_org":"acme"}`),
-		RequesterActorType: "human-operator",
+		IdempotencyKey:       idempotencyKey,
+		Op:                   domain.PendingOpAdd,
+		BodyJSON:             []byte(`{"id":"foo","github_org":"acme"}`),
+		EffectiveRequesterID: "U01234ABCD",
+		RequesterActorType:   "human-operator",
 	}
 }
 

@@ -28,6 +28,12 @@ type rpcWiringConfig struct {
 	// pendingStore powers `pending.get`. Must be non-nil when flag on +
 	// registryPath set.
 	pendingStore port.PendingStore
+	// highMutationEnabled mirrors RUNOPS_RPC_HIGH_MUTATION_ENABLED=1
+	// and gates the §B-5 HIGH severity methods (= project.add / archive).
+	// With the flag off the methods are still registered with the
+	// dispatcher but return -32000 application error so clients see
+	// "feature gated" instead of -32601 "method not found".
+	highMutationEnabled bool
 }
 
 // wireRPCEndpoint registers POST /rpc on mux when the feature flag is on
@@ -70,6 +76,11 @@ func wireRPCEndpoint(mux *http.ServeMux, cfg rpcWiringConfig) (bool, error) {
 	dispatcher.Register(methods.NewProjectGet(cfg.projectRegistry))
 	dispatcher.Register(methods.NewProjectList(cfg.projectRegistry))
 	dispatcher.Register(methods.NewPendingGet(cfg.pendingStore))
+	// §B-5.2 HIGH severity mutation methods. Always registered so a
+	// client receives -32000 "feature gated" when the flag is off,
+	// matching ADR 0040 §approval gate integration step 3.
+	dispatcher.Register(methods.NewProjectAdd(cfg.pendingStore, cfg.highMutationEnabled))
+	dispatcher.Register(methods.NewProjectArchive(cfg.pendingStore, cfg.highMutationEnabled))
 
 	handler := rpc.NewHandler(dispatcher, registry)
 	mux.Handle("POST /rpc", handler)

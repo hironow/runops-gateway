@@ -205,10 +205,11 @@ func main() {
 	}()
 
 	rpcCfg := rpcWiringConfig{
-		flagEnabled:     os.Getenv("RUNOPS_RPC_ENDPOINT_ENABLED") == "1",
-		registryPath:    os.Getenv("RUNOPS_ADMIN_TOKENS_REGISTRY_FILE"),
-		projectRegistry: registry,
-		pendingStore:    pendingStore,
+		flagEnabled:         os.Getenv("RUNOPS_RPC_ENDPOINT_ENABLED") == "1",
+		registryPath:        os.Getenv("RUNOPS_ADMIN_TOKENS_REGISTRY_FILE"),
+		projectRegistry:     registry,
+		pendingStore:        pendingStore,
+		highMutationEnabled: os.Getenv("RUNOPS_RPC_HIGH_MUTATION_ENABLED") == "1",
 	}
 	rpcWired, rpcErr := wireRPCEndpoint(mux, rpcCfg)
 	if rpcErr != nil {
