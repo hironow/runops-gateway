@@ -119,8 +119,8 @@ token lookup strategy: SHA256(submitted_token) を 64 char hex に変換、 regi
 
 `RUNOPS_ADMIN_TOKENS_REGISTRY_FILE` 不在時:
 
-- HIGH mutation method (= add / archive) は **flag に関係なく block** (= identity 不確定で HIGH 操作不可、 fail-closed)
-- read-only method は legacy `RUNOPS_ADMIN_TOKEN` (= ADR 0030) で fallback 動作
+- /rpc endpoint 自体が登録されない (= fail-closed、 全 method block)。 §HTTP transport の wiring で `flag on + registry 不在` 時に endpoint registration を skip する。
+- 2026-05-10 user 判断: legacy `RUNOPS_ADMIN_TOKEN` への read-only fallback は **採用しない**。 理由: runops-gateway は未だ production 運用入りしていない (= legacy 後方互換不要)、 fallback path を残すと wiring complexity + operator_id 不確定 path の混在 + §B-5 で REST write disable 後の `/rpc` 経由 attack surface 設計が複雑化する。 §B-3 暫定挙動 (= registry 不在 + flag on → endpoint 不在) を最終挙動として確定。 ADR 0030 単一 ADMIN_TOKEN 認証は **REST read-only path で keep** されるため、 admin の最低限の read 操作は引き続き REST で可能。
 
 ### §4-eyes invariant (= ADR 0035 carry)
 
