@@ -1,7 +1,8 @@
 # 0040. JSON-RPC + transport abstraction for admin endpoint approval gate
 
 **Date:** 2026-05-10
-**Status:** Proposed (supersedes ADR 0039)
+**Status:** Accepted (supersedes ADR 0039)
+**Promoted:** 2026-05-14 (= §B-5 admin mutation flow landed atomically across 5 sub-PRs §B-5.1 through §B-5.5)
 
 ## Context
 
@@ -162,9 +163,14 @@ token lookup strategy: SHA256(submitted_token) を 64 char hex に変換、 regi
 | §B-2 | transport interface + dispatcher + envelope encode/decode | off |
 | §B-3 | HTTP transport 具象 + multi-token registry parser | off |
 | §B-4 | project read-only methods (= get / list / pending.get) のみ register、 mutation 不在 | off |
-| §B-5 | project mutation methods (= add / archive) + admin approval orchestrator + REST write disable + flag default on 検討 | off / production decision |
+| §B-5.1 | method names hoist + severity classifier (= readiness の precondition) | off |
+| §B-5.2 | mutation methods (add / archive) + PendingApproval domain extension + producer publisher wiring | off |
+| §B-5.3 | admin_approval orchestrator (= OnApprovalAck / OnApprovalDeny / OnApprovalTimeout 4-eyes invariant) | off |
+| §B-5.4a | REST write `/admin/projects` (POST / archive) を flag on で 410 Gone 化 (= REST bypass 閉塞) | off |
+| §B-5.4b | producer (= ApprovalRequester) + consumer (= Slack handler branch) + cmd/server wire-up (= atomic landing) | off |
+| §B-5.5 | `/_healthz` readiness JSON 拡張 (= operator visibility) + ADR Proposed → Accepted promotion | off |
 
-§B-4 までは feature flag `RUNOPS_RPC_ENDPOINT_ENABLED` で off default、 dev/test で flag on。 §B-5 で mutation method + orchestrator が atomic に landed = pending stuck 解消。
+§B-4 までは feature flag `RUNOPS_RPC_ENDPOINT_ENABLED` で off default、 dev/test で flag on。 §B-5.4b で mutation method + orchestrator + REST disable が atomic に landed (= 3 component が flag flip 時点で全 wire 済み)、 §B-5.5 で operator-facing readiness signal が landed = pending stuck 解消 + 段階的 rollout 可能。
 
 ### §future transport (= scope 外、 後続 PR)
 
@@ -234,6 +240,42 @@ token lookup strategy: SHA256(submitted_token) を 64 char hex に変換、 regi
 
 - ADR 0039 (= Proposed) を supersede、 ADR 0030 を partial supersede (= write only)
 - WebSocket / WebRTC は interface 公開のみ、 具象は future PR (= YAGNI 回避)
+
+## Deployment readiness (= §B-5.5 で landed、 operator-facing rollout gate)
+
+`/_healthz` は status field を `ok` で保ったまま、 ADR 0040 §B-5 の wiring snapshot を `adr_0040` 直下に carry。 operator は flag flip 前に下記 field が全て `true` を返すことを確認する (= partial wiring 状態で flag on にすると pending stuck の risk)。
+
+```json
+{
+  "status": "ok",
+  "adr_0040": {
+    "endpoint_enabled": true,
+    "high_mutation_enabled": true,
+    "registry_loaded": true,
+    "admin_approval_producer_enabled": true,
+    "admin_approval_consumer_enabled": true,
+    "registered_methods": {
+      "high": ["runops.admin.project.add", "runops.admin.project.archive"],
+      "low": ["runops.admin.project.get", "runops.admin.project.list", "runops.admin.project.pending.get"]
+    }
+  }
+}
+```
+
+### rollout sequence (= 推奨 ordering)
+
+1. `RUNOPS_RPC_ENDPOINT_ENABLED=true` + `RUNOPS_RPC_ADMIN_REGISTRY` set → `endpoint_enabled` / `registry_loaded` が `true` 化
+2. `RUNOPS_ADMIN_APPROVAL_CHANNEL` set + `RUNOPS_SLACK_BOT_TOKEN` present → `admin_approval_producer_enabled` / `admin_approval_consumer_enabled` が `true` 化
+3. `RUNOPS_RPC_HIGH_MUTATION_ENABLED=true` (= 最後) → `high_mutation_enabled` が `true` 化、 mutation method が pending を accept 開始
+
+### partial wiring detection (= operator が flag flip を避けるべき状態)
+
+- `endpoint_enabled=true` AND `high_mutation_enabled=true` AND (`admin_approval_producer_enabled=false` OR `admin_approval_consumer_enabled=false`)
+  - → mutation accept するが Slack button 出ない / button click が orchestrator に届かない (= pending が stuck)
+- `high_mutation_enabled=true` AND `registry_loaded=false`
+  - → /rpc が disabled、 mutation 不可
+
+flag flip は上記 partial state を経由しないよう atomic に揃えてから実行。
 
 ## Out of scope
 
