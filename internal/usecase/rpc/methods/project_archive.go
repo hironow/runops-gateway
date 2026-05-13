@@ -16,6 +16,7 @@ import (
 type ProjectArchive struct {
 	store       port.PendingStore
 	flagEnabled bool
+	approval    *approvalPublisher
 }
 
 // NewProjectArchive wires a ProjectArchive method.
@@ -24,6 +25,13 @@ func NewProjectArchive(store port.PendingStore, flagEnabled bool) *ProjectArchiv
 		panic("methods.NewProjectArchive: store must not be nil")
 	}
 	return &ProjectArchive{store: store, flagEnabled: flagEnabled}
+}
+
+// WithApprovalPublisher attaches the convergence-D-Mail publisher,
+// mirroring ProjectAdd.
+func (m *ProjectArchive) WithApprovalPublisher(req port.ApprovalRequester, target port.NotifyTarget) *ProjectArchive {
+	m.approval = &approvalPublisher{requester: req, target: target}
+	return m
 }
 
 // Name returns the JSON-RPC method name.
@@ -70,5 +78,5 @@ func (m *ProjectArchive) Handle(ctx context.Context, params json.RawMessage) (an
 	}
 
 	logOperator(ctx, MethodNameProjectArchive, "id", p.ID)
-	return createPending(ctx, m.store, op, MethodNameProjectArchive, domain.PendingOpArchive, params)
+	return createPending(ctx, m.store, op, MethodNameProjectArchive, domain.PendingOpArchive, params, m.approval)
 }

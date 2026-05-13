@@ -127,6 +127,14 @@ func (r *ApprovalRequester) buildButtonValues(mail domain.DMail) (string, string
 		"body_digest":            digest,
 		"issued_at":              0, // ID is in parent_idempotency_key; issued_at exists for replay-binding only
 	}
+	// ADR 0040 §B-5 admin-mutation approval routing: when the producer
+	// sets Metadata["kind"] (e.g. "admin_mutation") it is propagated to
+	// the button so handleApprovalAction can branch its applicator. Empty
+	// kind is left implicit (= defaults to "convergence" on the consumer
+	// side) to keep Phase 4a producers byte-identical.
+	if kind := mail.Metadata["kind"]; kind != "" {
+		value["kind"] = kind
+	}
 	// ADR 0036 §Carry point 2: surface the producer-emitted requester actor
 	// type into the button payload so handleApprovalAction can validate the
 	// approver against it on click. Empty / absent metadata is preserved as

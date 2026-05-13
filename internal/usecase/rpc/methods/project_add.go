@@ -24,9 +24,15 @@ import (
 // in the wiring layer). With flag off the method returns an application
 // error (-32000) so callers see a clear "feature gated" signal instead
 // of -32601 "method not found".
+//
+// approval optionally publishes a convergence D-Mail to the configured
+// Slack channel so an operator sees the approve / deny buttons (= §B-5.4b
+// wire-up). When unset, mutation methods skip publishing but still
+// record the pending; operators can trigger a manual repost later.
 type ProjectAdd struct {
 	store       port.PendingStore
 	flagEnabled bool
+	approval    *approvalPublisher
 }
 
 // NewProjectAdd wires a ProjectAdd method.
@@ -35,6 +41,14 @@ func NewProjectAdd(store port.PendingStore, flagEnabled bool) *ProjectAdd {
 		panic("methods.NewProjectAdd: store must not be nil")
 	}
 	return &ProjectAdd{store: store, flagEnabled: flagEnabled}
+}
+
+// WithApprovalPublisher attaches the convergence-D-Mail publisher used
+// to surface approve / deny buttons in Slack. Returns the receiver so
+// the wiring layer can chain construction.
+func (m *ProjectAdd) WithApprovalPublisher(req port.ApprovalRequester, target port.NotifyTarget) *ProjectAdd {
+	m.approval = &approvalPublisher{requester: req, target: target}
+	return m
 }
 
 // Name returns the JSON-RPC method name.
@@ -89,13 +103,20 @@ func (m *ProjectAdd) Handle(ctx context.Context, params json.RawMessage) (any, *
 	}
 
 	logOperator(ctx, MethodNameProjectAdd, "id", p.ID)
-	return createPending(ctx, m.store, op, MethodNameProjectAdd, domain.PendingOpAdd, params)
+	return createPending(ctx, m.store, op, MethodNameProjectAdd, domain.PendingOpAdd, params, m.approval)
 }
 
 // createPending is shared by ProjectAdd / ProjectArchive (= identical
-// flow: derive IdempotencyKey + CreateIfNotExists + emit
-// `{idempotency_key, status}`). Pulled out so the two methods stay
-// thin and the 4-eyes contract has a single audit surface.
+// flow: derive IdempotencyKey + CreateIfNotExists + publish approval
+// D-Mail + emit `{idempotency_key, status}`). Pulled out so the two
+// methods stay thin and the 4-eyes contract has a single audit surface.
+//
+// approval is optional. When non-nil it publishes a convergence D-Mail
+// to the configured Slack channel so an operator sees the approve / deny
+// buttons. A publish failure does NOT fail the method — the pending
+// record is the authoritative source of truth, so the caller still
+// receives `{idempotency_key, status: "pending_approval"}` and operators
+// can re-trigger the Slack post manually.
 func createPending(
 	ctx context.Context,
 	store port.PendingStore,
@@ -103,6 +124,7 @@ func createPending(
 	method string,
 	pendingOp domain.PendingOp,
 	rawParams json.RawMessage,
+	approval *approvalPublisher,
 ) (any, *domainrpc.Error) {
 	key, err := ComputeIdempotencyKey(op.OperatorID, method, rawParams)
 	if err != nil {
@@ -121,9 +143,10 @@ func createPending(
 		Status:               domain.PendingStatusPendingApproval,
 	}
 	saved, err := store.CreateIfNotExists(ctx, pending)
+	newlyCreated := false
 	switch {
 	case err == nil:
-		// new record created
+		newlyCreated = true
 	case errors.Is(err, port.ErrPendingAlreadyExists):
 		// duplicate — return the existing record's identity so the
 		// caller observes the same envelope shape (= idempotent retry).
@@ -133,6 +156,14 @@ func createPending(
 			Code:    domainrpc.CodeInternalError,
 			Message: "create pending approval: " + err.Error(),
 		}
+	}
+
+	// Publish the convergence D-Mail only for freshly created pendings.
+	// Idempotent retries skip the publish to avoid double-posting to
+	// Slack; operators can manually repost from the original Slack
+	// message if needed.
+	if newlyCreated {
+		approval.publish(ctx, method, pending)
 	}
 
 	return map[string]any{

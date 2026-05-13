@@ -34,6 +34,15 @@ type rpcWiringConfig struct {
 	// dispatcher but return -32000 application error so clients see
 	// "feature gated" instead of -32601 "method not found".
 	highMutationEnabled bool
+	// adminApprovalRequester publishes the convergence D-Mail that
+	// surfaces approve / deny buttons in Slack (= §B-5.4b producer
+	// side). nil = publishing disabled, mutation methods still record
+	// the pending but operators must repost buttons manually.
+	adminApprovalRequester port.ApprovalRequester
+	// adminApprovalTarget is the Slack channel (and optional thread)
+	// where admin approval requests land. Ignored when
+	// adminApprovalRequester is nil.
+	adminApprovalTarget port.NotifyTarget
 }
 
 // wireRPCEndpoint registers POST /rpc on mux when the feature flag is on
@@ -79,8 +88,17 @@ func wireRPCEndpoint(mux *http.ServeMux, cfg rpcWiringConfig) (bool, error) {
 	// §B-5.2 HIGH severity mutation methods. Always registered so a
 	// client receives -32000 "feature gated" when the flag is off,
 	// matching ADR 0040 §approval gate integration step 3.
-	dispatcher.Register(methods.NewProjectAdd(cfg.pendingStore, cfg.highMutationEnabled))
-	dispatcher.Register(methods.NewProjectArchive(cfg.pendingStore, cfg.highMutationEnabled))
+	addMethod := methods.NewProjectAdd(cfg.pendingStore, cfg.highMutationEnabled)
+	archiveMethod := methods.NewProjectArchive(cfg.pendingStore, cfg.highMutationEnabled)
+	// §B-5.4b: attach the convergence-D-Mail publisher so a pending
+	// surfaces approve / deny buttons in Slack. nil requester is fine
+	// (= mutation methods skip publishing but still record pending).
+	if cfg.adminApprovalRequester != nil {
+		addMethod = addMethod.WithApprovalPublisher(cfg.adminApprovalRequester, cfg.adminApprovalTarget)
+		archiveMethod = archiveMethod.WithApprovalPublisher(cfg.adminApprovalRequester, cfg.adminApprovalTarget)
+	}
+	dispatcher.Register(addMethod)
+	dispatcher.Register(archiveMethod)
 
 	handler := rpc.NewHandler(dispatcher, registry)
 	mux.Handle("POST /rpc", handler)

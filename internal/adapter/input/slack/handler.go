@@ -74,12 +74,23 @@ type interactivePayload struct {
 // InteractiveHandler handles POST /slack/interactive requests
 // (block-kit button clicks: approve / deny / dispatch_approve / dispatch_deny /
 // approval_approve / approval_deny).
+// AdminApprovalOrchestrator is the interface satisfied by the ADR 0040
+// §B-5 admin-mutation approval orchestrator. Declared here (= adapter
+// side) so the slack handler can branch on av.Kind == admin_mutation
+// without importing the concrete usecase package directly. The
+// production implementation lives in internal/usecase/admin_approval.
+type AdminApprovalOrchestrator interface {
+	OnApprovalAck(ctx context.Context, idempotencyKey, approverID string, approverType domain.CallerType) error
+	OnApprovalDeny(ctx context.Context, idempotencyKey, approverID string, approverType domain.CallerType) error
+}
+
 type InteractiveHandler struct {
 	useCase           port.RunOpsUseCase
 	dispatchUseCase   DispatchUseCase
 	notifier          port.Notifier
 	consumedTokens    port.ConsumedTokenStore
 	approvalPublisher port.DMailPublisher           // optional, Phase 4a (ADR 0019)
+	adminApproval     AdminApprovalOrchestrator     // optional, ADR 0040 §B-5
 	pending           *observability.PendingTracker // optional, Issue 0005 — when nil, falls back to bare `go`
 	signingSecret     string
 	// aiAgentBotUserIDs lists Slack user.id values that the operator has
@@ -119,6 +130,17 @@ func (h *InteractiveHandler) WithApprovalPublisher(p port.DMailPublisher) *Inter
 // Returns the same handler so callers can chain after NewInteractiveHandler.
 func (h *InteractiveHandler) WithAIAgentBotUserIDs(ids []string) *InteractiveHandler {
 	h.aiAgentBotUserIDs = ids
+	return h
+}
+
+// WithAdminApprovalOrchestrator enables the ADR 0040 §B-5 admin-mutation
+// approval routing. When set, approval clicks whose action value carries
+// Kind == admin_mutation bypass the convergence ack publish and call
+// OnApprovalAck / OnApprovalDeny on the orchestrator. Phase 4a
+// convergence approvals (= Kind empty or convergence) keep the legacy
+// path unchanged.
+func (h *InteractiveHandler) WithAdminApprovalOrchestrator(o AdminApprovalOrchestrator) *InteractiveHandler {
+	h.adminApproval = o
 	return h
 }
 
@@ -606,6 +628,30 @@ func (h *InteractiveHandler) handleApprovalAction(traceCtx context.Context, acti
 
 	if action.ActionID == "approval_deny" {
 		span.SetAttributes(attribute.String("approval.outcome", "denied"))
+		// ADR 0040 §B-5.4b admin-mutation branch: call the orchestrator
+		// instead of the convergence ack path. Phase 4a convergence
+		// approvals (Kind empty / convergence) keep the existing
+		// Slack-only behaviour.
+		if av.Kind == ApprovalKindAdminMutation && h.adminApproval != nil {
+			span.End()
+			h.goAsync(func() {
+				ctx, cancel := context.WithTimeout(traceCtx, responseURLTimeout)
+				defer cancel()
+				if err := h.adminApproval.OnApprovalDeny(ctx, av.ParentIdempotencyKey, clickerUserID, clickerActorType); err != nil {
+					slog.Error("admin approval deny failed", "error", err)
+					if nerr := h.notifier.UpdateMessage(ctx, target,
+						fmt.Sprintf("❌ Admin 承認拒否の処理に失敗しました: %v", err)); nerr != nil {
+						slog.Error("admin deny failure notification failed", "error", nerr)
+					}
+					return
+				}
+				if err := h.notifier.UpdateMessage(ctx, target,
+					fmt.Sprintf("🚫 Admin 承認拒否 by <@%s>", clickerUserID)); err != nil {
+					slog.Error("admin deny notification failed", "error", err)
+				}
+			})
+			return
+		}
 		span.End()
 		h.goAsync(func() {
 			ctx, cancel := context.WithTimeout(traceCtx, responseURLTimeout)
@@ -619,7 +665,12 @@ func (h *InteractiveHandler) handleApprovalAction(traceCtx context.Context, acti
 	}
 
 	// approval_approve from here.
-	if h.approvalPublisher == nil {
+	// Phase 4a convergence approvals require approvalPublisher; admin-
+	// mutation approvals (ADR 0040 §B-5) are routed below via the
+	// orchestrator and do NOT need approvalPublisher. Skip the wiring
+	// guard so the admin path stays available when the legacy
+	// publisher is intentionally unwired.
+	if av.Kind != ApprovalKindAdminMutation && h.approvalPublisher == nil {
 		slog.Warn("approval_approve received but ApprovalPublisher is not wired")
 		span.SetStatus(codes.Error, "ApprovalPublisher not wired")
 		span.End()
@@ -646,6 +697,33 @@ func (h *InteractiveHandler) handleApprovalAction(traceCtx context.Context, acti
 	}
 
 	span.SetAttributes(attribute.String("approval.outcome", "approved"))
+
+	// ADR 0040 §B-5.4b admin-mutation branch: route to the orchestrator
+	// instead of publishing a convergence ack. The consumed-token guard
+	// above already protected against double clicks; the orchestrator's
+	// own ErrAlreadyTerminal further guarantees idempotency across
+	// gateway-process restarts.
+	if av.Kind == ApprovalKindAdminMutation && h.adminApproval != nil {
+		span.End()
+		h.goAsync(func() {
+			ctx, cancel := context.WithTimeout(traceCtx, responseURLTimeout)
+			defer cancel()
+			if err := h.adminApproval.OnApprovalAck(ctx, av.ParentIdempotencyKey, clickerUserID, clickerActorType); err != nil {
+				slog.Error("admin approval ack failed", "error", err)
+				if nerr := h.notifier.UpdateMessage(ctx, target,
+					fmt.Sprintf("❌ Admin 承認処理に失敗しました: %v", err)); nerr != nil {
+					slog.Error("admin ack failure notification failed", "error", nerr)
+				}
+				return
+			}
+			if err := h.notifier.UpdateMessage(ctx, target,
+				fmt.Sprintf("✅ Admin 承認完了 + apply by <@%s>", clickerUserID)); err != nil {
+				slog.Error("admin ack success notification failed", "error", err)
+			}
+		})
+		return
+	}
+
 	span.End()
 
 	mail := domain.DMail{
