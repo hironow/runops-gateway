@@ -22,9 +22,6 @@ import (
 	usecaserpc "github.com/hironow/runops-gateway/internal/usecase/rpc"
 )
 
-// methodNameProjectGet is the JSON-RPC method name registered by ProjectGet.
-const methodNameProjectGet = "runops.admin.project.get"
-
 // Application error codes — ADR 0040 §JSON-RPC 2.0 spec reserves
 // [-32099, -32000] for application-defined errors.
 const (
@@ -46,7 +43,7 @@ func NewProjectGet(registry port.ProjectRegistry) *ProjectGet {
 }
 
 // Name returns the JSON-RPC method name.
-func (m *ProjectGet) Name() string { return methodNameProjectGet }
+func (m *ProjectGet) Name() string { return MethodNameProjectGet }
 
 // projectGetParams is the parsed shape of the params object.
 type projectGetParams struct {
@@ -71,7 +68,7 @@ func (m *ProjectGet) Handle(ctx context.Context, params json.RawMessage) (any, *
 		}
 	}
 
-	logOperator(ctx, methodNameProjectGet, "id", p.ID)
+	logOperator(ctx, MethodNameProjectGet, "id", p.ID)
 
 	proj, err := m.registry.Get(ctx, p.ID)
 	if err != nil {
