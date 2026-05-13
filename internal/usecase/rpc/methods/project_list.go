@@ -9,8 +9,6 @@ import (
 	"github.com/hironow/runops-gateway/internal/core/port"
 )
 
-const methodNameProjectList = "runops.admin.project.list"
-
 // ProjectList handles `runops.admin.project.list`. Optional status filter:
 // "active" (default) | "archived" | "all". Read-only; no approval gate.
 type ProjectList struct {
@@ -26,7 +24,7 @@ func NewProjectList(registry port.ProjectRegistry) *ProjectList {
 }
 
 // Name returns the JSON-RPC method name.
-func (m *ProjectList) Name() string { return methodNameProjectList }
+func (m *ProjectList) Name() string { return MethodNameProjectList }
 
 // projectListParams parses optional status filter.
 type projectListParams struct {
@@ -51,7 +49,7 @@ func (m *ProjectList) Handle(ctx context.Context, params json.RawMessage) (any, 
 		return nil, perr
 	}
 
-	logOperator(ctx, methodNameProjectList, "status", p.Status)
+	logOperator(ctx, MethodNameProjectList, "status", p.Status)
 
 	projects, err := m.registry.List(ctx, filter)
 	if err != nil {

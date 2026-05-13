@@ -11,8 +11,6 @@ import (
 	"github.com/hironow/runops-gateway/internal/core/port"
 )
 
-const methodNamePendingGet = "runops.admin.project.pending.get"
-
 const codePendingNotFound = -32002
 
 // PendingGet handles `runops.admin.project.pending.get` — returns the
@@ -35,7 +33,7 @@ func NewPendingGet(store port.PendingStore) *PendingGet {
 }
 
 // Name returns the JSON-RPC method name.
-func (m *PendingGet) Name() string { return methodNamePendingGet }
+func (m *PendingGet) Name() string { return MethodNamePendingGet }
 
 // pendingGetParams parses the idempotency_key from the params object.
 type pendingGetParams struct {
@@ -74,7 +72,7 @@ func (m *PendingGet) Handle(ctx context.Context, params json.RawMessage) (any, *
 		}
 	}
 
-	logOperator(ctx, methodNamePendingGet, "idempotency_key", p.IdempotencyKey)
+	logOperator(ctx, MethodNamePendingGet, "idempotency_key", p.IdempotencyKey)
 
 	pa, err := m.store.Get(ctx, p.IdempotencyKey)
 	if err != nil {
