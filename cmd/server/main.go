@@ -172,15 +172,25 @@ func main() {
 	// missing leaves /admin/projects unreachable so the attack surface
 	// stays at zero on non-multiplex deployments. ADR 0030 §"Why opt-in".
 	adminToken := os.Getenv("RUNOPS_ADMIN_TOKEN")
+	// ADR 0040 §REST endpoint との関係: when the /rpc HIGH-mutation flag
+	// is on we disable the legacy POST mutation paths so all admin
+	// writes flow through the JSON-RPC + 4-eyes approval gate. GET
+	// endpoints stay available for read-only operators.
+	adminWriteDisabled := os.Getenv("RUNOPS_RPC_HIGH_MUTATION_ENABLED") == "1"
 	if registry != nil && adminToken != "" {
-		admin.NewHandler(registry, adminToken).Register(mux)
+		h := admin.NewHandler(registry, adminToken)
+		if adminWriteDisabled {
+			h = h.WithWriteDisabled()
+		}
+		h.Register(mux)
 		slog.Info("admin endpoint registered (#0012)",
 			"endpoints", []string{
 				"POST /admin/projects",
 				"GET /admin/projects",
 				"GET /admin/projects/{id}",
 				"POST /admin/projects/{id}/archive",
-			})
+			},
+			"write_disabled", adminWriteDisabled)
 	} else {
 		slog.Info("admin endpoint not registered",
 			"registry_wired", registry != nil,

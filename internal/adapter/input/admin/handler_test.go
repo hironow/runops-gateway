@@ -382,3 +382,104 @@ func TestHandler_String_RedactsToken(t *testing.T) {
 // silence unused import errors during partial compile if we ever drop
 // errors usage — keep here so go vet recognises the import.
 var _ = errors.Is
+
+// ---- §B-5.4a tests: REST write disable on flag ----
+
+// TestHandler_WriteDisabled_AddReturns410 verifies that flipping the
+// HIGH-mutation flag (= RUNOPS_RPC_HIGH_MUTATION_ENABLED=1 propagated
+// via WithWriteDisabled) blocks the legacy POST /admin/projects path
+// with 410 Gone + Location header pointing at /rpc. ADR 0040 §REST
+// endpoint との関係.
+func TestHandler_WriteDisabled_AddReturns410(t *testing.T) {
+	// given
+	reg := newFakeRegistry()
+	h := NewHandler(reg, testToken).WithWriteDisabled()
+	mux := http.NewServeMux()
+	h.Register(mux)
+
+	body := bytes.NewBufferString(`{"id":"alpha","github_org":"acme","github_repo":"alpha-repo","workspace_path":"/srv/projects/alpha"}`)
+	req := httptest.NewRequest(http.MethodPost, "/admin/projects", body)
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	// when
+	mux.ServeHTTP(rr, req)
+
+	// then
+	if rr.Code != http.StatusGone {
+		t.Errorf("status: got %d, want 410", rr.Code)
+	}
+	if loc := rr.Header().Get("Location"); loc != "/rpc" {
+		t.Errorf("Location: got %q, want /rpc", loc)
+	}
+	// registry must NOT have received the add
+	if _, exists := reg.projects["alpha"]; exists {
+		t.Errorf("project must NOT be added when writes are disabled")
+	}
+}
+
+func TestHandler_WriteDisabled_ArchiveReturns410(t *testing.T) {
+	reg := newFakeRegistry()
+	// seed an existing project so the archive path would otherwise succeed
+	reg.projects["alpha"] = domain.Project{ID: "alpha", Status: domain.ProjectStatusActive}
+	h := NewHandler(reg, testToken).WithWriteDisabled()
+	mux := http.NewServeMux()
+	h.Register(mux)
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/projects/alpha/archive", nil)
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	rr := httptest.NewRecorder()
+
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusGone {
+		t.Errorf("status: got %d, want 410", rr.Code)
+	}
+	if loc := rr.Header().Get("Location"); loc != "/rpc" {
+		t.Errorf("Location: got %q, want /rpc", loc)
+	}
+	if reg.projects["alpha"].Status != domain.ProjectStatusActive {
+		t.Errorf("project must NOT be archived when writes are disabled")
+	}
+}
+
+func TestHandler_WriteDisabled_ReadEndpointsUnaffected(t *testing.T) {
+	// GET endpoints must keep working regardless of the write-disable flag.
+	reg := newFakeRegistry()
+	reg.projects["alpha"] = domain.Project{ID: "alpha", Status: domain.ProjectStatusActive}
+	h := NewHandler(reg, testToken).WithWriteDisabled()
+	mux := http.NewServeMux()
+	h.Register(mux)
+
+	for _, path := range []string{"/admin/projects", "/admin/projects/alpha"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("Authorization", "Bearer "+testToken)
+		rr := httptest.NewRecorder()
+		mux.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Errorf("GET %s: got %d, want 200", path, rr.Code)
+		}
+	}
+}
+
+func TestHandler_WriteEnabled_AddSucceeds(t *testing.T) {
+	// Regression: default (= WithWriteDisabled not called) keeps the
+	// legacy path operational so the flag-off rollout window remains
+	// byte-identical to develop.
+	reg := newFakeRegistry()
+	h := NewHandler(reg, testToken)
+	mux := http.NewServeMux()
+	h.Register(mux)
+
+	body := bytes.NewBufferString(`{"id":"beta","github_org":"acme","github_repo":"beta-repo","workspace_path":"/srv/projects/beta"}`)
+	req := httptest.NewRequest(http.MethodPost, "/admin/projects", body)
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusCreated {
+		t.Errorf("status: got %d, want 201", rr.Code)
+	}
+}
