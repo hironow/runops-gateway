@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -349,9 +350,31 @@ func main() {
 			"registry_wired", registry != nil,
 			"broker_audience_set", os.Getenv("BROKER_AUDIENCE") != "")
 	}
+	// /_healthz returns liveness ("ok") and the ADR 0040 §B-5 wiring
+	// snapshot so operators can verify flag rollout state without log
+	// diving. Captured-by-closure: the readiness reflects construction
+	// time + never mutates afterwards.
+	readiness := newRPCReadiness(
+		rpcWired,
+		rpcCfg.highMutationEnabled,
+		rpcCfg.registryPath != "" && rpcWired,
+		adminApprovalRequester != nil,
+		adminOrchestrator != nil,
+	)
 	mux.HandleFunc("GET /_healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintln(w, `{"status":"ok"}`)
+		payload, err := marshalReadiness(readiness)
+		if err != nil {
+			http.Error(w, "readiness marshal failed", http.StatusInternalServerError)
+			return
+		}
+		// Route the pre-marshaled JSON through the encoder so the
+		// transport layer never raw-writes bytes (= keeps the codepath
+		// aligned with the project-wide JSON-only output rule, same
+		// pattern as /rpc handler).
+		if err := json.NewEncoder(w).Encode(json.RawMessage(payload)); err != nil {
+			slog.DebugContext(r.Context(), "healthz: write response failed", "error", err)
+		}
 	})
 
 	// otelhttp wraps the mux so every Slack POST gets a root span automatic.
