@@ -21,13 +21,20 @@ import "time"
 // 同一 IdempotencyKey の並列 POST は CreateIfNotExists で重複検出され、
 // 1 つだけが approval flow に進む (= idempotent retry safe)。
 type PendingApproval struct {
-	IdempotencyKey     string        `firestore:"idempotency_key"      json:"idempotency_key"`
-	Op                 PendingOp     `firestore:"op"                   json:"op"`
-	BodyJSON           []byte        `firestore:"body_json"            json:"body_json"`
-	RequesterActorType string        `firestore:"requester_actor_type" json:"requester_actor_type"`
-	CreatedAt          time.Time     `firestore:"created_at"           json:"created_at"`
-	Status             PendingStatus `firestore:"status"               json:"status"`
-	AppliedAt          *time.Time    `firestore:"applied_at,omitempty" json:"applied_at,omitempty"`
+	IdempotencyKey string    `firestore:"idempotency_key"      json:"idempotency_key"`
+	Op             PendingOp `firestore:"op"                   json:"op"`
+	BodyJSON       []byte    `firestore:"body_json" json:"body_json"`
+	// EffectiveRequesterID is the resolved identity of the mutation
+	// requester (= ADR 0040 §identity contract: per-operator id derived
+	// from the multi-admin-token registry). Used by the admin approval
+	// orchestrator at approval-ack time to enforce ADR 0035 4-eyes
+	// invariant (effective_requester_id != approver_id) before applying
+	// the mutation to the project registry.
+	EffectiveRequesterID string        `firestore:"effective_requester_id" json:"effective_requester_id"`
+	RequesterActorType   string        `firestore:"requester_actor_type"   json:"requester_actor_type"`
+	CreatedAt            time.Time     `firestore:"created_at"           json:"created_at"`
+	Status               PendingStatus `firestore:"status"               json:"status"`
+	AppliedAt            *time.Time    `firestore:"applied_at,omitempty" json:"applied_at,omitempty"`
 }
 
 // PendingOp は admin endpoint mutation の operation 種別 (= add / archive)。
