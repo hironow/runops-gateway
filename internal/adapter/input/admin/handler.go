@@ -23,9 +23,16 @@ import (
 // port.ProjectRegistry. All endpoints require Authorization: Bearer
 // <token>. The token is held as []byte so subtle.ConstantTimeCompare
 // can dodge timing attacks.
+//
+// writeDisabled gates the legacy mutation paths (= POST
+// /admin/projects + POST /admin/projects/{id}/archive). When set,
+// those endpoints respond with 410 Gone + Location: /rpc so operators
+// migrate to the §B-5.2 JSON-RPC mutation methods. ADR 0040 §REST
+// endpoint との関係 carry. GET endpoints stay open regardless.
 type Handler struct {
-	registry port.ProjectRegistry
-	token    []byte
+	registry      port.ProjectRegistry
+	token         []byte
+	writeDisabled bool
 }
 
 // NewHandler builds an admin handler. The caller (cmd/server) is
@@ -33,6 +40,16 @@ type Handler struct {
 // is empty so the routes simply do not exist on those deployments.
 func NewHandler(registry port.ProjectRegistry, token string) *Handler {
 	return &Handler{registry: registry, token: []byte(token)}
+}
+
+// WithWriteDisabled marks the handler so the legacy mutation endpoints
+// (= POST /admin/projects + POST /admin/projects/{id}/archive) respond
+// with 410 Gone + Location: /rpc instead of mutating the registry. The
+// builder pattern keeps the default constructor signature backwards-
+// compatible so existing callers and tests need no edits.
+func (h *Handler) WithWriteDisabled() *Handler {
+	h.writeDisabled = true
+	return h
 }
 
 // String redacts the configured token so accidental %v / Sprintf does
@@ -86,6 +103,10 @@ func (h *Handler) requireAuth(w http.ResponseWriter, r *http.Request, fn func())
 
 func (h *Handler) handleAdd(w http.ResponseWriter, r *http.Request) {
 	h.requireAuth(w, r, func() {
+		if h.writeDisabled {
+			h.writeGoneToRPC(w, r)
+			return
+		}
 		var p domain.Project
 		if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
 			writeJSONError(w, http.StatusBadRequest, "invalid request body")
@@ -102,6 +123,17 @@ func (h *Handler) handleAdd(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSONProject(w, http.StatusCreated, p)
 	})
+}
+
+// writeGoneToRPC emits 410 Gone with Location: /rpc so legacy clients
+// migrate to the JSON-RPC mutation methods (= ADR 0040 §REST endpoint
+// との関係). Constant log message; never echoes request body.
+func (h *Handler) writeGoneToRPC(w http.ResponseWriter, r *http.Request) {
+	slog.WarnContext(r.Context(),
+		"admin: legacy write rejected (use /rpc)",
+		"endpoint", r.URL.Path)
+	w.Header().Set("Location", "/rpc")
+	writeJSONError(w, http.StatusGone, "legacy write disabled, use POST /rpc")
 }
 
 func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
@@ -138,6 +170,10 @@ func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleArchive(w http.ResponseWriter, r *http.Request) {
 	h.requireAuth(w, r, func() {
+		if h.writeDisabled {
+			h.writeGoneToRPC(w, r)
+			return
+		}
 		id := r.PathValue("id")
 		if err := h.registry.Archive(r.Context(), id); err != nil {
 			h.writeRegistryError(w, err)
