@@ -108,8 +108,8 @@ resource "github_repository_ruleset" "develop_branch" {
   }
 
   rules {
-    deletion              = true
-    non_fast_forward      = true
+    deletion         = true
+    non_fast_forward = true
     pull_request {
       required_approving_review_count   = 1
       dismiss_stale_reviews_on_push     = false
@@ -121,8 +121,8 @@ resource "github_repository_ruleset" "develop_branch" {
       strict_required_status_checks_policy = false
       required_check {
         context        = "release-gate"
-        integration_id = 0  # 0 = any integration may report; the gate
-                            # is enforced by the context name alone.
+        integration_id = 0 # 0 = any integration may report; the gate
+        # is enforced by the context name alone.
       }
     }
   }
