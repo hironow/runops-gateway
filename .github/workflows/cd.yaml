@@ -568,16 +568,16 @@ jobs:
           git checkout origin/develop -- docs/deploy-log.md 2>/dev/null || true
           if [ ! -f docs/deploy-log.md ]; then
             mkdir -p docs
-            cat > docs/deploy-log.md <<'HDR'
-# Production deploy log (ADR 0031)
-
-Append-only ledger written by the cd.yaml workflow after each
-production deploy. Auxiliary to the protected `prod-*` git tags
-and Cloud Run revision labels (those are the rollback SoT).
-
-| timestamp_utc | trigger | actor | deploy_sha | previous_prod_sha7 | category | reason |
-|---|---|---|---|---|---|---|
-HDR
+            {
+              printf '%s\n' '# Production deploy log (ADR 0031)'
+              printf '\n'
+              printf '%s\n' 'Append-only ledger written by the cd.yaml workflow after each'
+              printf '%s\n' 'production deploy. Auxiliary to the protected `prod-*` git tags'
+              printf '%s\n' 'and Cloud Run revision labels (those are the rollback SoT).'
+              printf '\n'
+              printf '%s\n' '| timestamp_utc | trigger | actor | deploy_sha | previous_prod_sha7 | category | reason |'
+              printf '%s\n' '|---|---|---|---|---|---|---|'
+            } > docs/deploy-log.md
           fi
           echo "$ENTRY" >> docs/deploy-log.md
           # The append commit itself is routing-classified (markdown
