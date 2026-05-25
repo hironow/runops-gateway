@@ -1,0 +1,51 @@
+name: CodeQL
+
+# Go 向けの code scanning (SAST)。public repo なので CodeQL は無料。
+# 結果は Security > Code scanning alerts に上がる。
+#
+# 分類について: 本 workflow file は release-gate の auth_boundary glob
+# (release-gate.yaml / cd.yaml / deploy*.yaml / CODEOWNERS /
+# release-gate-paths.yaml) のいずれにもマッチせず routing 扱い。
+# CD の deploy 経路には一切関与しない (独立した security scan のみ)。
+
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+    branches: [develop]
+  schedule:
+    # 週次 (月 03:27 UTC)。依存・ルール更新を定期的に再スキャン。
+    - cron: "27 3 * * 1"
+
+concurrency:
+  group: codeql-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  security-events: write # CodeQL の SARIF アップロードに必須
+  actions: read # workflow メタ参照 (fork PR 互換)
+
+jobs:
+  analyze:
+    name: Analyze (Go)
+    runs-on: ubuntu-24.04
+    steps:
+      # SHA pin: 既存 workflow と同一 pin を流用 (org policy "Require actions
+      # to be pinned to a full-length commit SHA")。
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # Go toolchain は mise 経由で揃える (mise.toml の go = "latest")。
+      # CI test job と同じ流儀で dev/CI を lockstep に保つ。
+      - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@03e4368ac7daa2bd82b3e85262f3bf87ee112f57 # v3.36.0
+        with:
+          languages: go
+          build-mode: autobuild
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@03e4368ac7daa2bd82b3e85262f3bf87ee112f57 # v3.36.0
+        with:
+          category: "/language:go"
