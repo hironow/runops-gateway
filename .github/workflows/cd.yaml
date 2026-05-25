@@ -340,6 +340,14 @@ jobs:
       (needs.infra.result == 'success' || needs.infra.result == 'skipped')
     runs-on: ubuntu-24.04
     environment: production
+    # The deploy job pushes the prod-* immutable tag (ADR 0031). The
+    # workflow-level grant is contents: read, so this job overrides it
+    # with contents: write. Job-level permissions REPLACE (not merge)
+    # the workflow-level set, so id-token: write is re-declared here for
+    # Workload Identity Federation auth to GCP.
+    permissions:
+      contents: write
+      id-token: write
 
     env:
       IMAGE: >-
