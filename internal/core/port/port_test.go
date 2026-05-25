@@ -14,7 +14,7 @@ import (
 // stubUseCase implements RunOpsUseCase.
 type stubUseCase struct{}
 
-func (s *stubUseCase) ApproveAction(_ context.Context, _ domain.ApprovalRequest, _ port.NotifyTarget) error {
+func (s *stubUseCase) ApproveAction(_ context.Context, _ domain.ApprovalRequest, _ port.NotifyTarget, _ domain.CallerType) error {
 	return nil
 }
 

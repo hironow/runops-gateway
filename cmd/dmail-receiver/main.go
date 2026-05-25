@@ -38,7 +38,8 @@ import (
 type config struct {
 	projectID    string
 	subscription string
-	outboxDir    string
+	outboxDir    string            // single-mode (PHONEWAVE_OUTBOX_DIR), legacy
+	outboxByID   map[string]string // multi-mode (PHONEWAVE_OUTBOX_DIRS_BY_PROJECT), #0006
 }
 
 func loadConfig() (config, error) {
@@ -54,8 +55,25 @@ func loadConfig() (config, error) {
 	if cfg.subscription == "" {
 		missing = append(missing, "PUBSUB_DMAIL_INBOUND_SUB")
 	}
-	if cfg.outboxDir == "" {
-		missing = append(missing, "PHONEWAVE_OUTBOX_DIR")
+
+	// Multi-mode env (#0006). Optional; when set it takes precedence
+	// over PHONEWAVE_OUTBOX_DIR. The legacy single-mode env stays valid
+	// for backward compatibility — at least one of the two must resolve
+	// to a non-empty configuration.
+	mapEnv := os.Getenv("PHONEWAVE_OUTBOX_DIRS_BY_PROJECT")
+	if mapEnv != "" {
+		parsed, err := phonewave.ParseDirsByProject(mapEnv)
+		if err != nil {
+			return config{}, fmt.Errorf("PHONEWAVE_OUTBOX_DIRS_BY_PROJECT: %w", err)
+		}
+		if len(parsed) == 0 {
+			return config{}, fmt.Errorf("PHONEWAVE_OUTBOX_DIRS_BY_PROJECT parsed to zero entries; either remove the var or supply id:path entries")
+		}
+		cfg.outboxByID = parsed
+	}
+
+	if cfg.outboxDir == "" && len(cfg.outboxByID) == 0 {
+		missing = append(missing, "PHONEWAVE_OUTBOX_DIR or PHONEWAVE_OUTBOX_DIRS_BY_PROJECT")
 	}
 	if len(missing) > 0 {
 		return config{}, fmt.Errorf("missing required env vars: %v", missing)
@@ -134,8 +152,28 @@ func main() {
 	}
 	defer client.Close()
 
-	writer := phonewave.NewOutboxWriter(cfg.outboxDir)
-	receiver := pubsubinput.NewReceiver(writer)
+	// Build the OutboxRouter from env: multi-mode takes precedence
+	// over single-mode (#0006 / ADR 0028). Setting both is allowed
+	// during the transition window — the multi-mode map wins and the
+	// legacy single env is logged as deprecated.
+	var router pubsubinput.OutboxRouter
+	switch {
+	case len(cfg.outboxByID) > 0:
+		if cfg.outboxDir != "" {
+			slog.Warn("dmail-receiver: both PHONEWAVE_OUTBOX_DIRS_BY_PROJECT and PHONEWAVE_OUTBOX_DIR set; map takes precedence (PHONEWAVE_OUTBOX_DIR is deprecated)")
+		}
+		writers := make(map[string]pubsubinput.Writer, len(cfg.outboxByID))
+		for id, dir := range cfg.outboxByID {
+			writers[id] = phonewave.NewOutboxWriter(dir)
+		}
+		router = pubsubinput.NewMultiOutboxRouter(writers)
+		slog.Info("dmail-receiver: multi-mode outbox routing", "project_count", len(cfg.outboxByID))
+	default:
+		writer := phonewave.NewOutboxWriter(cfg.outboxDir)
+		router = pubsubinput.NewSingleOutboxRouter(writer)
+		slog.Info("dmail-receiver: single-mode outbox (project_id ignored, backward compat)", "outbox_dir", cfg.outboxDir)
+	}
+	receiver := pubsubinput.NewReceiver(router)
 
 	sub := client.Subscriber(cfg.subscription)
 	slog.Info("dmail-receiver: receiving",

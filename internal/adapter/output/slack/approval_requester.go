@@ -127,6 +127,37 @@ func (r *ApprovalRequester) buildButtonValues(mail domain.DMail) (string, string
 		"body_digest":            digest,
 		"issued_at":              0, // ID is in parent_idempotency_key; issued_at exists for replay-binding only
 	}
+	// ADR 0040 §B-5 admin-mutation approval routing: when the producer
+	// sets Metadata["kind"] (e.g. "admin_mutation") it is propagated to
+	// the button so handleApprovalAction can branch its applicator. Empty
+	// kind is left implicit (= defaults to "convergence" on the consumer
+	// side) to keep Phase 4a producers byte-identical.
+	if kind := mail.Metadata["kind"]; kind != "" {
+		value["kind"] = kind
+	}
+	// ADR 0036 §Carry point 2: surface the producer-emitted requester actor
+	// type into the button payload so handleApprovalAction can validate the
+	// approver against it on click. Empty / absent metadata is preserved as
+	// empty string and treated as CallerHumanOperator downstream during the
+	// migration window.
+	if rat := mail.Metadata[domain.MetadataKeyRequesterActorType]; rat != "" {
+		value["requester_actor_type"] = rat
+	}
+	// ADR 0037 §Axis 4: carry the gateway-internal classification of the
+	// producer-emitted requester_actor_source. External producers cannot
+	// be broker_verified — the gateway flag stays false here. The gateway-
+	// internal emit path is responsible for setting broker_verified when
+	// it builds buttons from its own authenticated broker context.
+	rawSource := mail.Metadata[domain.MetadataKeyRequesterActorSource]
+	classification := domain.ClassifyRequesterActorSource(rawSource, false)
+	if classification != domain.GatewayClassificationUnknown {
+		value["requester_actor_source"] = string(classification)
+	}
+	// ADR 0037 §Axis 3: carry the distal actor when present. Required for
+	// HIGH severity workspace-daemon flows; gateway enforces at click time.
+	if iat := mail.Metadata[domain.MetadataKeyInitiatingActorType]; iat != "" {
+		value["initiating_actor_type"] = iat
+	}
 	raw, err := json.Marshal(value)
 	if err != nil {
 		return "", "", err

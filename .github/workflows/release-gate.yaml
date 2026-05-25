@@ -1,0 +1,531 @@
+name: Release Gate
+
+# Per ADR 0031 + ADR 0033: classify each PR (and post-merge push) into
+# one of three categories — routing / auth_boundary / schema —
+# and publish the classification as a GitHub status check that
+# downstream deploy/infra workflows consume.
+#
+# Hard-coded minimum self-protection set (must match ADR 0033):
+#   .github/release-gate-paths.yaml
+#   .github/workflows/release-gate.yaml
+#   .github/workflows/cd.yaml
+#   .github/CODEOWNERS
+# Edits to these (rename, delete, chmod, content) are unconditionally
+# auth_boundary, regardless of the YAML's post-edit content.
+#
+# Security note: untrusted PR-supplied values (refs, paths, etc.) are
+# only consumed via env: bindings inside steps, never interpolated
+# directly into shell `run:` blocks. This blocks the GitHub Actions
+# workflow-injection class.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+    branches: [main, develop]
+  push:
+    branches: [main, develop]
+
+concurrency:
+  group: release-gate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+  statuses: write
+
+jobs:
+  classify:
+    name: Classify change category
+    runs-on: ubuntu-latest
+    outputs:
+      category: ${{ steps.decide.outputs.category }}
+      reason: ${{ steps.decide.outputs.reason }}
+    steps:
+      - name: Checkout (full history for diff)
+        # Pinned to commit SHA per ADR 0033 third-party action policy.
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Resolve base + head SHAs
+        id: refs
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.event.after }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            echo "base=$PR_BASE_SHA" >> "$GITHUB_OUTPUT"
+            echo "head=$PR_HEAD_SHA" >> "$GITHUB_OUTPUT"
+          else
+            if [ "$PUSH_BEFORE" = "0000000000000000000000000000000000000000" ] || [ -z "$PUSH_BEFORE" ]; then
+              echo "base=$(git rev-parse HEAD~1)" >> "$GITHUB_OUTPUT"
+            else
+              echo "base=$PUSH_BEFORE" >> "$GITHUB_OUTPUT"
+            fi
+            echo "head=$PUSH_AFTER" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Read path list from BASE ref (ADR 0033, fail-closed)
+        id: paths
+        env:
+          BASE_SHA: ${{ steps.refs.outputs.base }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/release-gate
+          # Fail-closed: a missing YAML at the base ref must not fall
+          # back to routing. The only legitimate way for the YAML to
+          # be missing is the bootstrap PR that introduces it; that
+          # bootstrap PR will hit the hard-coded self-protection set
+          # (since it touches .github/workflows/release-gate.yaml
+          # and/or .github/release-gate-paths.yaml at the new path),
+          # so the hard-coded match fires regardless of YAML presence.
+          # Any other YAML-missing scenario is treated as a gate
+          # failure later in the decide step.
+          if git show "${BASE_SHA}:.github/release-gate-paths.yaml" > /tmp/release-gate/paths.yaml 2>/dev/null; then
+            echo "yaml_present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "yaml_present=false" >> "$GITHUB_OUTPUT"
+            # Write an empty file so subsequent steps do not crash on
+            # missing input, but do NOT write a synthetic empty
+            # auth_boundary/schema list — that would let regex
+            # extraction succeed with [] and reach the routing branch.
+            : > /tmp/release-gate/paths.yaml
+          fi
+
+      - name: List changed paths (current + previous, rename-aware)
+        id: changes
+        env:
+          BASE_SHA: ${{ steps.refs.outputs.base }}
+          HEAD_SHA: ${{ steps.refs.outputs.head }}
+        run: |
+          set -euo pipefail
+          git diff --name-status -M --diff-filter=ACMRDTC "$BASE_SHA" "$HEAD_SHA" \
+            | awk '
+                {
+                  status=$1
+                  if (status ~ /^R/ || status ~ /^C/) {
+                    print $2
+                    print $3
+                  } else {
+                    print $2
+                  }
+                }
+              ' \
+            | sort -u > /tmp/release-gate/changed.txt
+          echo "changed=$(wc -l < /tmp/release-gate/changed.txt)" >> "$GITHUB_OUTPUT"
+
+      - name: Apply hard-coded self-protection set (ADR 0033)
+        id: hardcoded
+        run: |
+          set -euo pipefail
+          cat > /tmp/release-gate/hardcoded.txt <<'EOF'
+          .github/release-gate-paths.yaml
+          .github/workflows/release-gate.yaml
+          .github/workflows/cd.yaml
+          .github/CODEOWNERS
+          EOF
+          if grep -F -x -f /tmp/release-gate/hardcoded.txt /tmp/release-gate/changed.txt > /tmp/release-gate/hardcoded-hits.txt; then
+            echo "hit=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "hit=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run Semgrep auth-boundary signature rules (base-ref rules, fail-closed)
+        id: semgrep
+        env:
+          BASE_SHA: ${{ steps.refs.outputs.base }}
+          HEAD_SHA: ${{ steps.refs.outputs.head }}
+        run: |
+          set -euo pipefail
+          # Per ADR 0031 + ADR 0033: a PR is escalated to auth_boundary
+          # if Semgrep matches any rule in the auth-boundary ruleset
+          # against the changed paths, even when path globs alone
+          # would classify the PR as routing. This catches code-level
+          # signatures (Secret Manager imports, ghinstallation use,
+          # IAM binding additions, third-party action without SHA pin)
+          # that the path classifier cannot see.
+          mkdir -p /tmp/release-gate
+          # Read rules from BASE ref to prevent a malicious PR from
+          # rewriting the rule file in the same commit.
+          if ! git show "${BASE_SHA}:.semgrep/rules/release-gate/category-auth-boundary.yaml" \
+                 > /tmp/release-gate/auth-boundary.yaml 2>/dev/null; then
+            echo "::error::release-gate Semgrep rule missing at base ref. Refusing to fall back to path-only classification (fail-closed per ADR 0031)." >&2
+            # Bootstrap exception: if the hard-coded set already
+            # fired (e.g. release-gate workflow itself is being
+            # introduced), the decide step will use that hit and
+            # this missing-rule case is acceptable. Surface as a
+            # warning here and let decide enforce.
+            echo "rules_present=false" >> "$GITHUB_OUTPUT"
+            echo "hit=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "rules_present=true" >> "$GITHUB_OUTPUT"
+
+          # Semgrep is preinstalled on ubuntu-latest via pip (the
+          # python step also handled the path globs). Pin to a known
+          # release for reproducibility.
+          python3 -m pip install --quiet "semgrep==1.94.0"
+
+          # Limit Semgrep to the changed files only — both the new
+          # path and any previous path of renamed files. The diff
+          # output already lists both sides; we just feed the union.
+          if [ ! -s /tmp/release-gate/changed.txt ]; then
+            echo "hit=false" >> "$GITHUB_OUTPUT"
+            : > /tmp/release-gate/semgrep.json
+            exit 0
+          fi
+          # Materialize each changed file at its current state for
+          # Semgrep to scan. Renamed-from paths may not exist at
+          # HEAD, so checkout each at its actual SHA: existing files
+          # at HEAD; deleted/renamed-from files reconstructed at BASE.
+          mkdir -p /tmp/release-gate/scan
+          while IFS= read -r p; do
+            [ -z "$p" ] && continue
+            if git cat-file -e "${HEAD_SHA}:$p" 2>/dev/null; then
+              install -D <(git show "${HEAD_SHA}:$p") "/tmp/release-gate/scan/$p" 2>/dev/null || true
+            elif git cat-file -e "${BASE_SHA}:$p" 2>/dev/null; then
+              install -D <(git show "${BASE_SHA}:$p") "/tmp/release-gate/scan/$p" 2>/dev/null || true
+            fi
+          done < /tmp/release-gate/changed.txt
+
+          if [ -z "$(ls -A /tmp/release-gate/scan 2>/dev/null)" ]; then
+            echo "hit=false" >> "$GITHUB_OUTPUT"
+            : > /tmp/release-gate/semgrep.json
+            exit 0
+          fi
+
+          set +e
+          semgrep --config /tmp/release-gate/auth-boundary.yaml \
+                  --json \
+                  --output /tmp/release-gate/semgrep.json \
+                  /tmp/release-gate/scan
+          rc=$?
+          set -e
+          # rc=0: no findings; rc=1: findings present; rc>=2: error.
+          # ADR 0034 bootstrap exception: a Semgrep parse error on a
+          # rule-only self-fix PR is permitted, otherwise a broken
+          # rule on develop creates a permanent deadlock (= ADR 0033
+          # base-ref-read forces every PR to read the broken rule).
+          # Three predicates ALL must hold:
+          #  1. rc >= 2 (= the Semgrep parse error case itself)
+          #  2. PR's changed-paths set lives EXCLUSIVELY under
+          #     .semgrep/rules/release-gate/** AND touches at least
+          #     one of the rule YAML files
+          #  3. PR's changed-paths set does NOT touch the hard-coded
+          #     self-protection set (release-gate.yaml itself,
+          #     cd.yaml, paths.yaml, CODEOWNERS)
+          # When all three hold: pass with category=auth_boundary +
+          # reason="rule self-fix bootstrap exception (ADR 0034)".
+          # When any fails: original fail-closed behaviour preserved.
+          if [ "$rc" -ge 2 ]; then
+            bootstrap_ok="false"
+            if [ -s /tmp/release-gate/changed.txt ]; then
+              # Predicate 2 + 3 in one awk pass.
+              bootstrap_ok=$(awk '
+                BEGIN { has_rule = 0; has_other = 0; has_meta = 0 }
+                /^\.github\/workflows\/release-gate\.yaml$/ { has_meta = 1; next }
+                /^\.github\/workflows\/cd\.yaml$/           { has_meta = 1; next }
+                /^\.github\/release-gate-paths\.yaml$/      { has_meta = 1; next }
+                /^\.github\/CODEOWNERS$/                    { has_meta = 1; next }
+                /^\.semgrep\/rules\/release-gate\/.+\.yaml$/ {
+                  has_rule = 1
+                  next
+                }
+                { has_other = 1 }
+                END {
+                  if (has_rule && !has_other && !has_meta) print "true"
+                  else print "false"
+                }
+              ' /tmp/release-gate/changed.txt)
+            fi
+            if [ "$bootstrap_ok" = "true" ]; then
+              echo "::warning::Semgrep parse error (exit $rc) accepted under ADR 0034 bootstrap exception (rule-only self-fix PR)." >&2
+              echo "rules_present=true" >> "$GITHUB_OUTPUT"
+              echo "hit=true" >> "$GITHUB_OUTPUT"
+              echo "error_count=0" >> "$GITHUB_OUTPUT"
+              echo "warning_count=0" >> "$GITHUB_OUTPUT"
+              echo "must_fail=false" >> "$GITHUB_OUTPUT"
+              echo "bootstrap_exception=true" >> "$GITHUB_OUTPUT"
+              # Skip the rest of the Semgrep step; let the decide step
+              # consume hit=true + bootstrap_exception=true so it
+              # publishes the right reason.
+              exit 0
+            fi
+            echo "::error::Semgrep execution failed (exit $rc). Refusing to fall back to path-only classification (fail-closed)." >&2
+            exit 1
+          fi
+          # Two-tier finding policy (ADR 0033):
+          # - severity=ERROR: hard fail of the workflow. Used for
+          #   non-negotiable invariants like third-party action SHA
+          #   pin (ADR 0033 §"Third-party action SHA pin policy").
+          # - severity=WARNING / INFO: category escalation only
+          #   (the gate raises the PR to auth_boundary so a human
+          #   reviewer must approve, but the workflow still passes).
+          # ERROR findings must trip even when hard-coded hits would
+          # otherwise short-circuit decide; we surface them here so
+          # the decide step can refuse to "succeed past" them.
+          ERROR_COUNT=$(jq '[.results[] | select(.extra.severity == "ERROR")] | length' /tmp/release-gate/semgrep.json)
+          WARNING_COUNT=$(jq '[.results[] | select(.extra.severity != "ERROR")] | length' /tmp/release-gate/semgrep.json)
+          echo "error_count=$ERROR_COUNT" >> "$GITHUB_OUTPUT"
+          echo "warning_count=$WARNING_COUNT" >> "$GITHUB_OUTPUT"
+          if [ "$ERROR_COUNT" -gt 0 ]; then
+            echo "::error::Semgrep flagged $ERROR_COUNT ERROR-severity findings (e.g. third-party action SHA pin violation). Workflow fail-closed per ADR 0033." >&2
+            jq -r '.results[] | select(.extra.severity == "ERROR") | "[ERROR] \(.check_id) at \(.path):\(.start.line) — \(.extra.message)"' /tmp/release-gate/semgrep.json >&2 || true
+          fi
+          if [ "$WARNING_COUNT" -gt 0 ]; then
+            echo "hit=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "hit=false" >> "$GITHUB_OUTPUT"
+          fi
+          # ERROR findings cause workflow fail at the decide step
+          # (after we've captured the category for status visibility).
+          # Surfacing exit code here lets us record the category
+          # context first.
+          if [ "$ERROR_COUNT" -gt 0 ]; then
+            echo "must_fail=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "must_fail=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Apply YAML globs (auth_boundary + schema)
+        id: globs
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' /tmp/release-gate/paths.yaml /tmp/release-gate/changed.txt > /tmp/release-gate/globs.json
+          import json, sys, re
+
+          paths_yaml, changed_txt = sys.argv[1], sys.argv[2]
+          with open(paths_yaml, "r", encoding="utf-8") as f:
+              text = f.read()
+
+          def extract(key):
+              section = re.search(
+                  rf"^{key}:\s*\n((?:[ \t#].*\n|\s*\n)+?)(?=^[A-Za-z_]+:|\Z)",
+                  text, re.MULTILINE | re.DOTALL,
+              )
+              if not section:
+                  return []
+              body = section.group(1)
+              return re.findall(r'^\s*-\s*"([^"]+)"', body, re.MULTILINE)
+
+          auth_boundary = extract("auth_boundary")
+          schema = extract("schema")
+
+          # Fail-closed: if the YAML exists but neither key parses to
+          # at least one entry, something is wrong (truncation /
+          # whitespace bug / YAML schema drift). Surface it as a hard
+          # error so the PR is blocked, not silently routed.
+          # The decide step also enforces this when yaml_present=true
+          # and no glob hits + no hard-coded hit, but raising here
+          # gives a clearer error message.
+          if not auth_boundary and not schema:
+              # When the YAML file is empty (bootstrap), the file is
+              # zero bytes and `text` is "". That case is allowed
+              # only because the bootstrap PR will trip the hard-coded
+              # set anyway; the decide step verifies this.
+              if text.strip() != "":
+                  print("ERROR: release-gate-paths.yaml present but auth_boundary and schema both empty",
+                        file=sys.stderr)
+                  sys.exit(2)
+
+          with open(changed_txt, "r", encoding="utf-8") as f:
+              changed = [line.strip() for line in f if line.strip()]
+
+          def match_any(path, patterns):
+              # Convert glob to regex with GitHub Actions `paths` semantics:
+              #   `**/`  -> 0+ directory segments  (so `tofu/**/*.tf` matches
+              #             both `tofu/main.tf` and `tofu/sub/foo.tf`)
+              #   `**`   -> .*                     (cross-segment wildcard)
+              #   `*`    -> [^/]*                  (within-segment wildcard)
+              # All other characters are escaped literally.
+              hits = []
+              for p in patterns:
+                  parts = re.split(r"(\*\*/|\*\*|\*)", p)
+                  buf = []
+                  for seg in parts:
+                      if seg == "**/":
+                          buf.append(r"(?:[^/]+/)*")
+                      elif seg == "**":
+                          buf.append(r".*")
+                      elif seg == "*":
+                          buf.append(r"[^/]*")
+                      else:
+                          buf.append(re.escape(seg))
+                  reg = "".join(buf)
+                  if re.fullmatch(reg, path):
+                      hits.append(p)
+              return hits
+
+          # Smoke checks (local test cases for the glob engine; do not
+          # remove without updating ADR 0033 §verification). These run
+          # at workflow startup and fail loudly if the engine
+          # regresses, so a routing PR cannot accidentally break the
+          # gate's matching semantics for high-blast-radius paths.
+          _smoke_cases = [
+              ("tofu/main.tf",                    "tofu/**/*.tf",      True),
+              ("tofu/github.tf",                  "tofu/**/*.tf",      True),
+              ("tofu/sub/foo.tf",                 "tofu/**/*.tf",      True),
+              ("tofu/versions.tf",                "tofu/**/*.tf",      True),
+              ("tofu/sub/foo.tfvars",             "tofu/**/*.tfvars",  True),
+              ("cmd/server/main.go",              "cmd/server/**",     True),
+              (".github/workflows/cd.yaml",       ".github/workflows/cd.yaml",       True),
+              (".github/workflows/release-gate.yaml", ".github/workflows/release-gate.yaml", True),
+              ("internal/usecase/runops.go",      "tofu/**/*.tf",      False),
+              ("docs/adr/0030-foo.md",            "docs/adr/0033-*",   False),
+          ]
+          for path, pat, expected in _smoke_cases:
+              got = bool(match_any(path, [pat]))
+              if got != expected:
+                  raise SystemExit(
+                      f"release-gate glob smoke test FAILED: "
+                      f"path={path!r} pattern={pat!r} expected={expected} got={got}"
+                  )
+
+          auth_hits = []
+          schema_hits = []
+          for c in changed:
+              ah = match_any(c, auth_boundary)
+              if ah:
+                  auth_hits.append({"path": c, "patterns": ah})
+              sh = match_any(c, schema)
+              if sh:
+                  schema_hits.append({"path": c, "patterns": sh})
+
+          json.dump({"auth_boundary": auth_hits, "schema": schema_hits},
+                    sys.stdout, indent=2, ensure_ascii=False)
+          PY
+          cat /tmp/release-gate/globs.json
+          if jq -e '.auth_boundary | length > 0' /tmp/release-gate/globs.json > /dev/null; then
+            echo "auth_hit=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "auth_hit=false" >> "$GITHUB_OUTPUT"
+          fi
+          if jq -e '.schema | length > 0' /tmp/release-gate/globs.json > /dev/null; then
+            echo "schema_hit=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "schema_hit=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Decide category (strictest wins, fail-closed)
+        id: decide
+        env:
+          HARD_HIT: ${{ steps.hardcoded.outputs.hit }}
+          AUTH_HIT: ${{ steps.globs.outputs.auth_hit }}
+          SEMGREP_HIT: ${{ steps.semgrep.outputs.hit }}
+          SCHEMA_HIT: ${{ steps.globs.outputs.schema_hit }}
+          YAML_PRESENT: ${{ steps.paths.outputs.yaml_present }}
+          SEMGREP_RULES_PRESENT: ${{ steps.semgrep.outputs.rules_present }}
+          SEMGREP_MUST_FAIL: ${{ steps.semgrep.outputs.must_fail }}
+          BOOTSTRAP_EXCEPTION: ${{ steps.semgrep.outputs.bootstrap_exception }}
+        run: |
+          set -euo pipefail
+          # ADR 0034 bootstrap exception: a Semgrep parse error on a
+          # rule-only self-fix PR was permitted by the Semgrep step
+          # itself (predicates checked there); decide just renders the
+          # right reason here. This branch supersedes the YAML/rules
+          # presence checks because the rule file is, by definition,
+          # broken at base ref in this case.
+          if [ "$BOOTSTRAP_EXCEPTION" = "true" ]; then
+            echo "category=auth_boundary" >> "$GITHUB_OUTPUT"
+            echo "reason=rule self-fix bootstrap exception (ADR 0034)" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Precedence: hard-coded > yaml auth > semgrep auth > schema > routing.
+          if [ "$HARD_HIT" = "true" ]; then
+            echo "category=auth_boundary" >> "$GITHUB_OUTPUT"
+            echo "reason=hard-coded self-protection set match" >> "$GITHUB_OUTPUT"
+            # ERROR-severity Semgrep findings must still fail the
+            # workflow even when the hard-coded set already classified
+            # as auth_boundary (e.g. an unpinned action in cd.yaml
+            # would also touch a hard-coded path; we want the deploy
+            # to be blocked, not just escalated).
+            if [ "$SEMGREP_MUST_FAIL" = "true" ]; then
+              echo "::error::Semgrep ERROR severity finding present even after hard-coded hit. Workflow fail-closed per ADR 0033." >&2
+              exit 1
+            fi
+            exit 0
+          fi
+          # Fail-closed: if the policy YAML is missing AND no
+          # hard-coded path hit, something is wrong with the gate's
+          # own substrate. The only legitimate "yaml missing" case is
+          # the bootstrap PR that introduces the workflow + YAML, and
+          # that PR is auth_boundary via the hard-coded match (the new
+          # files are at hard-coded paths). Fail loudly otherwise.
+          if [ "$YAML_PRESENT" != "true" ]; then
+            echo "::error::release-gate policy YAML missing at base ref and PR did not trip the hard-coded self-protection set. Refusing to default to routing (fail-closed per ADR 0033)." >&2
+            exit 1
+          fi
+          # Fail-closed: same logic for the Semgrep rule file. If
+          # missing at base ref AND no hard-coded hit, refuse.
+          if [ "$SEMGREP_RULES_PRESENT" != "true" ]; then
+            echo "::error::release-gate Semgrep rules missing at base ref and PR did not trip the hard-coded self-protection set. Refusing to default to routing (fail-closed)." >&2
+            exit 1
+          fi
+          if [ "$AUTH_HIT" = "true" ]; then
+            echo "category=auth_boundary" >> "$GITHUB_OUTPUT"
+            echo "reason=auth_boundary glob match" >> "$GITHUB_OUTPUT"
+          elif [ "$SEMGREP_HIT" = "true" ]; then
+            echo "category=auth_boundary" >> "$GITHUB_OUTPUT"
+            echo "reason=Semgrep auth-boundary signature match" >> "$GITHUB_OUTPUT"
+          elif [ "$SCHEMA_HIT" = "true" ]; then
+            echo "category=schema" >> "$GITHUB_OUTPUT"
+            echo "reason=schema glob match" >> "$GITHUB_OUTPUT"
+          else
+            echo "category=routing" >> "$GITHUB_OUTPUT"
+            echo "reason=no glob/Semgrep match (yaml + rules verified non-empty)" >> "$GITHUB_OUTPUT"
+          fi
+          # Even after the category is decided, Semgrep ERRORs are
+          # blocking. The status check will record the category for
+          # observability, then the workflow exits non-zero so
+          # downstream branch protection rejects the merge.
+          if [ "$SEMGREP_MUST_FAIL" = "true" ]; then
+            echo "::error::Semgrep ERROR severity finding present (e.g. third-party action without SHA pin). Workflow fail-closed per ADR 0033." >&2
+            exit 1
+          fi
+
+      - name: Post commit status check
+        env:
+          CATEGORY: ${{ steps.decide.outputs.category }}
+          REASON: ${{ steps.decide.outputs.reason }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_SHA: ${{ steps.refs.outputs.head }}
+          REPO: ${{ github.repository }}
+          SERVER_URL: ${{ github.server_url }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          gh api \
+            "repos/${REPO}/statuses/${HEAD_SHA}" \
+            -f state="success" \
+            -f context="release-gate" \
+            -f description="category=${CATEGORY} (${REASON})" \
+            -f target_url="${SERVER_URL}/${REPO}/actions/runs/${RUN_ID}"
+
+      - name: Summary
+        env:
+          CATEGORY: ${{ steps.decide.outputs.category }}
+          REASON: ${{ steps.decide.outputs.reason }}
+        run: |
+          {
+            echo "## Release Gate Classification"
+            echo ""
+            echo "- category: \`$CATEGORY\`"
+            echo "- reason: $REASON"
+            echo ""
+            echo "### Changed paths"
+            echo ""
+            echo '```'
+            cat /tmp/release-gate/changed.txt || true
+            echo '```'
+            echo ""
+            echo "### Glob matches"
+            echo ""
+            echo '```json'
+            cat /tmp/release-gate/globs.json || echo '{}'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

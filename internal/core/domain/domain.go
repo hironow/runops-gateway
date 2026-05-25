@@ -112,4 +112,16 @@ type ApprovalRequest struct {
 	// button so progress and rebuilt-prompt messages can show what's being deployed
 	// even after the operator has clicked through. Empty for legacy clients.
 	BuildInfo string
+	// RequesterActorType identifies whether the original requester was a
+	// human operator or an AI agent (per ADR 0035). Zero value (empty
+	// string) is treated as CallerHumanOperator so the 52 existing
+	// ApprovalRequest{...} construction sites remain backwards-compatible.
+	RequesterActorType CallerType
+	// InitiatingActorType identifies the distal (initiating) actor when
+	// RequesterActorType is workspace-daemon (per ADR 0037 §Axis 3).
+	// Optional for non-daemon flows; REQUIRED at the use-case level for
+	// HIGH severity Phase 4a approvals when RequesterActorType is
+	// CallerWorkspaceDaemon — the gateway uses EffectiveRequesterActorType
+	// to derive the value passed to ValidateApproverPermitted.
+	InitiatingActorType CallerType
 }

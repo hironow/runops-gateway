@@ -43,7 +43,7 @@ func newApproveCmd(useCase port.RunOpsUseCase) *cobra.Command {
 			}
 			notify := port.NotifyTarget{Mode: port.ModeStdout}
 
-			if err := useCase.ApproveAction(context.Background(), req, notify); err != nil {
+			if err := useCase.ApproveAction(context.Background(), req, notify, ""); err != nil {
 				return fmt.Errorf("approval failed: %w", err)
 			}
 			fmt.Fprintln(cmd.OutOrStdout(), "Successfully approved and executed.")

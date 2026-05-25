@@ -15,6 +15,7 @@ package phonewave
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -25,6 +26,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/hironow/runops-gateway/internal/core/domain"
 	"github.com/hironow/runops-gateway/internal/core/port"
@@ -34,17 +36,23 @@ import (
 // library. fsnotify-driven publish spans live here.
 const emitterTracerName = "github.com/hironow/runops-gateway/internal/adapter/input/phonewave"
 
-// Emitter publishes a single archive .md file as a D-Mail.
+// Emitter publishes a single archive .md file as a D-Mail. The
+// ArchiveRouter resolves the project_id from the file's archive path
+// (multi-mode) or returns "" so the frontmatter value passes through
+// unchanged (single-mode).
 type Emitter struct {
 	publisher port.DMailPublisher
+	router    ArchiveRouter
 
 	mu   sync.Mutex
 	seen map[string]bool // dedup by absolute path
 }
 
-// NewEmitter constructs an Emitter around the given publisher.
-func NewEmitter(p port.DMailPublisher) *Emitter {
-	return &Emitter{publisher: p, seen: map[string]bool{}}
+// NewEmitter constructs an Emitter around the given publisher and
+// router. Pass NewSingleArchiveRouter() to preserve pre-#0007
+// single-mode behaviour.
+func NewEmitter(p port.DMailPublisher, r ArchiveRouter) *Emitter {
+	return &Emitter{publisher: p, router: r, seen: map[string]bool{}}
 }
 
 // PublishFile parses path as a D-Mail and publishes it. Silently no-ops for
@@ -116,6 +124,43 @@ func (e *Emitter) PublishFile(ctx context.Context, path string) error {
 		attribute.String("dmail.kind", string(mail.Kind)),
 		attribute.String("dmail.target", mail.Target),
 	)
+
+	// #0007: resolve project_id from the archive path (multi-mode)
+	// or accept the frontmatter value unchanged (single-mode). When
+	// path resolution and frontmatter disagree, the path-derived value
+	// wins and a warn is logged so the operator can spot stale tooling
+	// metadata. ErrPathNotMapped means "operator did not register this
+	// archive dir"; the emitter skips publishing rather than nack — the
+	// file stays on disk for triage.
+	routedID, routerErr := e.router.ResolveProjectID(ctx, path)
+	if errors.Is(routerErr, ErrPathNotMapped) {
+		clearOnFailure()
+		slog.WarnContext(ctx, "emitter: archive path not mapped to project_id; skipping publish",
+			"path", path, "error", routerErr)
+		span.AddEvent("skip", trace.WithAttributes(attribute.String("reason", "path_not_mapped")))
+		return nil
+	}
+	if routerErr != nil {
+		clearOnFailure()
+		span.RecordError(routerErr)
+		span.SetStatus(codes.Error, "router resolve failed")
+		return fmt.Errorf("emitter: router resolve %s: %w", path, routerErr)
+	}
+	if routedID != "" {
+		if mail.Metadata == nil {
+			mail.Metadata = map[string]string{}
+		}
+		if existing := mail.Metadata["project_id"]; existing != "" && existing != routedID {
+			slog.WarnContext(ctx, "emitter: frontmatter project_id != path-derived; using path-derived",
+				"path", path,
+				"frontmatter_project_id", existing,
+				"routed_project_id", routedID)
+		}
+		mail.Metadata["project_id"] = routedID
+	}
+	if pid := mail.Metadata["project_id"]; pid != "" {
+		span.SetAttributes(attribute.String("project_id", pid))
+	}
 
 	id, err := e.publisher.PublishDMail(ctx, mail)
 	if err != nil {

@@ -60,7 +60,7 @@ func TestEmitter_PublishFile_ParsesAndPublishes(t *testing.T) {
 	path := writeArchive(t, dir, "msg.md", mail)
 
 	pub := &recordingPublisher{}
-	e := NewEmitter(pub)
+	e := NewEmitter(pub, NewSingleArchiveRouter())
 
 	if err := e.PublishFile(context.Background(), path); err != nil {
 		t.Fatalf("PublishFile: %v", err)
@@ -80,7 +80,7 @@ func TestEmitter_PublishFile_SkipsNonMarkdown(t *testing.T) {
 	_ = os.WriteFile(path, []byte("not a dmail"), 0o644)
 
 	pub := &recordingPublisher{}
-	e := NewEmitter(pub)
+	e := NewEmitter(pub, NewSingleArchiveRouter())
 	if err := e.PublishFile(context.Background(), path); err != nil {
 		t.Errorf("non-md should be skipped silently, got: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestEmitter_PublishFile_PropagatesPublishError(t *testing.T) {
 	path := writeArchive(t, dir, "x.md", mail)
 
 	pub := &recordingPublisher{err: errors.New("boom")}
-	e := NewEmitter(pub)
+	e := NewEmitter(pub, NewSingleArchiveRouter())
 
 	err := e.PublishFile(context.Background(), path)
 	if err == nil {
@@ -116,7 +116,7 @@ func TestEmitter_PublishFile_RetriesAfterParseError(t *testing.T) {
 	// a follow-up event for the same path with valid content must succeed.
 	dir := t.TempDir()
 	pub := &recordingPublisher{}
-	e := NewEmitter(pub)
+	e := NewEmitter(pub, NewSingleArchiveRouter())
 
 	path := filepath.Join(dir, "race.md")
 	// Step 1: empty file (simulates fsnotify Create firing before Write).
@@ -161,7 +161,7 @@ func TestEmitter_PublishFile_DedupsByPath(t *testing.T) {
 	path := writeArchive(t, dir, "dup.md", mail)
 
 	pub := &recordingPublisher{}
-	e := NewEmitter(pub)
+	e := NewEmitter(pub, NewSingleArchiveRouter())
 	if err := e.PublishFile(context.Background(), path); err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +182,7 @@ func TestEmitter_PublishFile_SkipsDirectoriesAndDotFiles(t *testing.T) {
 	_ = os.WriteFile(dot, []byte("---\nkind: report\n---\nx"), 0o644)
 
 	pub := &recordingPublisher{}
-	e := NewEmitter(pub)
+	e := NewEmitter(pub, NewSingleArchiveRouter())
 	if err := e.PublishFile(context.Background(), filepath.Join(dir, "subdir")); err != nil {
 		t.Errorf("dir should be skipped silently: %v", err)
 	}
@@ -193,3 +193,145 @@ func TestEmitter_PublishFile_SkipsDirectoriesAndDotFiles(t *testing.T) {
 		t.Errorf("publisher must not be called; got %d", len(got))
 	}
 }
+
+func TestEmitter_PublishFile_MultiMode_AttachesProjectIDToMetadata(t *testing.T) {
+	root := t.TempDir()
+	dirFoo := filepath.Join(root, "foo")
+	dirBar := filepath.Join(root, "bar")
+
+	router, err := NewMultiArchiveRouter(map[string]string{
+		"foo": dirFoo,
+		"bar": dirBar,
+	})
+	if err != nil {
+		t.Fatalf("router init: %v", err)
+	}
+
+	mail := domain.DMail{
+		ID:             "01MULTI",
+		Kind:           domain.DMailKindReport,
+		Target:         "amadeus",
+		Source:         "paintress",
+		IdempotencyKey: "k-multi",
+		Body:           "multi-mode body",
+	}
+	path := writeArchive(t, dirFoo, "multi.md", mail)
+
+	pub := &recordingPublisher{}
+	e := NewEmitter(pub, router)
+	if err := e.PublishFile(context.Background(), path); err != nil {
+		t.Fatalf("PublishFile: %v", err)
+	}
+	got := pub.snapshot()
+	if len(got) != 1 {
+		t.Fatalf("expected 1 publish, got %d", len(got))
+	}
+	if got[0].Metadata["project_id"] != "foo" {
+		t.Errorf("metadata.project_id = %q, want foo", got[0].Metadata["project_id"])
+	}
+}
+
+func TestEmitter_PublishFile_MultiMode_SkipsUnmappedPath(t *testing.T) {
+	root := t.TempDir()
+	dirFoo := filepath.Join(root, "foo")
+	dirGhost := filepath.Join(root, "ghost") // intentionally not registered
+
+	router, err := NewMultiArchiveRouter(map[string]string{
+		"foo": dirFoo,
+	})
+	if err != nil {
+		t.Fatalf("router init: %v", err)
+	}
+
+	mail := domain.DMail{
+		ID:             "01GHOST",
+		Kind:           domain.DMailKindReport,
+		Target:         "amadeus",
+		Source:         "paintress",
+		IdempotencyKey: "k-ghost",
+		Body:           "should be skipped",
+	}
+	path := writeArchive(t, dirGhost, "ghost.md", mail)
+
+	pub := &recordingPublisher{}
+	e := NewEmitter(pub, router)
+	if err := e.PublishFile(context.Background(), path); err != nil {
+		t.Fatalf("PublishFile should skip silently for unmapped path, got: %v", err)
+	}
+	if got := pub.snapshot(); len(got) != 0 {
+		t.Errorf("publisher must not be called for unmapped path; got %d", len(got))
+	}
+}
+
+func TestEmitter_PublishFile_MultiMode_OverridesFrontmatterMismatch(t *testing.T) {
+	root := t.TempDir()
+	dirFoo := filepath.Join(root, "foo")
+
+	router, err := NewMultiArchiveRouter(map[string]string{
+		"foo": dirFoo,
+	})
+	if err != nil {
+		t.Fatalf("router init: %v", err)
+	}
+
+	// Frontmatter says project=stale (e.g. older tooling), but the
+	// archive path is foo's. Path-derived must win and a warn must fire
+	// (assertion is on the published metadata; the warn surfaces in
+	// logs / OTel which we don't introspect here).
+	mail := domain.DMail{
+		ID:             "01MISMATCH",
+		Kind:           domain.DMailKindReport,
+		Target:         "amadeus",
+		Source:         "paintress",
+		IdempotencyKey: "k-mismatch",
+		Body:           "mismatch body",
+		Metadata:       map[string]string{"project_id": "stale"},
+	}
+	path := writeArchive(t, dirFoo, "mismatch.md", mail)
+
+	pub := &recordingPublisher{}
+	e := NewEmitter(pub, router)
+	if err := e.PublishFile(context.Background(), path); err != nil {
+		t.Fatalf("PublishFile: %v", err)
+	}
+	got := pub.snapshot()
+	if len(got) != 1 {
+		t.Fatalf("expected 1 publish, got %d", len(got))
+	}
+	if got[0].Metadata["project_id"] != "foo" {
+		t.Errorf("path-derived must win on mismatch: got=%q want=foo", got[0].Metadata["project_id"])
+	}
+}
+
+func TestEmitter_PublishFile_SingleMode_PassesFrontmatterMetadata(t *testing.T) {
+	dir := t.TempDir()
+	mail := domain.DMail{
+		ID:             "01SINGLE",
+		Kind:           domain.DMailKindReport,
+		Target:         "amadeus",
+		Source:         "paintress",
+		IdempotencyKey: "k-single",
+		Body:           "single-mode body",
+		Metadata:       map[string]string{"project_id": "from-frontmatter"},
+	}
+	path := writeArchive(t, dir, "single.md", mail)
+
+	pub := &recordingPublisher{}
+	e := NewEmitter(pub, NewSingleArchiveRouter())
+	if err := e.PublishFile(context.Background(), path); err != nil {
+		t.Fatalf("PublishFile: %v", err)
+	}
+	got := pub.snapshot()
+	if len(got) != 1 {
+		t.Fatalf("expected 1 publish, got %d", len(got))
+	}
+	// Single-mode router does NOT touch metadata; whatever the
+	// frontmatter said reaches Pub/Sub unchanged.
+	if got[0].Metadata["project_id"] != "from-frontmatter" {
+		t.Errorf("single-mode should preserve frontmatter project_id; got=%q",
+			got[0].Metadata["project_id"])
+	}
+}
+
+// silence unused import sometimes kicks in across edits
+var _ = errors.Is

@@ -69,6 +69,25 @@ func (m DMail) OperationKey() string {
 	return fmt.Sprintf("dmail/%s/%s/%s", m.Kind, m.Target, m.IdempotencyKey)
 }
 
+// MetadataKeyRequesterActorType is the canonical DMail.Metadata key for
+// the actor type of the original requester (per ADR 0036 §Carry point 1).
+// Value is one of the four CallerType enum strings; empty / absent is
+// treated as CallerHumanOperator during the migration window (see ADR 0036).
+const MetadataKeyRequesterActorType = "requester_actor_type"
+
+// MetadataKeyInitiatingActorType carries the distal (initiating) actor
+// when the proximate RequesterActorType is workspace-daemon (per ADR 0037
+// §Axis 3). REQUIRED for HIGH severity Phase 4a approvals; optional
+// otherwise. Value is one of the four CallerType enum strings.
+const MetadataKeyInitiatingActorType = "initiating_actor_type"
+
+// MetadataKeyRequesterActorSource carries the producer-side source
+// declaration for RequesterActorType (per ADR 0037 §Axis 4). Producer-
+// writable enum: { broker, env, unknown }. The gateway derives the
+// internal classification (broker_verified / env_attested / unknown /
+// spoofed_broker) from this value plus its own request context.
+const MetadataKeyRequesterActorSource = "requester_actor_source"
+
 // canonicalDMailKeys are the frontmatter keys ParseDMail extracts directly
 // into the DMail struct (everything else lands in Metadata). Mirrors the
 // fixed-order section in RenderMarkdown.

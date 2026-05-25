@@ -12,7 +12,7 @@ ADR 0020 の達成目標 ("Slack 受信 → Pub/Sub publish 1 跨ぎまで 1 tra
 
 ## What
 
-1. **Cloud Trace UI** (https://console.cloud.google.com/traces/list?project=gen-ai-hironow) を開く
+1. **Cloud Trace UI** (<https://console.cloud.google.com/traces/list?project=gen-ai-hironow>) を開く
 2. Service フィルタで `runops-gateway` を選択、過去 1-6 時間の trace を listing
 3. Slack `/runops sightjack ...` を 1 件投入 → 数分後に trace 反映を待つ
 4. 該当 trace を開いて span tree を確認:

@@ -45,9 +45,18 @@ lint:
 test-iac:
     cd tofu && rm -f .terraform/terraform.tfstate && tofu init -backend=false >/dev/null && tofu test
 
-# Run project semgrep rules
+# Run project semgrep rules.
+#
+# Local `just semgrep` only fails on ERROR-severity findings. WARNING
+# findings (e.g. release-gate auth_boundary content signatures) are
+# escalation hints for the release-gate CI workflow, not local
+# blockers — release-gate.yaml runs with both severities and uses
+# the WARNING count to escalate the change category, while keeping
+# ERROR as the only hard fail. Mirroring that policy locally lets
+# developers iterate without false-positive blocks from the
+# escalation rules. See ADR 0033 §"Two-tier Semgrep policy".
 semgrep:
-    semgrep --config .semgrep/rules/ --error
+    semgrep --config .semgrep/rules/ --severity ERROR --error
 
 lint-md:
     @{{MARKDOWNLINT}} --fix "*.md" "docs/**/*.md"
@@ -55,6 +64,14 @@ lint-md:
 # Format code
 fmt:
     gofmt -w .
+
+# Verify code is gofmt-clean WITHOUT modifying files. Used as pre-commit /
+# pre-PR gate so manual struct alignment / spacing drift fails locally
+# before reaching CI's golangci-lint stage. Mirrors the canonical hash
+# bump policy from `tap/refs/scripts/check_substrate_drift.sh`: gofmt
+# 1.26.2's output is the canonical form, and any deviation is rejected.
+fmt-check:
+    @{{ if `gofmt -l . | head -1` == "" { "echo 'gofmt: clean'" } else { "echo 'gofmt: drift detected:' && gofmt -l . && exit 1" } }}
 
 # Build Docker image
 docker-build:
@@ -88,6 +105,24 @@ pubsub-init:
 pubsub-down:
     docker compose -f compose.yaml stop pubsub-emulator
 
+# Start Firestore emulator (issue #0011 — bundled in the same firebase
+# image as Pub/Sub, so this is an alias for pubsub-up that emphasizes the
+# Firestore use case)
+firestore-up: pubsub-up
+    @echo "firestore emulator ready: http://localhost:8080 (UI: http://localhost:4000)"
+
+# Probe the Firestore emulator with a sentinel doc round-trip
+firestore-init:
+    {{justfile_directory()}}/scripts/init-firestore.sh
+
+# Stop the Firestore emulator (alias for pubsub-down — same container)
+firestore-down: pubsub-down
+
+# Run Firestore integration tests against the emulator
+test-firestore-integration:
+    FIRESTORE_EMULATOR_HOST=localhost:8080 GOOGLE_CLOUD_PROJECT=runops-local \
+        go test -tags=integration -run Firestore ./internal/adapter/output/state/...
+
 # Start local Jaeger v2 (OpenTelemetry trace backend, ADR 0020)
 trace-up:
     docker compose -f compose.yaml up -d jaeger
@@ -109,8 +144,11 @@ trace-view:
 test-scripts:
     go test ./internal/adapter/input/slack/... -run TestNotifyScript -v
 
-# Run all checks (used before commit)
-check: fmt lint lint-md test
+# Run all checks (used before commit). fmt-check (read-only) replaces
+# the prior `fmt` (write) so a stale alignment fails the gate locally
+# instead of silently rewriting and slipping into CI's golangci-lint.
+# To auto-fix locally: `just fmt && just check`.
+check: fmt-check lint lint-md test
 
 # ------------------------------
 # prek (j178/prek) — Rust reimplementation of pre-commit

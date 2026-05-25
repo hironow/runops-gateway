@@ -108,4 +108,4 @@ metadata:
 ## 参照
 
 - [`docs/intent.md`](../intent.md) — 「拡張意図: 5本柱 D-Mail Dispatcher 化」章
-- `/Users/nino/tap/phonewave/README.md` — D-Mail Protocol 仕様
+- `tap/phonewave/README.md` — D-Mail Protocol 仕様

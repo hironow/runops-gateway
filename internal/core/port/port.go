@@ -12,8 +12,13 @@ import (
 
 // RunOpsUseCase is the primary port driven by external actors (Slack, CLI).
 // Implementations live in the usecase layer and must not import adapter code.
+//
+// ApproveAction takes approverType (per ADR 0035) so the use case can
+// reject AI-agent-approves-AI-agent attempts before invoking auth.
+// Empty CallerType is treated as CallerHumanOperator for backwards
+// compatibility with construction sites that pre-date ADR 0035.
 type RunOpsUseCase interface {
-	ApproveAction(ctx context.Context, req domain.ApprovalRequest, target NotifyTarget) error
+	ApproveAction(ctx context.Context, req domain.ApprovalRequest, target NotifyTarget, approverType domain.CallerType) error
 	DenyAction(ctx context.Context, req domain.ApprovalRequest, target NotifyTarget) error
 }
 
@@ -130,6 +135,30 @@ type ConsumedTokenStore interface {
 // posts in_channel rather than ephemeral.
 type ApprovalRequester interface {
 	PostApprovalRequest(ctx context.Context, target NotifyTarget, mail domain.DMail) error
+}
+
+// ProjectRegistry is the SoT for the multiplex `project_id` namespace
+// introduced in issue #0009. Implementations must be safe for concurrent
+// callers from CLI subcommands (operator local) and (in #0011) gateway
+// dispatch handlers.
+//
+// Two adapters share this port:
+//   - SQLite (this PR): operator local / dev / test only
+//   - Firestore native (#0011): production Cloud Run, multi-instance safe
+//
+// Selection happens at composition root via env RUNOPS_PROJECT_REGISTRY;
+// see internal/adapter/output/state/registry_factory.go.
+type ProjectRegistry interface {
+	Add(ctx context.Context, p domain.Project) error
+	List(ctx context.Context, filter ProjectListFilter) ([]domain.Project, error)
+	Get(ctx context.Context, id string) (domain.Project, error)
+	Archive(ctx context.Context, id string) error
+}
+
+// ProjectListFilter narrows ProjectRegistry.List results.
+// Status == "" returns projects of any status.
+type ProjectListFilter struct {
+	Status domain.ProjectStatus
 }
 
 // DMailPublisher hands a DMail to the cross-process transport that delivers

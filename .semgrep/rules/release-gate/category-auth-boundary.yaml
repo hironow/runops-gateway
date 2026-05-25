@@ -1,0 +1,144 @@
+# Semgrep rules — auth-boundary content signatures.
+#
+# These rules supplement the path-based classification in
+# .github/release-gate-paths.yaml by detecting code patterns that
+# indicate a credential / IAM / authentication change even when the
+# file path itself is innocuous (e.g. a routing handler that suddenly
+# imports `secretmanager.googleapis.com` should be auth_boundary).
+#
+# The release-gate workflow runs Semgrep against the PR diff and
+# escalates the category to auth_boundary if any of these rules fire.
+#
+# Per ADR 0033 §"Hard-coded minimum self-protection set", edits to
+# this file are themselves auth_boundary (path is in the meta-gate set).
+
+rules:
+  - id: release-gate-auth-boundary-secret-manager-import
+    languages: [go]
+    severity: WARNING
+    message: |
+      Importing Secret Manager into a non-broker file changes the
+      auth boundary. Confirm the file is under
+      internal/adapter/output/auth/** or internal/adapter/output/registry/**;
+      otherwise this PR should be auth_boundary even without a broker
+      path match.
+    pattern-either:
+      - pattern: import "cloud.google.com/go/secretmanager/apiv1"
+      - pattern: import "cloud.google.com/go/secretmanager/apiv1/secretmanagerpb"
+      - pattern: import "google.golang.org/api/secretmanager/v1"
+
+  - id: release-gate-auth-boundary-ghinstallation-import
+    languages: [go]
+    severity: WARNING
+    message: |
+      ghinstallation mints GitHub installation tokens. New imports of
+      it must land in the broker code path (auth_boundary), never in
+      routing/handler code.
+    pattern-either:
+      - pattern: import "github.com/bradleyfalzon/ghinstallation/v2"
+      - pattern: import "github.com/bradleyfalzon/ghinstallation"
+
+  - id: release-gate-auth-boundary-go-github-app-auth
+    languages: [go]
+    severity: WARNING
+    message: |
+      Direct go-github App / installation auth use is broker territory.
+      Confirm the change is in internal/adapter/output/github/** and
+      classified auth_boundary.
+    pattern-either:
+      # Detect imports of any major version of go-github. The
+      # original pattern `go-github.NewClient($T)` was Go-syntax
+      # invalid (hyphen forbidden in identifiers), causing semgrep
+      # to exit with code 2 (rule parse error) and the release-gate
+      # workflow to fail-closed on every PR. Import-based detection
+      # is functionally equivalent: any code path that mints
+      # installation tokens must import this package, so flagging
+      # the import covers all use sites without parsing call sites.
+      - pattern: import "github.com/google/go-github/v84/github"
+      - pattern: import "github.com/google/go-github/v83/github"
+      - pattern: import "github.com/google/go-github/v82/github"
+      - pattern: import "github.com/google/go-github/v81/github"
+      - pattern: import "github.com/google/go-github/v80/github"
+      - pattern: import "github.com/google/go-github/v79/github"
+      - pattern: import "github.com/google/go-github/v78/github"
+      - pattern: import "github.com/google/go-github/v77/github"
+      - pattern: import "github.com/google/go-github/v76/github"
+      - pattern: import "github.com/google/go-github/v75/github"
+      - pattern: import "github.com/google/go-github/v74/github"
+      - pattern: import "github.com/google/go-github/v73/github"
+      - pattern: import "github.com/google/go-github/v72/github"
+      - pattern: import "github.com/google/go-github/v71/github"
+      - pattern: import "github.com/google/go-github/v70/github"
+      - pattern: import "github.com/google/go-github/v69/github"
+      - pattern: import "github.com/google/go-github/v68/github"
+      - pattern: import "github.com/google/go-github/v67/github"
+      - pattern: import "github.com/google/go-github/v66/github"
+      - pattern: import "github.com/google/go-github/v65/github"
+      # Call-site detection for the App-installation token mint API
+      # remains valuable because it catches uses that import via an
+      # alias the import-pattern would miss.
+      - pattern: $X.Apps.CreateInstallationToken(...)
+      - pattern: $X.Apps.CreateInstallationToken($CTX, ...)
+
+  - id: release-gate-auth-boundary-cloudrun-iam-binding
+    languages: [hcl]
+    severity: WARNING
+    message: |
+      Adding or modifying Cloud Run IAM bindings (workload identity,
+      service-to-service invoker, etc.) is auth_boundary.
+    pattern-either:
+      - pattern: |
+          resource "google_cloud_run_v2_service_iam_member" $NAME { ... }
+      - pattern: |
+          resource "google_cloud_run_v2_service_iam_binding" $NAME { ... }
+      - pattern: |
+          resource "google_service_account_iam_member" $NAME { ... }
+      - pattern: |
+          resource "google_service_account_iam_binding" $NAME { ... }
+
+  - id: release-gate-auth-boundary-secret-manager-tf-resource
+    languages: [hcl]
+    severity: WARNING
+    message: |
+      Adding or modifying Secret Manager resources / accessors is
+      auth_boundary regardless of which .tf file they live in.
+    pattern-either:
+      - pattern: |
+          resource "google_secret_manager_secret" $NAME { ... }
+      - pattern: |
+          resource "google_secret_manager_secret_version" $NAME { ... }
+      - pattern: |
+          resource "google_secret_manager_secret_iam_member" $NAME { ... }
+      - pattern: |
+          resource "google_secret_manager_secret_iam_binding" $NAME { ... }
+
+  - id: release-gate-auth-boundary-github-app-resource
+    languages: [hcl]
+    severity: WARNING
+    message: |
+      GitHub provider resources (Repository Rulesets, branch protection,
+      tag protection, App installation) are always auth_boundary.
+    pattern-either:
+      - pattern: |
+          resource "github_repository_ruleset" $NAME { ... }
+      - pattern: |
+          resource "github_branch_protection" $NAME { ... }
+      - pattern: |
+          resource "github_branch_protection_v3" $NAME { ... }
+      - pattern: |
+          resource "github_repository" $NAME { ... }
+
+  - id: release-gate-auth-boundary-third-party-action-not-sha-pinned
+    languages: [yaml]
+    severity: ERROR
+    message: |
+      Third-party GitHub Actions invoked from gate / deploy workflows
+      MUST be pinned to a full 40-char commit SHA per ADR 0033 §"Third-party
+      action SHA pin policy". `@v1`, `@main`, or any non-SHA ref is a
+      supply-chain bypass of the meta-gate.
+    paths:
+      include:
+        - ".github/workflows/release-gate.yaml"
+        - ".github/workflows/cd.yaml"
+        - ".github/workflows/deploy*.yaml"
+    pattern-regex: 'uses:\s+[^@\s]+@(?!([a-f0-9]{40})\b)[^\s#]+'

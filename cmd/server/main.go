@@ -2,20 +2,25 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
+	"cloud.google.com/go/firestore"
 	gpubsub "cloud.google.com/go/pubsub/v2"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
+	"github.com/hironow/runops-gateway/internal/adapter/input/admin"
+	"github.com/hironow/runops-gateway/internal/adapter/input/broker"
 	pubsubinput "github.com/hironow/runops-gateway/internal/adapter/input/pubsub"
 	slackadapter "github.com/hironow/runops-gateway/internal/adapter/input/slack"
 	"github.com/hironow/runops-gateway/internal/adapter/observability"
@@ -25,8 +30,10 @@ import (
 	pubsubadapter "github.com/hironow/runops-gateway/internal/adapter/output/pubsub"
 	slacknotifier "github.com/hironow/runops-gateway/internal/adapter/output/slack"
 	"github.com/hironow/runops-gateway/internal/adapter/output/state"
+	"github.com/hironow/runops-gateway/internal/composition"
 	"github.com/hironow/runops-gateway/internal/core/port"
 	"github.com/hironow/runops-gateway/internal/usecase"
+	"github.com/hironow/runops-gateway/internal/usecase/admin_approval"
 )
 
 const slackChatPostMessageURL = "https://slack.com/api/chat.postMessage"
@@ -130,15 +137,244 @@ func main() {
 		slackHandler = slackHandler.WithApprovalPublisher(approvalPub)
 		slog.Info("Phase 4a approval_approve / approval_deny path enabled")
 	}
+	// ADR 0035 §Layer 3: enroll Slack bot user.ids that should be classified
+	// as AI agents. Empty env var disables the AI-vs-AI rule (safe default).
+	if aiBotIDs := slackadapter.ParseAIAgentBotUserIDs(os.Getenv("SLACK_AI_AGENT_BOT_USER_IDS")); len(aiBotIDs) > 0 {
+		slackHandler = slackHandler.WithAIAgentBotUserIDs(aiBotIDs)
+		slog.Info("ADR 0035 AI agent approver classification enabled", "bot_user_count", len(aiBotIDs))
+	}
+	// ADR 0040 §B-5.4b admin-mutation consumer wire-up: the orchestrator
+	// is constructed after registry + pendingStore are resolved, so we
+	// defer the actual injection until after that block. See "rpc
+	// endpoint wiring" below for the construction site.
+	// Multiplex project registry (#0008/#0009/#0011). Opt-in via env so
+	// non-multiplex deployments stay byte-identical. The cleanup is always
+	// non-nil; on env error we exit before any handler binds.
+	registry, registryCleanup, err := state.ResolveFromEnv(context.Background())
+	if err != nil {
+		_ = registryCleanup()
+		slog.Error("project registry init failed", "error", err)
+		os.Exit(1)
+	}
+	defer func() {
+		if err := registryCleanup(); err != nil {
+			slog.Error("project registry cleanup failed", "error", err)
+		}
+	}()
+
 	commandHandler := slackadapter.NewCommandHandler(cfg.slackSigningSecret)
+	if registry != nil {
+		commandHandler = commandHandler.WithProjectRegistry(registry)
+		slog.Info("multiplex project registry wired into Slack /agent (#0008)")
+	}
 
 	// Register routes
 	mux := http.NewServeMux()
 	mux.Handle("POST /slack/interactive", slackHandler)
 	mux.Handle("POST /slack/command", commandHandler)
+
+	// Admin endpoint (#0012) is opt-in: registered only when both a
+	// project registry and an admin token are configured. Either one
+	// missing leaves /admin/projects unreachable so the attack surface
+	// stays at zero on non-multiplex deployments. ADR 0030 §"Why opt-in".
+	adminToken := os.Getenv("RUNOPS_ADMIN_TOKEN")
+	// ADR 0040 §REST endpoint との関係: when the /rpc HIGH-mutation flag
+	// is on we disable the legacy POST mutation paths so all admin
+	// writes flow through the JSON-RPC + 4-eyes approval gate. GET
+	// endpoints stay available for read-only operators.
+	adminWriteDisabled := os.Getenv("RUNOPS_RPC_HIGH_MUTATION_ENABLED") == "1"
+	if registry != nil && adminToken != "" {
+		h := admin.NewHandler(registry, adminToken)
+		if adminWriteDisabled {
+			h = h.WithWriteDisabled()
+		}
+		h.Register(mux)
+		slog.Info("admin endpoint registered (#0012)",
+			"endpoints", []string{
+				"POST /admin/projects",
+				"GET /admin/projects",
+				"GET /admin/projects/{id}",
+				"POST /admin/projects/{id}/archive",
+			},
+			"write_disabled", adminWriteDisabled)
+	} else {
+		slog.Info("admin endpoint not registered",
+			"registry_wired", registry != nil,
+			"admin_token_set", adminToken != "")
+	}
+
+	// JSON-RPC /rpc endpoint (ADR 0040 §B-3 + §B-4) is opt-in: registered
+	// only when RUNOPS_RPC_ENDPOINT_ENABLED=1 AND a parseable multi-token
+	// admin registry is configured. §B-4 adds project read-only methods
+	// (get / list / pending.get) on top of the §B-3 transport. §B-5 will
+	// register mutation methods + admin approval orchestrator.
+	pendingStore, pendingCleanup, pendingErr := state.ResolvePendingStoreFromEnv(context.Background())
+	if pendingErr != nil {
+		_ = pendingCleanup()
+		slog.Error("pending store init failed", "error", pendingErr)
+		os.Exit(1)
+	}
+	defer func() {
+		if err := pendingCleanup(); err != nil {
+			slog.Error("pending store cleanup failed", "error", err)
+		}
+	}()
+
+	// ADR 0040 §B-5.4b admin approval wire-up. The orchestrator depends
+	// on both pendingStore and registry, and is shared between the rpc
+	// producer (mutation methods that publish convergence D-Mail) and
+	// the slack consumer (handleApprovalAck/Deny).
+	var adminOrchestrator *admin_approval.Orchestrator
+	if registry != nil && pendingStore != nil {
+		adminOrchestrator = admin_approval.NewOrchestrator(pendingStore, registry)
+	}
+	if adminOrchestrator != nil {
+		// Mutates slackHandler in place; mux.Handle above already holds
+		// the same pointer so the orchestrator is visible immediately.
+		slackHandler.WithAdminApprovalOrchestrator(adminOrchestrator)
+		slog.Info("ADR 0040 §B-5 admin approval consumer enabled")
+	}
+
+	// Producer-side ApprovalRequester for admin mutations. Reuses the
+	// same Slack chat.postMessage path as the Phase 4a convergence flow
+	// but posts into the configured admin approval channel (= ADR 0040
+	// §B-5.4b).
+	var adminApprovalRequester port.ApprovalRequester
+	var adminApprovalTarget port.NotifyTarget
+	adminChannel := os.Getenv("RUNOPS_ADMIN_APPROVAL_CHANNEL")
+	if cfg.slackBotToken != "" && adminChannel != "" {
+		adminApprovalRequester = slacknotifier.NewApprovalRequester(slackChatPostMessageURL, cfg.slackBotToken)
+		adminApprovalTarget = port.NotifyTarget{
+			Mode:      port.ModeSlack,
+			ChannelID: adminChannel,
+		}
+		slog.Info("ADR 0040 §B-5 admin approval producer enabled", "channel", adminChannel)
+	}
+
+	rpcCfg := rpcWiringConfig{
+		flagEnabled:            os.Getenv("RUNOPS_RPC_ENDPOINT_ENABLED") == "1",
+		registryPath:           os.Getenv("RUNOPS_ADMIN_TOKENS_REGISTRY_FILE"),
+		projectRegistry:        registry,
+		pendingStore:           pendingStore,
+		highMutationEnabled:    os.Getenv("RUNOPS_RPC_HIGH_MUTATION_ENABLED") == "1",
+		adminApprovalRequester: adminApprovalRequester,
+		adminApprovalTarget:    adminApprovalTarget,
+	}
+	rpcWired, rpcErr := wireRPCEndpoint(mux, rpcCfg)
+	if rpcErr != nil {
+		// fail-closed (= ADR 0040 §identity contract): a misconfigured
+		// registry must not silently fall through to default permissive
+		// behaviour. The server is aborted at startup.
+		slog.Error("rpc endpoint wiring failed", "error", rpcErr)
+		os.Exit(1)
+	}
+	if rpcWired {
+		slog.Info("rpc endpoint registered (ADR 0040 §B-4)",
+			"endpoints", []string{"POST /rpc"},
+			"methods", []string{
+				"runops.admin.project.get",
+				"runops.admin.project.list",
+				"runops.admin.project.pending.get",
+			},
+			"registry_path", rpcCfg.registryPath)
+	} else {
+		slog.Info("rpc endpoint not registered",
+			"flag_enabled", rpcCfg.flagEnabled,
+			"registry_path_set", rpcCfg.registryPath != "",
+			"project_registry_wired", rpcCfg.projectRegistry != nil,
+			"pending_store_wired", rpcCfg.pendingStore != nil)
+	}
+
+	// Token broker endpoint (#0007) is opt-in: registered only when
+	// BROKER_AUDIENCE is set AND the project registry is wired.
+	// Without one of these the broker stays disabled so dev /
+	// staging / pre-rollout deployments behave identically to the
+	// pre-broker gateway. See plan v8 §6 step 17 + ADR 0032
+	// (caller grant matrix) + ADR 0033 (release-gate).
+	//
+	// Failure modes (config load / dependency wiring) are logged
+	// at ERROR but do NOT abort the binary — the broker is one
+	// endpoint among several; the gateway must keep serving Slack
+	// + admin even when broker setup is broken. Operators see
+	// "broker disabled" in the structured log and can re-deploy
+	// after fixing the env / secret.
+	if registry != nil && strings.TrimSpace(os.Getenv("BROKER_AUDIENCE")) != "" {
+		brokerCfg, err := composition.LoadBrokerConfig()
+		if err != nil {
+			slog.Error("broker disabled: cannot load config", "err", err)
+		} else {
+			// When the broker uses the Firestore agent_session_registry
+			// for Cloud Run multi-instance safety, the composition root
+			// owns the *firestore.Client lifecycle. ProjectID is read
+			// from GOOGLE_CLOUD_PROJECT (Cloud Run autopopulates this
+			// from the SA project; dev shells set it manually).
+			var brokerFirestoreClient *firestore.Client
+			if brokerCfg.UseFirestoreRegistry {
+				projectID := strings.TrimSpace(os.Getenv("GOOGLE_CLOUD_PROJECT"))
+				if projectID == "" {
+					slog.Error("broker disabled: GOOGLE_CLOUD_PROJECT must be set when BROKER_USE_FIRESTORE_REGISTRY=true")
+				} else {
+					c, err := firestore.NewClient(context.Background(), projectID)
+					if err != nil {
+						slog.Error("broker disabled: firestore.NewClient", "err", err)
+					} else {
+						brokerFirestoreClient = c
+						defer func() {
+							if cerr := c.Close(); cerr != nil {
+								slog.Warn("broker firestore client close", "err", cerr)
+							}
+						}()
+					}
+				}
+			}
+			if brokerCfg.UseFirestoreRegistry && brokerFirestoreClient == nil {
+				// Fall through with broker disabled — the error has
+				// already been logged above.
+			} else {
+				deps, err := composition.NewBrokerDependencies(context.Background(), brokerCfg, registry, brokerFirestoreClient)
+				if err != nil {
+					slog.Error("broker disabled: cannot wire dependencies", "err", err)
+				} else {
+					mux.Handle("POST /broker/token", broker.NewHandler(deps.Service, deps.Authenticator))
+					slog.Info("token broker registered (#0007)",
+						"endpoints", []string{"POST /broker/token"},
+						"use_firestore_registry", brokerCfg.UseFirestoreRegistry,
+						"operator_allowlist_size", len(brokerCfg.OperatorEmails),
+						"gateway_service_allowlist_size", len(brokerCfg.GatewayServiceSAs),
+						"workspace_daemon_allowlist_size", len(brokerCfg.WorkspaceDaemonSAs))
+				}
+			}
+		}
+	} else {
+		slog.Info("broker endpoint not registered",
+			"registry_wired", registry != nil,
+			"broker_audience_set", os.Getenv("BROKER_AUDIENCE") != "")
+	}
+	// /_healthz returns liveness ("ok") and the ADR 0040 §B-5 wiring
+	// snapshot so operators can verify flag rollout state without log
+	// diving. Captured-by-closure: the readiness reflects construction
+	// time + never mutates afterwards.
+	readiness := newRPCReadiness(
+		rpcWired,
+		rpcCfg.highMutationEnabled,
+		rpcCfg.registryPath != "" && rpcWired,
+		adminApprovalRequester != nil,
+		adminOrchestrator != nil,
+	)
 	mux.HandleFunc("GET /_healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintln(w, `{"status":"ok"}`)
+		payload, err := marshalReadiness(readiness)
+		if err != nil {
+			http.Error(w, "readiness marshal failed", http.StatusInternalServerError)
+			return
+		}
+		// Route the pre-marshaled JSON through the encoder so the
+		// transport layer never raw-writes bytes (= keeps the codepath
+		// aligned with the project-wide JSON-only output rule, same
+		// pattern as /rpc handler).
+		if err := json.NewEncoder(w).Encode(json.RawMessage(payload)); err != nil {
+			slog.DebugContext(r.Context(), "healthz: write response failed", "error", err)
+		}
 	})
 
 	// otelhttp wraps the mux so every Slack POST gets a root span automatic.

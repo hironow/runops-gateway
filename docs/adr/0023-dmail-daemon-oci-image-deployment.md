@@ -80,10 +80,10 @@ Cloud Run deploy step は **追加しない** (workspace VM 側で起動する d
 
 - `dmail_receiver_image` / `dmail_emitter_image` template 変数を operator が pin (`cdr templates push --variable ...:<sha>`)
 - workspace VM startup_script で:
-  - `/var/lib/phonewave/{archive,outbox}` を host dir として作成
-  - devcontainer の `docker run` に `--volume /var/lib/phonewave:/var/lib/phonewave` を追加
-  - `/etc/systemd/system/dmail-{receiver,emitter}.service` を heredoc で書き出し
-  - `systemctl daemon-reload && systemctl enable --now dmail-{receiver,emitter}`
+    - `/var/lib/phonewave/{archive,outbox}` を host dir として作成
+    - devcontainer の `docker run` に `--volume /var/lib/phonewave:/var/lib/phonewave` を追加
+    - `/etc/systemd/system/dmail-{receiver,emitter}.service` を heredoc で書き出し
+    - `systemctl daemon-reload && systemctl enable --now dmail-{receiver,emitter}`
 
 ### IAM
 

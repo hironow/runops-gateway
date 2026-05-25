@@ -1,0 +1,123 @@
+# Semgrep rules — token leakage prevention.
+#
+# Per ADR 0031 + plan v8 §5.5 (token leakage policy): GitHub
+# installation tokens minted by the broker MUST flow ONLY through the
+# HTTP response body (for callers) and the `GH_TOKEN` env var (for
+# subprocess inheritance). They MUST NEVER appear in:
+#
+#   - structured logs / log fields
+#   - OTel span attributes
+#   - D-Mail message bodies or frontmatter
+#   - Pub/Sub message attributes or payloads
+#   - Firestore documents (broker cache lives in-process only)
+#   - archive directories or any local-disk artifact
+#
+# `audit_fingerprint = sha8(token)` is the only token-derived value
+# allowed in audit / log / OTel; the full token never leaves
+# memory + the response body.
+#
+# These rules are enforced under the release-gate Semgrep run; any
+# new code that violates them blocks the PR until the author
+# converts to fingerprint or removes the leak.
+
+rules:
+  - id: gateway-broker-token-must-not-be-logged
+    languages: [go]
+    severity: ERROR
+    message: |
+      A GitHub installation token (response field `token` or any local
+      variable holding `ghs_*` material) is being passed to a logger.
+      Use `audit_fingerprint = sha8(token)` instead — the full token
+      must never be written to logs.
+    patterns:
+      - pattern-either:
+          - pattern: $LOGGER.Info(..., $TOKEN, ...)
+          - pattern: $LOGGER.Warn(..., $TOKEN, ...)
+          - pattern: $LOGGER.Error(..., $TOKEN, ...)
+          - pattern: $LOGGER.Debug(..., $TOKEN, ...)
+          - pattern: log.Printf(..., $TOKEN, ...)
+          - pattern: fmt.Printf(..., $TOKEN, ...)
+          - pattern: fmt.Println(..., $TOKEN, ...)
+          - pattern: fmt.Fprintf(..., $TOKEN, ...)
+      - metavariable-pattern:
+          metavariable: $TOKEN
+          patterns:
+            - pattern-either:
+                - pattern: $T.Token
+                - pattern: $T.AccessToken
+                - pattern: $T.InstallationToken
+                - pattern: $T.GHSToken
+                - pattern: token
+                - pattern: ghsToken
+                - pattern: installationToken
+                - pattern: accessToken
+
+  - id: gateway-broker-token-must-not-be-otel-attribute
+    languages: [go]
+    severity: ERROR
+    message: |
+      OTel span attributes record the full token. Replace with the
+      sha8 audit_fingerprint per ADR 0031 §"token leakage policy".
+    patterns:
+      - pattern-either:
+          - pattern: $SPAN.SetAttributes(..., attribute.String("token", $TOKEN), ...)
+          - pattern: $SPAN.SetAttributes(..., attribute.String("github.token", $TOKEN), ...)
+          - pattern: $SPAN.SetAttributes(..., attribute.String("gh_token", $TOKEN), ...)
+          - pattern: $SPAN.SetAttributes(..., attribute.String("access_token", $TOKEN), ...)
+          - pattern: $SPAN.SetAttributes(..., attribute.String("installation_token", $TOKEN), ...)
+
+  - id: gateway-broker-token-must-not-leak-into-dmail
+    languages: [go]
+    severity: ERROR
+    message: |
+      A token-shaped value is being written into D-Mail metadata or
+      body. D-Mail flows through Pub/Sub and archive — token must
+      never be carried in-band.
+    patterns:
+      - pattern-either:
+          - pattern: $DMAIL.Metadata["token"] = $X
+          - pattern: $DMAIL.Metadata["github_token"] = $X
+          - pattern: $DMAIL.Metadata["gh_token"] = $X
+          - pattern: $DMAIL.Metadata["access_token"] = $X
+          - pattern: $DMAIL.Metadata["installation_token"] = $X
+          - pattern: $DMAIL.Body = $TOKEN
+      - metavariable-pattern:
+          metavariable: $TOKEN
+          patterns:
+            - pattern-either:
+                - pattern: $T.Token
+                - pattern: $T.AccessToken
+                - pattern: $T.InstallationToken
+                - pattern: token
+                - pattern: ghsToken
+                - pattern: installationToken
+                - pattern: accessToken
+
+  - id: gateway-broker-token-must-not-be-pubsub-attribute
+    languages: [go]
+    severity: ERROR
+    message: |
+      Pub/Sub message attributes / payload record a token. Tokens
+      must never traverse Pub/Sub per ADR 0031.
+    patterns:
+      - pattern-either:
+          - pattern: $MSG.Attributes["token"] = $X
+          - pattern: $MSG.Attributes["github_token"] = $X
+          - pattern: $MSG.Attributes["gh_token"] = $X
+          - pattern: $MSG.Attributes["access_token"] = $X
+          - pattern: $MSG.Attributes["installation_token"] = $X
+
+  - id: gateway-broker-token-must-not-be-archived
+    languages: [go]
+    severity: ERROR
+    message: |
+      Token value is being written to the archive directory or any
+      local-disk artifact. Tokens live only in memory + HTTP response
+      body + downstream `GH_TOKEN` env.
+    pattern-either:
+      - pattern: |
+          os.WriteFile($PATH, []byte($TOKEN), ...)
+      - pattern: |
+          ioutil.WriteFile($PATH, []byte($TOKEN), ...)
+      - pattern: |
+          os.WriteFile($PATH, $TOKEN, ...)

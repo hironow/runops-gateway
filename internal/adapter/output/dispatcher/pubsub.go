@@ -52,6 +52,13 @@ func (d *PubsubDispatcher) Dispatch(ctx context.Context, req domain.DispatchRequ
 	if req.IdempotencyKey != "" {
 		metadata["parent_idempotency_key"] = req.IdempotencyKey
 	}
+	// #0008 (ADR 0027): carry the multiplex project_id so dmail-receiver
+	// can route to the correct workspace outbox and the 5 tools see the
+	// project on every D-Mail. Absent / empty values are omitted to keep
+	// existing non-multiplex deployments byte-identical.
+	if req.ProjectID != "" {
+		metadata["project_id"] = req.ProjectID
+	}
 
 	mail := domain.DMail{
 		ID:             newDMailID(),

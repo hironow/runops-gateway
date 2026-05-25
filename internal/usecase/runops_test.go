@@ -225,7 +225,7 @@ func TestApproveAction_Service_Success(t *testing.T) {
 	req := newServiceReq()
 
 	// when
-	err := svc.ApproveAction(context.Background(), req, testTarget)
+	err := svc.ApproveAction(context.Background(), req, testTarget, "")
 
 	// then
 	if err != nil {
@@ -257,7 +257,7 @@ func TestApproveAction_Job_Success(t *testing.T) {
 	req := newJobReq()
 
 	// when
-	err := svc.ApproveAction(context.Background(), req, testTarget)
+	err := svc.ApproveAction(context.Background(), req, testTarget, "")
 
 	// then
 	if err != nil {
@@ -301,7 +301,7 @@ func TestApproveAction_WorkerPool_Success(t *testing.T) {
 	req := newWorkerPoolReq()
 
 	// when
-	err := svc.ApproveAction(context.Background(), req, testTarget)
+	err := svc.ApproveAction(context.Background(), req, testTarget, "")
 
 	// then
 	if err != nil {
@@ -327,6 +327,61 @@ func TestApproveAction_WorkerPool_Success(t *testing.T) {
 	}
 }
 
+// TestApproveAction_AIvsAI_RejectedBeforeAuthCheck confirms the ADR 0035
+// invariant: AI agent cannot approve another AI agent's request, and this
+// rejection fires BEFORE the auth check so the audit signal is precise
+// even when the approver would otherwise be authorised. Per ADR 0035
+// §Layer 2 ("BEFORE auth.IsAuthorized so the AI-vs-AI rejection produces
+// a precise audit signal").
+func TestApproveAction_AIvsAI_RejectedBeforeAuthCheck(t *testing.T) {
+	// given — auth.IsAuthorized would otherwise pass (authorized=true),
+	// proving the rejection precedes the auth check.
+	gcp := newMockGCP()
+	notifier := &mockNotifier{}
+	auth := &mockAuth{authorized: true, expired: false}
+	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
+	req := newServiceReq()
+	req.RequesterActorType = domain.CallerAIAgent
+
+	// when
+	err := svc.ApproveAction(context.Background(), req, testTarget, domain.CallerAIAgent)
+
+	// then
+	if !errors.Is(err, domain.ErrAIAgentCannotApproveAIAgent) {
+		t.Fatalf("expected ErrAIAgentCannotApproveAIAgent, got %v", err)
+	}
+	if !notifier.sendEphemeralCalled {
+		t.Error("expected SendEphemeral to be called for AI-vs-AI ephemeral notice")
+	}
+	if !strings.Contains(notifier.sendEphemeralText, "AI agent") {
+		t.Errorf("expected ephemeral text to mention AI agent, got: %s", notifier.sendEphemeralText)
+	}
+	if gcp.shiftTrafficCalled {
+		t.Error("expected ShiftTraffic NOT to be called when ADR 0035 rejection fires")
+	}
+}
+
+// TestApproveAction_AIRequester_HumanApprover_Permitted confirms an AI
+// requester paired with a human approver passes the ADR 0035 gate (the
+// rule narrows only the AI-vs-AI combination).
+func TestApproveAction_AIRequester_HumanApprover_Permitted(t *testing.T) {
+	// given
+	gcp := newMockGCP()
+	notifier := &mockNotifier{}
+	auth := &mockAuth{authorized: true, expired: false}
+	svc := NewRunOpsService(gcp, notifier, auth, &mockStore{})
+	req := newServiceReq()
+	req.RequesterActorType = domain.CallerAIAgent
+
+	// when
+	err := svc.ApproveAction(context.Background(), req, testTarget, domain.CallerHumanOperator)
+
+	// then
+	if errors.Is(err, domain.ErrAIAgentCannotApproveAIAgent) {
+		t.Fatalf("ADR 0035 must NOT fire when approver is human; got %v", err)
+	}
+}
+
 func TestApproveAction_UnauthorizedUser(t *testing.T) {
 	// given
 	gcp := newMockGCP()
@@ -336,7 +391,7 @@ func TestApproveAction_UnauthorizedUser(t *testing.T) {
 	req := newServiceReq()
 
 	// when
-	err := svc.ApproveAction(context.Background(), req, testTarget)
+	err := svc.ApproveAction(context.Background(), req, testTarget, "")
 
 	// then — must return non-nil so CLI callers get a non-zero exit code
 	if err == nil {
@@ -359,7 +414,7 @@ func TestApproveAction_ExpiredButton(t *testing.T) {
 	req := newServiceReq()
 
 	// when
-	err := svc.ApproveAction(context.Background(), req, testTarget)
+	err := svc.ApproveAction(context.Background(), req, testTarget, "")
 
 	// then — must return non-nil so CLI callers get a non-zero exit code
 	if err == nil {
@@ -383,7 +438,7 @@ func TestApproveAction_UnknownResourceType(t *testing.T) {
 	req.ResourceType = "unknown"
 
 	// when
-	err := svc.ApproveAction(context.Background(), req, testTarget)
+	err := svc.ApproveAction(context.Background(), req, testTarget, "")
 
 	// then
 	if err == nil {
@@ -400,7 +455,7 @@ func TestApproveAction_GCPError_Service(t *testing.T) {
 	req := newServiceReq()
 
 	// when
-	err := svc.ApproveAction(context.Background(), req, testTarget)
+	err := svc.ApproveAction(context.Background(), req, testTarget, "")
 
 	// then
 	if err == nil {
@@ -417,7 +472,7 @@ func TestApproveAction_NotifierError_DoesNotBlock(t *testing.T) {
 	req := newServiceReq()
 
 	// when
-	err := svc.ApproveAction(context.Background(), req, testTarget)
+	err := svc.ApproveAction(context.Background(), req, testTarget, "")
 
 	// then
 	if err != nil {
@@ -461,7 +516,7 @@ func TestApproveAction_CLIMode(t *testing.T) {
 	stdoutTarget := port.NotifyTarget{Mode: port.ModeStdout}
 
 	// when — verify no panic and mode logic is exercised
-	err := svc.ApproveAction(context.Background(), req, stdoutTarget)
+	err := svc.ApproveAction(context.Background(), req, stdoutTarget, "")
 
 	// then
 	if err != nil {
@@ -485,7 +540,7 @@ func TestApproveAction_Service_InvalidAction(t *testing.T) {
 	req.Action = "canary_101" // invalid: percent > 100
 
 	// when
-	err := svc.ApproveAction(context.Background(), req, testTarget)
+	err := svc.ApproveAction(context.Background(), req, testTarget, "")
 
 	// then — error returned, ShiftTraffic never called
 	if err == nil {
@@ -506,7 +561,7 @@ func TestApproveAction_WorkerPool_InvalidAction(t *testing.T) {
 	req.Action = "canary_-1" // invalid: negative percent
 
 	// when
-	err := svc.ApproveAction(context.Background(), req, testTarget)
+	err := svc.ApproveAction(context.Background(), req, testTarget, "")
 
 	// then
 	if err == nil {
@@ -527,7 +582,7 @@ func TestApproveAction_Job_TriggerBackupError(t *testing.T) {
 	req := newJobReq()
 
 	// when
-	err := svc.ApproveAction(context.Background(), req, testTarget)
+	err := svc.ApproveAction(context.Background(), req, testTarget, "")
 
 	// then
 	if err == nil {
@@ -548,7 +603,7 @@ func TestApproveAction_Job_ExecuteJobError(t *testing.T) {
 	req := newJobReq()
 
 	// when
-	err := svc.ApproveAction(context.Background(), req, testTarget)
+	err := svc.ApproveAction(context.Background(), req, testTarget, "")
 
 	// then — error propagated, backup was called
 	if err == nil {
@@ -569,7 +624,7 @@ func TestApproveAction_Service_RollbackShiftsToZero(t *testing.T) {
 	req.Action = "rollback"
 
 	// when
-	err := svc.ApproveAction(context.Background(), req, testTarget)
+	err := svc.ApproveAction(context.Background(), req, testTarget, "")
 
 	// then
 	if err != nil {
@@ -593,7 +648,7 @@ func TestApproveAction_Service_CanaryProgressionOffersNextStep(t *testing.T) {
 	req.Action = "canary_10"
 
 	// when
-	err := svc.ApproveAction(context.Background(), req, testTarget)
+	err := svc.ApproveAction(context.Background(), req, testTarget, "")
 
 	// then
 	if err != nil {
@@ -626,7 +681,7 @@ func TestApproveAction_Service_Canary100OffersNoNextStep(t *testing.T) {
 	req.Action = "canary_100"
 
 	// when
-	err := svc.ApproveAction(context.Background(), req, testTarget)
+	err := svc.ApproveAction(context.Background(), req, testTarget, "")
 
 	// then
 	if err != nil {
@@ -652,7 +707,7 @@ func TestApproveAction_Job_WithNextService_OffersCanaryButton(t *testing.T) {
 	req.NextAction = "canary_10"
 
 	// when
-	err := svc.ApproveAction(context.Background(), req, testTarget)
+	err := svc.ApproveAction(context.Background(), req, testTarget, "")
 
 	// then
 	if err != nil {
@@ -681,7 +736,7 @@ func TestApproveAction_UnauthorizedTakesPriorityOverExpired(t *testing.T) {
 	req := newServiceReq()
 
 	// when
-	err := svc.ApproveAction(context.Background(), req, testTarget)
+	err := svc.ApproveAction(context.Background(), req, testTarget, "")
 
 	// then — error returned (unauthorized path takes priority)
 	if err == nil {
@@ -723,7 +778,7 @@ func TestApproveAction_DuplicateExecution(t *testing.T) {
 	req := newServiceReq()
 
 	// when — first call succeeds
-	err := svc.ApproveAction(context.Background(), req, testTarget)
+	err := svc.ApproveAction(context.Background(), req, testTarget, "")
 
 	// then — first call should have run successfully
 	if err != nil {
@@ -738,7 +793,7 @@ func TestApproveAction_DuplicateExecution(t *testing.T) {
 	gcp.shiftTrafficCalled = false
 
 	// when — second call finds the key locked
-	err2 := svc.ApproveAction(context.Background(), req, testTarget)
+	err2 := svc.ApproveAction(context.Background(), req, testTarget, "")
 
 	// then — second call should return non-nil (rejected) and NOT call ShiftTraffic
 	if err2 == nil {
@@ -761,7 +816,7 @@ func TestApproveAction_MultiService_AllSucceed(t *testing.T) {
 	req.Action = "canary_10"
 
 	// when
-	err := svc.ApproveAction(context.Background(), req, testTarget)
+	err := svc.ApproveAction(context.Background(), req, testTarget, "")
 
 	// then
 	if err != nil {
@@ -790,7 +845,7 @@ func TestApproveAction_MultiService_SecondFails_CompensatesFirst(t *testing.T) {
 	req.Action = "canary_10"
 
 	// when
-	err := svc.ApproveAction(context.Background(), req, testTarget)
+	err := svc.ApproveAction(context.Background(), req, testTarget, "")
 
 	// then — error returned
 	if err == nil {
@@ -818,7 +873,7 @@ func TestApproveAction_Service_MismatchedTargetCount_SecondTargetEmpty(t *testin
 	req.Action = "canary_10"
 
 	// when
-	err := svc.ApproveAction(context.Background(), req, testTarget)
+	err := svc.ApproveAction(context.Background(), req, testTarget, "")
 
 	// then — must succeed; second ShiftTraffic call uses target=""
 	if err != nil {
@@ -842,7 +897,7 @@ func TestApproveAction_WorkerPool_Canary0_FallsBackToPercent10(t *testing.T) {
 	req.Action = "canary_0"
 
 	// when
-	err := svc.ApproveAction(context.Background(), req, testTarget)
+	err := svc.ApproveAction(context.Background(), req, testTarget, "")
 
 	// then
 	if err != nil {
@@ -869,7 +924,7 @@ func TestApproveAction_Job_WithNextService_OfferContinuationError_ReturnsNil(t *
 	req.NextAction = "canary_10"
 
 	// when
-	err := svc.ApproveAction(context.Background(), req, testTarget)
+	err := svc.ApproveAction(context.Background(), req, testTarget, "")
 
 	// then — migration completed; notifier error must not propagate
 	if err != nil {
@@ -890,7 +945,7 @@ func TestApproveAction_Service_Canary0_FallsBackToPercent10(t *testing.T) {
 	req.Action = "canary_0"
 
 	// when
-	err := svc.ApproveAction(context.Background(), req, testTarget)
+	err := svc.ApproveAction(context.Background(), req, testTarget, "")
 
 	// then
 	if err != nil {
@@ -920,7 +975,7 @@ func TestApproveAction_MultiWorkerPool_SecondFails_CompensatesFirst(t *testing.T
 	req.Action = "canary_20"
 
 	// when
-	err := svc.ApproveAction(context.Background(), req, testTarget)
+	err := svc.ApproveAction(context.Background(), req, testTarget, "")
 
 	// then — error returned
 	if err == nil {
@@ -976,7 +1031,7 @@ func TestApproveAction_MultiService_NextReqPreservesBundle(t *testing.T) {
 	req.Action = "canary_10"
 
 	// when
-	err := svc.ApproveAction(context.Background(), req, testTarget)
+	err := svc.ApproveAction(context.Background(), req, testTarget, "")
 
 	// then
 	if err != nil {
@@ -1005,7 +1060,7 @@ func TestApproveAction_Service_OfferContinuationFails_StillReturnsNil(t *testing
 	req := newServiceReq()
 
 	// when
-	err := svc.ApproveAction(context.Background(), req, testTarget)
+	err := svc.ApproveAction(context.Background(), req, testTarget, "")
 
 	// then — no error returned (GCP succeeded, notification is best-effort)
 	if err != nil {
@@ -1029,7 +1084,7 @@ func TestApproveAction_Service_OfferContinuation_IncludesStopReq(t *testing.T) {
 	req.Action = "canary_10"
 
 	// when
-	err := svc.ApproveAction(context.Background(), req, testTarget)
+	err := svc.ApproveAction(context.Background(), req, testTarget, "")
 
 	// then
 	if err != nil {
@@ -1059,7 +1114,7 @@ func TestApproveAction_Service_Canary100_NoNextStep(t *testing.T) {
 	req.Action = "canary_100"
 
 	// when
-	err := svc.ApproveAction(context.Background(), req, testTarget)
+	err := svc.ApproveAction(context.Background(), req, testTarget, "")
 
 	// then
 	if err != nil {
@@ -1084,7 +1139,7 @@ func TestApproveAction_Service_ShiftFails_OfferRetryButton(t *testing.T) {
 	req := newServiceReq()
 
 	// when
-	err := svc.ApproveAction(context.Background(), req, testTarget)
+	err := svc.ApproveAction(context.Background(), req, testTarget, "")
 
 	// then — returns error
 	if err == nil {
@@ -1126,7 +1181,7 @@ func TestApproveAction_Job_BackupFails_RebuildsInitialApproval(t *testing.T) {
 	req.NextRevisions = "frontend-service-v2"
 
 	// when
-	err := svc.ApproveAction(context.Background(), req, testTarget)
+	err := svc.ApproveAction(context.Background(), req, testTarget, "")
 
 	// then
 	if err == nil {
@@ -1179,7 +1234,7 @@ func TestApproveAction_Job_EmptyResourceNames_RejectsEarly(t *testing.T) {
 	req.ResourceNames = ""
 
 	// when
-	err := svc.ApproveAction(context.Background(), req, testTarget)
+	err := svc.ApproveAction(context.Background(), req, testTarget, "")
 
 	// then
 	if err == nil {
@@ -1209,7 +1264,7 @@ func TestApproveAction_Job_MigrationFails_RebuildsInitialApproval(t *testing.T) 
 	req.NextRevisions = "frontend-service-v2"
 
 	// when
-	err := svc.ApproveAction(context.Background(), req, testTarget)
+	err := svc.ApproveAction(context.Background(), req, testTarget, "")
 
 	// then
 	if err == nil {
@@ -1232,7 +1287,7 @@ func TestApproveAction_WorkerPool_OfferContinuationFails_StillReturnsNil(t *test
 	req := newWorkerPoolReq()
 
 	// when
-	err := svc.ApproveAction(context.Background(), req, testTarget)
+	err := svc.ApproveAction(context.Background(), req, testTarget, "")
 
 	// then — no error (GCP succeeded)
 	if err != nil {
@@ -1258,7 +1313,7 @@ func TestApproveAction_MultiService_PartialFailure_RollbackSucceeds_MessageSaysR
 	req.Targets = "svc-A-v2,svc-B-v2"
 
 	// when
-	err := svc.ApproveAction(context.Background(), req, testTarget)
+	err := svc.ApproveAction(context.Background(), req, testTarget, "")
 
 	// then
 	if err == nil {
@@ -1295,7 +1350,7 @@ func TestApproveAction_MultiService_RollbackAlsoFails_MessageWarnsPartialFailure
 	req.Targets = "svc-A-v2,svc-B-v2,svc-C-v2"
 
 	// when
-	err := svcObj.ApproveAction(context.Background(), req, testTarget)
+	err := svcObj.ApproveAction(context.Background(), req, testTarget, "")
 
 	// then
 	if err == nil {
@@ -1327,7 +1382,7 @@ func TestApproveAction_MultiService_RollbackSucceeds_MessageSaysRolledBack(t *te
 	req.Targets = "svc-A-v2,svc-B-v2,svc-C-v2"
 
 	// when
-	err := svcObj.ApproveAction(context.Background(), req, testTarget)
+	err := svcObj.ApproveAction(context.Background(), req, testTarget, "")
 
 	// then
 	if err == nil {
@@ -1353,7 +1408,7 @@ func TestApproveAction_SingleService_Fails_NoRollbackNeeded(t *testing.T) {
 	req := newServiceReq()
 
 	// when
-	err := svc.ApproveAction(context.Background(), req, testTarget)
+	err := svc.ApproveAction(context.Background(), req, testTarget, "")
 
 	// then
 	if err == nil {
@@ -1376,7 +1431,7 @@ func TestApproveAction_Service_OfferContinuationFails_FallbackNotifySent(t *test
 	req := newServiceReq()
 
 	// when
-	_ = svc.ApproveAction(context.Background(), req, testTarget)
+	_ = svc.ApproveAction(context.Background(), req, testTarget, "")
 
 	// then — a fallback UpdateMessage must be sent with error notice
 	lastMsg := notifier.updateMessageText
@@ -1397,7 +1452,7 @@ func TestApproveAction_Job_OfferContinuationFails_FallbackNotifySent(t *testing.
 	req.NextAction = "canary_10"
 
 	// when
-	_ = svc.ApproveAction(context.Background(), req, testTarget)
+	_ = svc.ApproveAction(context.Background(), req, testTarget, "")
 
 	// then
 	lastMsg := notifier.updateMessageText
@@ -1417,7 +1472,7 @@ func TestOfferRetry_Fails_FallbackNotifySent(t *testing.T) {
 	req := newServiceReq()
 
 	// when
-	_ = svc.ApproveAction(context.Background(), req, testTarget)
+	_ = svc.ApproveAction(context.Background(), req, testTarget, "")
 
 	// then — fallback UpdateMessage should contain error notice
 	lastMsg := notifier.updateMessageText
@@ -1441,7 +1496,7 @@ func TestApproveAction_Job_BackupFails_RebuildInitialAlsoFails_FallbackNotifySen
 	req.NextRevisions = "frontend-service-v2"
 
 	// when
-	err := svc.ApproveAction(context.Background(), req, testTarget)
+	err := svc.ApproveAction(context.Background(), req, testTarget, "")
 
 	// then
 	if err == nil {
@@ -1478,7 +1533,7 @@ func TestApproveAction_Job_BackupFails_NoNextService_RebuildSkipsServiceButton(t
 	// NextServiceNames intentionally left empty.
 
 	// when
-	err := svc.ApproveAction(context.Background(), req, testTarget)
+	err := svc.ApproveAction(context.Background(), req, testTarget, "")
 
 	// then
 	if err == nil {

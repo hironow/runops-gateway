@@ -1,0 +1,97 @@
+# Release-gate path classification (canonical, referenced by ADR 0031,
+# externalized by ADR 0033).
+#
+# IMPORTANT: This file is read by .github/workflows/release-gate.yaml
+# from the PR's BASE ref (github.event.pull_request.base.sha), not the
+# PR head, to prevent a malicious PR from rewriting this file to
+# reclassify itself. The workflow also contains a hard-coded
+# minimum self-protection set that overrides this YAML if the YAML
+# is missing or malformed.
+#
+# Edits to this file are themselves auth_boundary changes (the file
+# is included under auth_boundary below + in the workflow's hard-coded
+# set). Two human reviewers required (CODEOWNERS).
+
+auth_boundary:
+  # Token broker (refs#0007) — broker port, usecase, adapters
+  - "internal/core/port/*token*"
+  - "internal/usecase/broker_token*"
+  - "internal/adapter/input/broker/**"
+  - "internal/adapter/output/auth/**"
+  - "internal/adapter/output/cache/**"
+  # Match both "agent_session_registry.go" and adapter prefixes
+  # like "in_memory_agent_session_registry.go" / "firestore_agent_session_registry.go".
+  # The original prefix-only glob was too narrow once the per-impl
+  # adapter files landed.
+  - "internal/adapter/output/registry/*agent_session*"
+  - "internal/adapter/output/github/**"
+  - "internal/adapter/output/secret/**"
+
+  # AI agent session registry (plan v8 §5.2) — domain + port
+  # carry the verify-time sentinel logic (SA mismatch / expired /
+  # revoked / project mismatch / tool mismatch) that grants the
+  # broker permission to mint on behalf of an AI agent. Edits to
+  # the verify rule set are auth_boundary independent of the
+  # adapter-level Firestore wiring.
+  - "internal/core/domain/agent_session*"
+  - "internal/core/port/*agent_session*"
+
+  # Identity token domain helpers (plan v8 §5.1 caller auth) — JWT
+  # claim parsing + audience / expiry validation shared by the 4
+  # caller-auth verifiers (cloudrun_iam / workload_identity /
+  # gcloud_identity / delegated_agent). The verifier adapters live
+  # under internal/adapter/output/auth/** which is already covered
+  # above; the domain glob here pins the rule set itself.
+  - "internal/core/domain/identity_token*"
+
+  # Composition root (broker mount, auth middleware ordering, DI of
+  # the broker port). Any change here can mount or unmount the broker
+  # endpoint or bypass the auth middleware.
+  - "cmd/server/**"
+
+  # Broker env-var configuration loader (Phase 3b-3a). Edits here
+  # change the SA allowlist semantics + audience pinning + Firestore-
+  # vs-in-memory selector — same auth-boundary surface as the
+  # composition root itself.
+  - "internal/composition/**"
+
+  # IaC for IAM, Secret Manager, GitHub provider, Repository Ruleset.
+  # Existing repo layout puts deployer IAM in tofu/github.tf and
+  # Secret Manager resources/accessors in tofu/main.tf, so the gate
+  # is fail-closed: every .tf and .tfvars under tofu/ is auth_boundary.
+  - "tofu/**/*.tf"
+  - "tofu/**/*.tfvars"
+
+  # Workflow + gate self-defence (meta-gate). Also enumerated in the
+  # workflow's hard-coded set so a base-ref or YAML failure cannot
+  # let these paths slip into routing.
+  - ".github/workflows/release-gate.yaml"
+  - ".github/workflows/cd.yaml"
+  - ".github/workflows/deploy*.yaml"
+  - ".github/CODEOWNERS"
+  - ".github/release-gate-paths.yaml"
+  - ".semgrep/rules/release-gate/**"
+  # Security-impacting ADRs are enrolled here per-number. The release-gate
+  # glob engine (release-gate.yaml::Apply YAML globs) only treats `**` and
+  # `*` as wildcards; character classes like `[4-9]` are escaped to literal,
+  # so range globs do NOT work. Always add new security-impacting ADRs as
+  # explicit per-number entries below. See ADR 0033 §verification.
+  - "docs/adr/0031-*"
+  - "docs/adr/0032-*"
+  - "docs/adr/0033-*"
+  - "docs/adr/0034-*"
+  - "docs/adr/0035-*"
+  - "docs/adr/0036-*"
+  - "docs/adr/0037-*"
+
+schema:
+  # D-Mail / event / persistence schema. Forward-compatibility matters
+  # because gateway and 4-tool consumers parse these.
+  - "internal/core/domain/dmail*.go"
+  - "internal/core/domain/event*.go"
+  - "internal/adapter/output/firestore/**"
+  - "internal/core/port/*.go"
+
+# `routing` is the implicit fallback. Any PR whose changed files do
+# not match auth_boundary or schema globs is classified `routing` and
+# may continue using the existing develop-push auto-deploy pipeline.

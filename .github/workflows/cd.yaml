@@ -1,8 +1,47 @@
 name: CD
 
+# Per ADR 0031 + ADR 0033: this workflow has two trigger modes.
+#
+# 1) push: branches: [main]
+#    Auto-deploy ONLY for routing-classified commits (release-gate
+#    workflow publishes a `release-gate` commit status with
+#    description=category=routing). auth_boundary / schema commits
+#    are skipped here and must be deployed via workflow_dispatch.
+#
+# 2) workflow_dispatch
+#    Manual deploy targeting an explicit ref. The dispatching
+#    operator declares the expected category; the gate-check job
+#    verifies that the diff between the deploy ref and the current
+#    production tag matches the declared category. Mismatches fail
+#    closed.
 on:
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: |
+          Explicit ref to deploy (full SHA preferred). For auth_boundary
+          and schema deploys this MUST be a commit reachable from main
+          (the rollback target), per ADR 0031. Routing dispatches may
+          target any ref but should normally use a `prod-*` tag.
+        required: true
+        type: string
+      declared_category:
+        description: |
+          Category the operator declares the deploy ref to be:
+          routing | auth_boundary | schema. The gate-check job
+          verifies it against the diff.
+        required: true
+        type: choice
+        options:
+          - routing
+          - auth_boundary
+          - schema
+      reason:
+        description: Free-text justification for the deploy_log entry.
+        required: true
+        type: string
 
 # Deployments must not be cancelled mid-flight.
 concurrency:
@@ -12,6 +51,7 @@ concurrency:
 permissions:
   contents: read
   id-token: write   # required for Workload Identity Federation
+  statuses: read    # gate-check reads release-gate commit status
 
 # ---------------------------------------------------------------------------
 # Required GitHub repository variables (Settings > Secrets and variables >
@@ -52,10 +92,142 @@ permissions:
 
 jobs:
   # -------------------------------------------------------------------------
+  # Release gate check (ADR 0031, ADR 0033).
+  #
+  # On push:main — read the release-gate commit status published by the
+  # release-gate workflow and refuse to proceed unless category=routing.
+  # auth_boundary / schema commits skip the deploy + infra apply jobs
+  # and surface a `gated by ADR 0031` reason.
+  #
+  # On workflow_dispatch — verify the operator's declared_category
+  # matches the actual diff between the dispatch ref and the current
+  # production tag, by re-running the same classification logic
+  # locally. Mismatches fail closed.
+  # -------------------------------------------------------------------------
+  gate-check:
+    name: Release gate check
+    runs-on: ubuntu-24.04
+    outputs:
+      category: ${{ steps.resolve.outputs.category }}
+      proceed: ${{ steps.resolve.outputs.proceed }}
+      reason: ${{ steps.resolve.outputs.reason }}
+      # deploy_sha is the canonical commit SHA every downstream job
+      # MUST checkout / build / deploy. On push: it is github.sha.
+      # On workflow_dispatch: it is the input ref resolved to a full
+      # SHA. This closes the codex v6 #2 finding that dispatch input
+      # ref was not actually used by build/deploy.
+      deploy_sha: ${{ steps.resolve.outputs.deploy_sha }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - id: resolve
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PUSH_SHA: ${{ github.sha }}
+          DISPATCH_REF: ${{ github.event.inputs.ref }}
+          DECLARED_CATEGORY: ${{ github.event.inputs.declared_category }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "push" ]; then
+            DEPLOY_SHA="$PUSH_SHA"
+            for i in 1 2 3 4 5 6; do
+              status=$(gh api "repos/${REPO}/commits/${DEPLOY_SHA}/statuses" \
+                --jq '[.[] | select(.context == "release-gate")] | .[0]' || true)
+              if [ -n "$status" ] && [ "$status" != "null" ]; then
+                break
+              fi
+              sleep 10
+            done
+            if [ -z "$status" ] || [ "$status" = "null" ]; then
+              echo "::error::release-gate status not found on commit $DEPLOY_SHA after 60s. Refusing to deploy (fail-closed per ADR 0031)." >&2
+              exit 1
+            fi
+            state=$(echo "$status" | jq -r '.state')
+            description=$(echo "$status" | jq -r '.description // ""')
+            if [ "$state" != "success" ]; then
+              echo "::error::release-gate status state=$state on commit $DEPLOY_SHA." >&2
+              exit 1
+            fi
+            category=$(echo "$description" | sed -nE 's/^category=([a-z_]+).*/\1/p')
+            if [ -z "$category" ]; then
+              echo "::error::release-gate status description did not encode category: $description" >&2
+              exit 1
+            fi
+            echo "category=$category" >> "$GITHUB_OUTPUT"
+            echo "deploy_sha=$DEPLOY_SHA" >> "$GITHUB_OUTPUT"
+            if [ "$category" = "routing" ]; then
+              echo "proceed=true" >> "$GITHUB_OUTPUT"
+              echo "reason=routing auto-deploy (sha=$DEPLOY_SHA)" >> "$GITHUB_OUTPUT"
+            else
+              echo "proceed=false" >> "$GITHUB_OUTPUT"
+              echo "reason=gated by ADR 0031 (category=$category, use workflow_dispatch with declared_category=$category to deploy)" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            # workflow_dispatch — verify declared category matches the
+            # ACTUAL release-gate classification of the dispatched ref
+            # (codex v6 #1: prevent self-declaration bypass).
+            if [ -z "$DISPATCH_REF" ] || [ -z "$DECLARED_CATEGORY" ]; then
+              echo "::error::workflow_dispatch requires both ref and declared_category inputs." >&2
+              exit 1
+            fi
+            # Resolve the input ref (could be a tag / branch / short SHA)
+            # to a full commit SHA for downstream consumers.
+            DEPLOY_SHA=$(git rev-parse "$DISPATCH_REF" 2>/dev/null || true)
+            if [ -z "$DEPLOY_SHA" ] || [ "${#DEPLOY_SHA}" -ne 40 ]; then
+              echo "::error::Cannot resolve dispatch ref to a 40-char SHA: $DISPATCH_REF" >&2
+              exit 1
+            fi
+            echo "deploy_sha=$DEPLOY_SHA" >> "$GITHUB_OUTPUT"
+            # Read the release-gate status that was published for this
+            # SHA (the release-gate workflow runs on every push). If
+            # missing, refuse — operator cannot bypass classification.
+            for i in 1 2 3 4 5 6; do
+              status=$(gh api "repos/${REPO}/commits/${DEPLOY_SHA}/statuses" \
+                --jq '[.[] | select(.context == "release-gate")] | .[0]' || true)
+              if [ -n "$status" ] && [ "$status" != "null" ]; then
+                break
+              fi
+              sleep 10
+            done
+            if [ -z "$status" ] || [ "$status" = "null" ]; then
+              echo "::error::release-gate status missing on dispatch ref $DEPLOY_SHA. Refusing to deploy (fail-closed)." >&2
+              exit 1
+            fi
+            description=$(echo "$status" | jq -r '.description // ""')
+            actual_category=$(echo "$description" | sed -nE 's/^category=([a-z_]+).*/\1/p')
+            if [ -z "$actual_category" ]; then
+              echo "::error::release-gate status missing category for dispatch ref $DEPLOY_SHA." >&2
+              exit 1
+            fi
+            if [ "$actual_category" != "$DECLARED_CATEGORY" ]; then
+              echo "::error::declared_category=$DECLARED_CATEGORY but release-gate classified the ref as $actual_category. Refusing to deploy." >&2
+              exit 1
+            fi
+            # auth_boundary / schema dispatches must target a ref
+            # reachable from main (the rollback target, ADR 0031
+            # §"main promotion path").
+            if [ "$DECLARED_CATEGORY" != "routing" ]; then
+              if ! git merge-base --is-ancestor "$DEPLOY_SHA" "origin/main" 2>/dev/null; then
+                echo "::error::auth_boundary/schema dispatch ref $DEPLOY_SHA is not reachable from main. Promote to main first per ADR 0031." >&2
+                exit 1
+              fi
+            fi
+            echo "category=$actual_category" >> "$GITHUB_OUTPUT"
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            echo "reason=workflow_dispatch verified (category=$actual_category, sha=$DEPLOY_SHA)" >> "$GITHUB_OUTPUT"
+          fi
+
+  # -------------------------------------------------------------------------
   # Detect which paths changed so downstream jobs can skip when irrelevant.
   # -------------------------------------------------------------------------
   check-changes:
     name: Check changed paths
+    needs: gate-check
+    if: needs.gate-check.outputs.proceed == 'true'
     runs-on: ubuntu-24.04
     outputs:
       tofu: ${{ steps.filter.outputs.tofu }}
@@ -85,8 +257,16 @@ jobs:
   # -------------------------------------------------------------------------
   infra:
     name: Apply Infrastructure (OpenTofu)
-    needs: check-changes
-    if: needs.check-changes.outputs.tofu == 'true'
+    needs: [gate-check, check-changes]
+    # Apply infra ONLY when:
+    #   - gate-check says proceed=true (routing on push, dispatch otherwise)
+    #   - tofu/** changed
+    # auth_boundary / schema gate-check on push will set proceed=false,
+    # blocking infra apply (closing the cd.yaml infra-apply bypass
+    # cited in codex review v4 #1).
+    if: |
+      needs.gate-check.outputs.proceed == 'true' &&
+      needs.check-changes.outputs.tofu == 'true'
     runs-on: ubuntu-24.04
     environment: production
     defaults:
@@ -94,7 +274,13 @@ jobs:
         working-directory: tofu
 
     steps:
+      # Checkout the resolved deploy_sha (workflow_dispatch input ref
+      # resolved to a 40-char SHA, or github.sha for push). Without
+      # this, dispatch deploys would silently apply infra from the
+      # branch HEAD instead of the input ref (codex review v6 #2).
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.gate-check.outputs.deploy_sha }}
 
       - id: auth
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
@@ -142,11 +328,15 @@ jobs:
   # -------------------------------------------------------------------------
   deploy:
     name: Build & Deploy
-    needs: [check-changes, infra]
-    # Run if infra succeeded OR was skipped (pure code push). Never run if
-    # infra failed — a broken infra state should block the image deploy.
+    needs: [gate-check, check-changes, infra]
+    # Deploy ONLY when:
+    #   - gate-check says proceed=true
+    #   - infra succeeded OR was skipped
+    # Never deploy on auth_boundary/schema push (gate-check blocks);
+    # those deploys go through workflow_dispatch with declared_category.
     if: >-
       always() &&
+      needs.gate-check.outputs.proceed == 'true' &&
       (needs.infra.result == 'success' || needs.infra.result == 'skipped')
     runs-on: ubuntu-24.04
     environment: production
@@ -158,9 +348,17 @@ jobs:
         ${{ vars.ARTIFACT_REGISTRY_LOCATION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/runops/dmail-receiver
       DMAIL_EMITTER_IMAGE: >-
         ${{ vars.ARTIFACT_REGISTRY_LOCATION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/runops/dmail-emitter
+      # Deploy SHA is the canonical commit ref for this run (resolved
+      # by gate-check). All checkout / build / deploy steps below use
+      # this rather than github.sha so that workflow_dispatch input
+      # ref is actually what gets shipped (codex review v6 #2).
+      DEPLOY_SHA: ${{ needs.gate-check.outputs.deploy_sha }}
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.gate-check.outputs.deploy_sha }}
+          fetch-depth: 0  # need history for prod-* tag creation step
 
       - id: auth
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
@@ -183,7 +381,7 @@ jobs:
           context: .
           push: true
           tags: |
-            ${{ env.IMAGE }}:${{ github.sha }}
+            ${{ env.IMAGE }}:${{ env.DEPLOY_SHA }}
             ${{ env.IMAGE }}:latest
           # Layer cache via GitHub Actions cache backend — no separate registry needed.
           cache-from: type=gha
@@ -202,7 +400,7 @@ jobs:
           file: docker/dmail-receiver.Dockerfile
           push: true
           tags: |
-            ${{ env.DMAIL_RECEIVER_IMAGE }}:${{ github.sha }}
+            ${{ env.DMAIL_RECEIVER_IMAGE }}:${{ env.DEPLOY_SHA }}
             ${{ env.DMAIL_RECEIVER_IMAGE }}:latest
           cache-from: type=gha,scope=dmail-receiver
           cache-to: type=gha,mode=max,scope=dmail-receiver
@@ -214,7 +412,7 @@ jobs:
           file: docker/dmail-emitter.Dockerfile
           push: true
           tags: |
-            ${{ env.DMAIL_EMITTER_IMAGE }}:${{ github.sha }}
+            ${{ env.DMAIL_EMITTER_IMAGE }}:${{ env.DEPLOY_SHA }}
             ${{ env.DMAIL_EMITTER_IMAGE }}:latest
           cache-from: type=gha,scope=dmail-emitter
           cache-to: type=gha,mode=max,scope=dmail-emitter
@@ -225,7 +423,7 @@ jobs:
         with:
           service: runops-gateway
           region: ${{ vars.CLOUD_RUN_LOCATION }}
-          image: ${{ env.IMAGE }}:${{ github.sha }}
+          image: ${{ env.IMAGE }}:${{ env.DEPLOY_SHA }}
           # deploy-cloudrun@v2 routes 100% traffic to the new revision by default.
 
       # Post-deploy smoke: prove that the just-shipped revision is reachable
@@ -274,3 +472,119 @@ jobs:
           fi
 
           echo "smoke: all checks passed against ${SERVICE_URL}"
+
+      # ADR 0031 §"Rollback target separation": create the immutable
+      # prod-* tag pointing at the deployed commit and stamp the
+      # Cloud Run revision label so rollback uses the same SoT pair
+      # (protected git tag + revision label).
+      - name: Stamp Cloud Run revision label
+        env:
+          SERVICE: runops-gateway
+          REGION: ${{ vars.CLOUD_RUN_LOCATION }}
+        run: |
+          set -euo pipefail
+          # The deploy-cloudrun action publishes a new revision named
+          # auto-<n>; we attach a label `prod-<sha7>` so the next
+          # deploy can read the previous-production commit from the
+          # currently-serving revision (codex review v4 #3 + ADR 0031).
+          SHA7="${DEPLOY_SHA:0:7}"
+          gcloud run services update "$SERVICE" \
+            --region="$REGION" \
+            --update-labels="prod-sha7=${SHA7}" \
+            --quiet
+
+      - name: Create prod-* immutable tag (ADR 0031)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SERVICE: runops-gateway
+          REGION: ${{ vars.CLOUD_RUN_LOCATION }}
+        run: |
+          set -euo pipefail
+          # Tag name format: prod-YYYYMMDD-<sha7>. Created against the
+          # deploy_sha. Idempotent retry-safe (ADR 0031): if the tag
+          # exists pointing at the same expected previous-production
+          # commit we proceed; if it points at a different commit we
+          # fail loudly.
+          DATE_STAMP=$(date -u +%Y%m%d)
+          SHA7="${DEPLOY_SHA:0:7}"
+          TAG="prod-${DATE_STAMP}-${SHA7}"
+
+          # The "expected previous-production commit" is read from the
+          # currently-serving Cloud Run revision label (set by the
+          # previous successful deploy). On first deploy ever, the
+          # label is missing and we accept any commit.
+          PREV_SHA7=$(gcloud run services describe "$SERVICE" \
+            --region="$REGION" \
+            --format="value(metadata.labels.prod-sha7)" 2>/dev/null || echo "")
+
+          if git rev-parse "refs/tags/$TAG" >/dev/null 2>&1; then
+            EXISTING_SHA=$(git rev-parse "refs/tags/$TAG")
+            if [ "$EXISTING_SHA" = "$DEPLOY_SHA" ]; then
+              echo "tag $TAG already exists at $DEPLOY_SHA — retry-safe (ADR 0031)"
+            else
+              echo "::error::tag $TAG exists pointing at $EXISTING_SHA but deploy is at $DEPLOY_SHA. Refusing to retag (ADR 0031 §prod-* tag immutability)." >&2
+              exit 1
+            fi
+          else
+            git config user.name  "release-gate-bot"
+            git config user.email "release-gate-bot@users.noreply.github.com"
+            git tag -a "$TAG" "$DEPLOY_SHA" \
+              -m "production deploy at $DEPLOY_SHA (previous prod-sha7=${PREV_SHA7:-none})"
+            # Push via the workflow GITHUB_TOKEN. The Repository
+            # Ruleset (tofu/github_repository.tf) restricts create on
+            # prod-* to the deploy app identity; this token is the
+            # workflow's bot, which the operator adds to the bypass
+            # list of the ruleset on first setup.
+            git push "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "$TAG"
+          fi
+
+      - name: Append deploy log
+        env:
+          SHA7: ${{ env.DEPLOY_SHA }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          ACTOR: ${{ github.actor }}
+          EVENT: ${{ github.event_name }}
+          DECLARED_CATEGORY: ${{ github.event.inputs.declared_category }}
+          REASON: ${{ github.event.inputs.reason }}
+        run: |
+          set -euo pipefail
+          # docs/deploy-log.md is the human-readable auxiliary ledger
+          # (ADR 0031 §"prod-* tag immutability"). The protected
+          # tag + Cloud Run revision label remain the rollback SoT;
+          # this file just gives operators a quick scan.
+          DATE_STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+          PREV_SHA7=$(gcloud run services describe runops-gateway \
+            --region="${{ vars.CLOUD_RUN_LOCATION }}" \
+            --format="value(metadata.labels.prod-sha7)" 2>/dev/null || echo "")
+          ENTRY="| ${DATE_STAMP} | ${EVENT} | ${ACTOR} | ${DEPLOY_SHA} | ${PREV_SHA7:-(none)} | ${DECLARED_CATEGORY:-routing} | ${REASON:-auto-deploy} |"
+          # Append + commit via the workflow token. This is a routing
+          # change (just a markdown append) so it lands on develop
+          # without dispatch.
+          git config user.name  "release-gate-bot"
+          git config user.email "release-gate-bot@users.noreply.github.com"
+          git fetch origin develop
+          git checkout origin/develop -- docs/deploy-log.md 2>/dev/null || true
+          if [ ! -f docs/deploy-log.md ]; then
+            mkdir -p docs
+            cat > docs/deploy-log.md <<'HDR'
+# Production deploy log (ADR 0031)
+
+Append-only ledger written by the cd.yaml workflow after each
+production deploy. Auxiliary to the protected `prod-*` git tags
+and Cloud Run revision labels (those are the rollback SoT).
+
+| timestamp_utc | trigger | actor | deploy_sha | previous_prod_sha7 | category | reason |
+|---|---|---|---|---|---|---|
+HDR
+          fi
+          echo "$ENTRY" >> docs/deploy-log.md
+          # The append commit itself is routing-classified (markdown
+          # only, no auth_boundary path matched), so it reaches the
+          # develop push pipeline cleanly. Use a separate branch +
+          # PR to land it on a future iteration; for now we just
+          # leave the file uncommitted so the operator can review
+          # and merge manually. (Auto-PR creation is a follow-up.)
+          echo "deploy log entry prepared (manual commit required):"
+          cat docs/deploy-log.md

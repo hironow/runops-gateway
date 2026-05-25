@@ -47,6 +47,12 @@ type actionValue struct {
 	NextRevision     string `json:"next_revision"` // legacy: singular form
 	NextAction       string `json:"next_action"`
 	BuildInfo        string `json:"build_info"`
+	// SQLInstanceName is the Cloud SQL instance to back up before migrate_apply.
+	// 空 (legacy button) のときは usecase 側で ResourceNames (= job 名) に
+	// fallback する。 job 名と SQL instance 名が一致しない命名規約 (例:
+	// stg-ops-agent-migration job → stg-ops-agent-db instance) のときは
+	// この field を埋めないと TriggerBackup が 404 で落ちる。
+	SQLInstanceName string `json:"sql_instance_name"`
 }
 
 // interactiveAction is a single Block Kit action element from a Slack
@@ -74,14 +80,30 @@ type interactivePayload struct {
 // InteractiveHandler handles POST /slack/interactive requests
 // (block-kit button clicks: approve / deny / dispatch_approve / dispatch_deny /
 // approval_approve / approval_deny).
+// AdminApprovalOrchestrator is the interface satisfied by the ADR 0040
+// §B-5 admin-mutation approval orchestrator. Declared here (= adapter
+// side) so the slack handler can branch on av.Kind == admin_mutation
+// without importing the concrete usecase package directly. The
+// production implementation lives in internal/usecase/admin_approval.
+type AdminApprovalOrchestrator interface {
+	OnApprovalAck(ctx context.Context, idempotencyKey, approverID string, approverType domain.CallerType) error
+	OnApprovalDeny(ctx context.Context, idempotencyKey, approverID string, approverType domain.CallerType) error
+}
+
 type InteractiveHandler struct {
 	useCase           port.RunOpsUseCase
 	dispatchUseCase   DispatchUseCase
 	notifier          port.Notifier
 	consumedTokens    port.ConsumedTokenStore
 	approvalPublisher port.DMailPublisher           // optional, Phase 4a (ADR 0019)
+	adminApproval     AdminApprovalOrchestrator     // optional, ADR 0040 §B-5
 	pending           *observability.PendingTracker // optional, Issue 0005 — when nil, falls back to bare `go`
 	signingSecret     string
+	// aiAgentBotUserIDs lists Slack user.id values that the operator has
+	// enrolled as AI agents (per ADR 0035 §Layer 3). Approver classification
+	// uses ClassifyApproverActorType against this list. Empty list is the
+	// safe default; the AI-vs-AI rule is then a no-op.
+	aiAgentBotUserIDs []string
 }
 
 // NewInteractiveHandler creates a new Slack interactive (button click) handler.
@@ -105,6 +127,26 @@ func NewInteractiveHandler(useCase port.RunOpsUseCase, dispatchUseCase DispatchU
 // Returns the same handler so callers can chain after NewInteractiveHandler.
 func (h *InteractiveHandler) WithApprovalPublisher(p port.DMailPublisher) *InteractiveHandler {
 	h.approvalPublisher = p
+	return h
+}
+
+// WithAIAgentBotUserIDs enrolls Slack user.ids that should be classified
+// as AI agents per ADR 0035 §Layer 3. The list is typically sourced from
+// the SLACK_AI_AGENT_BOT_USER_IDS env var (CSV); see ParseAIAgentBotUserIDs.
+// Returns the same handler so callers can chain after NewInteractiveHandler.
+func (h *InteractiveHandler) WithAIAgentBotUserIDs(ids []string) *InteractiveHandler {
+	h.aiAgentBotUserIDs = ids
+	return h
+}
+
+// WithAdminApprovalOrchestrator enables the ADR 0040 §B-5 admin-mutation
+// approval routing. When set, approval clicks whose action value carries
+// Kind == admin_mutation bypass the convergence ack publish and call
+// OnApprovalAck / OnApprovalDeny on the orchestrator. Phase 4a
+// convergence approvals (= Kind empty or convergence) keep the legacy
+// path unchanged.
+func (h *InteractiveHandler) WithAdminApprovalOrchestrator(o AdminApprovalOrchestrator) *InteractiveHandler {
+	h.adminApproval = o
 	return h
 }
 
@@ -232,6 +274,7 @@ func (h *InteractiveHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Action:           av.Action,
 		ApproverID:       slackPayload.User.ID,
 		IssuedAt:         av.IssuedAt,
+		SQLInstanceName:  av.SQLInstanceName,
 		MigrationDone:    av.MigrationDone,
 		NextServiceNames: firstNonEmpty(av.NextServiceNames, av.NextServiceName),
 		NextRevisions:    firstNonEmpty(av.NextRevisions, av.NextRevision),
@@ -244,7 +287,8 @@ func (h *InteractiveHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.goAsync(func() {
 			ctx, cancel := context.WithTimeout(context.Background(), responseURLTimeout)
 			defer cancel()
-			if err := h.useCase.ApproveAction(ctx, req, target); err != nil {
+			approverType := ClassifyApproverActorType(slackPayload.User.ID, h.aiAgentBotUserIDs)
+			if err := h.useCase.ApproveAction(ctx, req, target, approverType); err != nil {
 				slog.Error("ApproveAction failed", "error", err)
 				h.notifyIfTimeout(ctx, err, target)
 			}
@@ -338,6 +382,7 @@ func (h *InteractiveHandler) handleDispatchAction(traceCtx context.Context, acti
 	if h.consumedTokens != nil {
 		token := dispatchApproveToken(dv)
 		if !h.consumedTokens.MarkConsumed(token) {
+			// nosemgrep: gateway-broker-token-must-not-be-logged -- dispatch_approve consumed-token (single-use Slack button id), not a GitHub installation token; safe to log for replay-attempt audit.
 			slog.Warn("dispatch_approve replay rejected", "token", token, "clicker", clickerUserID)
 			span.SetStatus(codes.Error, "replay rejected")
 			span.End()
@@ -367,6 +412,10 @@ func (h *InteractiveHandler) handleDispatchAction(traceCtx context.Context, acti
 		// these to thread-reply when the agent finishes.
 		SlackChannelID: target.ChannelID,
 		SlackThreadTS:  target.ThreadTS,
+		// #0008 (ADR 0027): carry the multiplex project_id through the
+		// approve click so DispatchAgentTask + Pub/Sub publish see the
+		// same value the operator originally chose.
+		ProjectID: dv.ProjectID,
 	}
 	h.goAsync(func() {
 		ctx, cancel := context.WithTimeout(traceCtx, responseURLTimeout)
@@ -445,8 +494,171 @@ func (h *InteractiveHandler) handleApprovalAction(traceCtx context.Context, acti
 		return
 	}
 
+	// ADR 0037 §Migration window alignment + ADR 0038 §3.4: HIGH paths
+	// fail-closed for empty RequesterActorType from ADR 0037 Accepted day.
+	// ADR 0036 §Migration's CallerHumanOperator fallback is scoped to
+	// non-HIGH (= ApproveAction dispatch / canary) only; HIGH 4-eyes
+	// approval rejects empty here. This implementation closes the
+	// spec-vs-impl gap that ADR 0038 codex review v2 surfaced as a
+	// blocker for the non-HIGH flip.
+	if av.RequesterActorType == "" {
+		slog.Warn("approval_actor_type_empty",
+			"clicker", clickerUserID,
+			"parent", av.ParentIdempotencyKey)
+		span.SetStatus(codes.Error, "approval_actor_type_empty")
+		span.End()
+		h.goAsync(func() {
+			ctx, cancel := context.WithTimeout(traceCtx, 30*time.Second)
+			defer cancel()
+			if err := h.notifier.SendEphemeral(ctx, target, clickerUserID,
+				"🚫 actor type が空です、 HIGH approval を保留します (ADR 0037)"); err != nil {
+				slog.Error("approval empty-actor ephemeral failed", "error", err)
+			}
+		})
+		return
+	}
+	// ADR 0036 §Carry point 3: actor-type validation. Reject unknown
+	// non-empty RequesterActorType values fail-closed; reject AI-vs-AI
+	// per ADR 0035 invariant. Both fire BEFORE the consumed-token check
+	// so a malformed / disallowed click does not waste the one-shot token.
+	// (= empty is rejected by the previous block; this block handles
+	// non-empty but invalid values.)
+	if !isCanonicalCallerType(av.RequesterActorType) {
+		slog.Warn("approval_actor_type_invalid",
+			"raw_value", av.RequesterActorType,
+			"clicker", clickerUserID,
+			"parent", av.ParentIdempotencyKey)
+		span.SetStatus(codes.Error, "approval_actor_type_invalid")
+		span.End()
+		h.goAsync(func() {
+			ctx, cancel := context.WithTimeout(traceCtx, 30*time.Second)
+			defer cancel()
+			if err := h.notifier.SendEphemeral(ctx, target, clickerUserID,
+				"🚫 invalid actor type、 承認を保留します (ADR 0036)"); err != nil {
+				slog.Error("approval invalid-actor ephemeral failed", "error", err)
+			}
+		})
+		return
+	}
+	// ADR 0037 §Gateway policy on classification: reject spoofed_broker
+	// fail-closed; reject unknown for HIGH severity (this is a HIGH path).
+	// The button-build site (ApprovalRequester.buildButtonValues) sets
+	// av.RequesterActorSource to one of the GatewayClassification enum
+	// values. Empty / absent decodes to GatewayClassificationUnknown.
+	classification := domain.GatewayClassification(av.RequesterActorSource)
+	if av.RequesterActorSource == "" {
+		classification = domain.GatewayClassificationUnknown
+	}
+	if classification == domain.GatewayClassificationSpoofedBroker {
+		slog.Warn("actor_type_source_spoof_attempt",
+			"raw_source", av.RequesterActorSource,
+			"clicker", clickerUserID,
+			"parent", av.ParentIdempotencyKey)
+		span.SetStatus(codes.Error, "actor_type_source_spoof_attempt")
+		span.End()
+		h.goAsync(func() {
+			ctx, cancel := context.WithTimeout(traceCtx, 30*time.Second)
+			defer cancel()
+			if err := h.notifier.SendEphemeral(ctx, target, clickerUserID,
+				"🚫 actor source spoof attempt detected (ADR 0037)"); err != nil {
+				slog.Error("approval spoof-source ephemeral failed", "error", err)
+			}
+		})
+		return
+	}
+	if classification == domain.GatewayClassificationUnknown && av.RequesterActorType != "" {
+		// Producer emitted a requester actor type but no source = inconsistent.
+		// Treat as unknown classification and fail-closed per ADR 0037 §Migration
+		// window alignment (HIGH paths fail-closed from Accepted day).
+		slog.Warn("approval_actor_source_unknown",
+			"requester_actor", av.RequesterActorType,
+			"clicker", clickerUserID,
+			"parent", av.ParentIdempotencyKey)
+		span.SetStatus(codes.Error, "approval_actor_source_unknown")
+		span.End()
+		h.goAsync(func() {
+			ctx, cancel := context.WithTimeout(traceCtx, 30*time.Second)
+			defer cancel()
+			if err := h.notifier.SendEphemeral(ctx, target, clickerUserID,
+				"🚫 actor type source unknown、 HIGH approval を保留します (ADR 0037)"); err != nil {
+				slog.Error("approval unknown-source ephemeral failed", "error", err)
+			}
+		})
+		return
+	}
+	// ADR 0037 §Axis 3 effective_requester_actor_type rule. Compute the
+	// effective requester for AI-vs-AI determination. workspace-daemon
+	// requires initiating_actor_type to be present (laundering closure).
+	syntheticForEffective := domain.ApprovalRequest{
+		RequesterActorType:  domain.CallerType(av.RequesterActorType),
+		InitiatingActorType: domain.CallerType(av.InitiatingActorType),
+	}
+	effectiveRequester, effErr := domain.EffectiveRequesterActorType(syntheticForEffective)
+	if effErr != nil {
+		slog.Warn("approval_initiating_actor_required",
+			"requester_actor", av.RequesterActorType,
+			"clicker", clickerUserID,
+			"parent", av.ParentIdempotencyKey)
+		span.SetStatus(codes.Error, "approval_initiating_actor_required")
+		span.End()
+		h.goAsync(func() {
+			ctx, cancel := context.WithTimeout(traceCtx, 30*time.Second)
+			defer cancel()
+			if err := h.notifier.SendEphemeral(ctx, target, clickerUserID,
+				"🚫 daemon-driven HIGH approval requires initiating actor (ADR 0037)"); err != nil {
+				slog.Error("approval missing-initiating ephemeral failed", "error", err)
+			}
+		})
+		return
+	}
+	clickerActorType := ClassifyApproverActorType(clickerUserID, h.aiAgentBotUserIDs)
+	syntheticForValidate := domain.ApprovalRequest{RequesterActorType: effectiveRequester}
+	if vErr := domain.ValidateApproverPermitted(syntheticForValidate, clickerActorType); vErr != nil {
+		slog.Warn("ai_approves_ai_attempt",
+			"approver_id", clickerUserID,
+			"requester_actor", av.RequesterActorType,
+			"effective_requester", string(effectiveRequester),
+			"approver_actor", string(clickerActorType),
+			"parent", av.ParentIdempotencyKey)
+		span.SetStatus(codes.Error, "ai_approves_ai_attempt")
+		span.End()
+		h.goAsync(func() {
+			ctx, cancel := context.WithTimeout(traceCtx, 30*time.Second)
+			defer cancel()
+			if err := h.notifier.SendEphemeral(ctx, target, clickerUserID,
+				"🚫 AI agent は AI agent の承認操作はできません (ADR 0035)"); err != nil {
+				slog.Error("approval ai-vs-ai ephemeral failed", "error", err)
+			}
+		})
+		return
+	}
+
 	if action.ActionID == "approval_deny" {
 		span.SetAttributes(attribute.String("approval.outcome", "denied"))
+		// ADR 0040 §B-5.4b admin-mutation branch: call the orchestrator
+		// instead of the convergence ack path. Phase 4a convergence
+		// approvals (Kind empty / convergence) keep the existing
+		// Slack-only behaviour.
+		if av.Kind == ApprovalKindAdminMutation && h.adminApproval != nil {
+			span.End()
+			h.goAsync(func() {
+				ctx, cancel := context.WithTimeout(traceCtx, responseURLTimeout)
+				defer cancel()
+				if err := h.adminApproval.OnApprovalDeny(ctx, av.ParentIdempotencyKey, clickerUserID, clickerActorType); err != nil {
+					slog.Error("admin approval deny failed", "error", err)
+					if nerr := h.notifier.UpdateMessage(ctx, target,
+						fmt.Sprintf("❌ Admin 承認拒否の処理に失敗しました: %v", err)); nerr != nil {
+						slog.Error("admin deny failure notification failed", "error", nerr)
+					}
+					return
+				}
+				if err := h.notifier.UpdateMessage(ctx, target,
+					fmt.Sprintf("🚫 Admin 承認拒否 by <@%s>", clickerUserID)); err != nil {
+					slog.Error("admin deny notification failed", "error", err)
+				}
+			})
+			return
+		}
 		span.End()
 		h.goAsync(func() {
 			ctx, cancel := context.WithTimeout(traceCtx, responseURLTimeout)
@@ -460,7 +672,12 @@ func (h *InteractiveHandler) handleApprovalAction(traceCtx context.Context, acti
 	}
 
 	// approval_approve from here.
-	if h.approvalPublisher == nil {
+	// Phase 4a convergence approvals require approvalPublisher; admin-
+	// mutation approvals (ADR 0040 §B-5) are routed below via the
+	// orchestrator and do NOT need approvalPublisher. Skip the wiring
+	// guard so the admin path stays available when the legacy
+	// publisher is intentionally unwired.
+	if av.Kind != ApprovalKindAdminMutation && h.approvalPublisher == nil {
 		slog.Warn("approval_approve received but ApprovalPublisher is not wired")
 		span.SetStatus(codes.Error, "ApprovalPublisher not wired")
 		span.End()
@@ -470,6 +687,7 @@ func (h *InteractiveHandler) handleApprovalAction(traceCtx context.Context, acti
 	if h.consumedTokens != nil {
 		token := approvalToken(av)
 		if !h.consumedTokens.MarkConsumed(token) {
+			// nosemgrep: gateway-broker-token-must-not-be-logged -- approval_approve consumed-token (single-use Slack button id), not a GitHub installation token; safe to log for replay-attempt audit.
 			slog.Warn("approval_approve replay rejected", "token", token, "clicker", clickerUserID)
 			span.SetStatus(codes.Error, "replay rejected")
 			span.End()
@@ -486,6 +704,33 @@ func (h *InteractiveHandler) handleApprovalAction(traceCtx context.Context, acti
 	}
 
 	span.SetAttributes(attribute.String("approval.outcome", "approved"))
+
+	// ADR 0040 §B-5.4b admin-mutation branch: route to the orchestrator
+	// instead of publishing a convergence ack. The consumed-token guard
+	// above already protected against double clicks; the orchestrator's
+	// own ErrAlreadyTerminal further guarantees idempotency across
+	// gateway-process restarts.
+	if av.Kind == ApprovalKindAdminMutation && h.adminApproval != nil {
+		span.End()
+		h.goAsync(func() {
+			ctx, cancel := context.WithTimeout(traceCtx, responseURLTimeout)
+			defer cancel()
+			if err := h.adminApproval.OnApprovalAck(ctx, av.ParentIdempotencyKey, clickerUserID, clickerActorType); err != nil {
+				slog.Error("admin approval ack failed", "error", err)
+				if nerr := h.notifier.UpdateMessage(ctx, target,
+					fmt.Sprintf("❌ Admin 承認処理に失敗しました: %v", err)); nerr != nil {
+					slog.Error("admin ack failure notification failed", "error", nerr)
+				}
+				return
+			}
+			if err := h.notifier.UpdateMessage(ctx, target,
+				fmt.Sprintf("✅ Admin 承認完了 + apply by <@%s>", clickerUserID)); err != nil {
+				slog.Error("admin ack success notification failed", "error", err)
+			}
+		})
+		return
+	}
+
 	span.End()
 
 	mail := domain.DMail{
@@ -496,12 +741,14 @@ func (h *InteractiveHandler) handleApprovalAction(traceCtx context.Context, acti
 		IdempotencyKey: av.ParentIdempotencyKey + "/approved-by-" + clickerUserID,
 		Body:           fmt.Sprintf("HIGH severity approval granted by <@%s> at unix=%d", clickerUserID, time.Now().Unix()),
 		Metadata: map[string]string{
-			"parent_idempotency_key": av.ParentIdempotencyKey,
-			"original_requester_id":  av.OriginalRequesterID,
-			"approver_id":            clickerUserID,
-			"slack_channel_id":       target.ChannelID,
-			"slack_thread_ts":        target.ThreadTS,
-			"approval_decision":      "approved",
+			"parent_idempotency_key":             av.ParentIdempotencyKey,
+			"original_requester_id":              av.OriginalRequesterID,
+			"approver_id":                        clickerUserID,
+			"slack_channel_id":                   target.ChannelID,
+			"slack_thread_ts":                    target.ThreadTS,
+			"approval_decision":                  "approved",
+			domain.MetadataKeyRequesterActorType: av.RequesterActorType,
+			"approver_actor_type":                string(clickerActorType),
 		},
 	}
 
@@ -603,4 +850,20 @@ func firstNonEmpty(a, b string) string {
 		return a
 	}
 	return b
+}
+
+// isCanonicalCallerType reports whether s matches one of the four
+// domain.CallerType enum strings. Empty string is also accepted because
+// ADR 0036's migration window treats absence as CallerHumanOperator.
+// Used by handleApprovalAction to fail-closed on unknown values.
+func isCanonicalCallerType(s string) bool {
+	switch domain.CallerType(s) {
+	case "",
+		domain.CallerHumanOperator,
+		domain.CallerGatewayService,
+		domain.CallerAIAgent,
+		domain.CallerWorkspaceDaemon:
+		return true
+	}
+	return false
 }

@@ -555,6 +555,7 @@ Slack 通知は全て runops-gateway 側で実装する。
 ```
 
 Legend / 凡例:
+
 - runops-gateway: 既存の Slack ChatOps gateway (Cloud Run)
 - Pub/Sub: GCP Pub/Sub (inbound topic と outbound topic の 2 本)
 - dmail-receiver: Pub/Sub から phonewave outbox に書き出す bridge daemon
@@ -700,6 +701,18 @@ Cloud Run から Coder workspace を毎回起動する必要はない。
 - [`/Users/nino/tap/paintress/README.md`](file:///Users/nino/tap/paintress/README.md) — Implementer の振る舞い、approval-contract
 - [`/Users/nino/tap/amadeus/README.md`](file:///Users/nino/tap/amadeus/README.md) — Verifier、PR convergence pipeline
 - [`/Users/nino/tap/dominator/README.md`](file:///Users/nino/tap/dominator/README.md) — NFR Judge
+
+---
+
+## Token broker (refs#0007) の位置づけ
+
+2026-05-08 機能完成。 5 本柱 D-Mail Dispatcher と並ぶもう一つの「関税ゲート」 で、 4 caller type (human-operator / gateway-service / workspace-daemon / ai-agent) が `POST /broker/token` で **短期 GitHub installation token** を受け取る。
+
+- **同型性**: Slack approval と同じく「人間の指示と AI の指示を区別しない」 原則で動く。 broker は caller type を `X-Broker-Caller-Type` header で明示させるが、 認証経路 (Google STS / Cloud Run IAM / Workload Identity / AI agent session delegation) を抜けた後は同じ grant matrix (ADR 0032) と同じ HTTP response shape (plan v8 §5.5) を返す。
+- **関税ゲート性**: per-project repo binding (= 1 project に 1 repo だけ scope) + per-tool permission narrow (= phonewave は全 caller deny) + caller-supplied 禁止 fields (`repo` / `permissions` / `installation_id` / `actor_type`) を 403 + audit signal で reject。 トークン本体は HTTP response body 1 経路のみで配信、 logs / OTel / D-Mail / Pub/Sub / archive には `audit_fingerprint = sha256(token)[:8]` だけが残る (Semgrep rule で機械的に enforce、 plan v8 §5.5)。
+- **opt-in pattern**: `BROKER_AUDIENCE` env var が空ならマウントされず、 既存 Slack / admin endpoint だけで動く。 production rollout は `tofu apply` → `gcloud secrets versions add` → Cloud Run env set → re-deploy の 4 step (詳細は `docs/runops-gateway-env-vars.md` + `docs/handover.md`)。
+
+5 本柱は GitHub access が必要だが、 long-lived PAT を tool ごとに配るのではなく broker 経由で短期 token を取らせることで、 PAT 流出時の blast radius を project + tool 単位に閉じ込める。 これは ChatOps と AgentOps の関税ゲート性を GitHub access にまで拡張する設計。
 
 ---
 

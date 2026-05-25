@@ -17,6 +17,12 @@ type dispatchActionValue struct {
 	RequesterID    string `json:"requester_id"`
 	IdempotencyKey string `json:"idempotency_key"`
 	IssuedAt       int64  `json:"issued_at"`
+	// ProjectID carries the multiplex project_id (#0008) through the
+	// Slack approve/deny click. Empty when the command did not include
+	// --project. Older button values produced before this field was
+	// added decode to "" via Go's zero-value JSON behaviour, so existing
+	// in-flight dispatches continue to round-trip cleanly.
+	ProjectID string `json:"project_id,omitempty"`
 }
 
 // marshalDispatchActionValue returns the JSON bytes ready to be passed to

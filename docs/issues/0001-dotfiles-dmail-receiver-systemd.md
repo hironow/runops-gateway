@@ -35,10 +35,10 @@ dotfiles 側 (branch `hironow/issues-from-runops-gateway`):
 
 - `dmail_receiver_image` / `dmail_emitter_image` / `dmail_sa_email` template 変数 (default は `:placeholder` tag)
 - workspace VM startup_script で:
-  - `/var/lib/phonewave/{archive,outbox}` を `install -d` で作成
-  - devcontainer の `docker run` に `--volume /var/lib/phonewave:/var/lib/phonewave` を追加 (5本柱が同 dir を見える形)
-  - `/etc/systemd/system/dmail-{receiver,emitter}.service` を heredoc で書き出し (Restart=on-failure、 ExecStart=/usr/bin/docker run --rm --name <unit> --network host -v <volume> <env list> ${var.image})
-  - `systemctl daemon-reload && systemctl enable --now dmail-{receiver,emitter}.service`
+    - `/var/lib/phonewave/{archive,outbox}` を `install -d` で作成
+    - devcontainer の `docker run` に `--volume /var/lib/phonewave:/var/lib/phonewave` を追加 (5本柱が同 dir を見える形)
+    - `/etc/systemd/system/dmail-{receiver,emitter}.service` を heredoc で書き出し (Restart=on-failure、 ExecStart=/usr/bin/docker run --rm --name <unit> --network host -v <volume> <env list> ${var.image})
+    - `systemctl daemon-reload && systemctl enable --now dmail-{receiver,emitter}.service`
 
 `tests/exe/test_dmail_daemon_placement.py` (Python pytest) に追加された 12 件 (10 静的 + 2 systemd-analyze):
 
@@ -72,8 +72,8 @@ push 後の deploy で AR に image が publish される。 dotfiles 側の `dm
 - **dmail-receiver `permission denied: open /outbox/.tmp-...`**: distroless `:nonroot` (uid 65532) が host VM の `/var/lib/phonewave/outbox` (= mode 0755 owned by linux_user uid 1000-ish) に書けない
 - 本問題の trade-off + fix 採用案 = ADR 0023 の Negative consequences に追記済 (= `chmod 0777`、 workspace VM が per-user + short-lived + tag:exe-workspace 内 trust boundary なので acceptable)
 - 修正 PR:
-  - dotfiles `fix/dmail-outbox-permission` (PR #90) — main.tf startup-script の `install -d -m 0755` → `0777`
-  - runops-gateway `docs/cdr-runbook-and-permission-fix` (PR #37) — CLAUDE.md cdr 運用 section + ADR 0023 trade-off 追記
+    - dotfiles `fix/dmail-outbox-permission` (PR #90) — main.tf startup-script の `install -d -m 0755` → `0777`
+    - runops-gateway `docs/cdr-runbook-and-permission-fix` (PR #37) — CLAUDE.md cdr 運用 section + ADR 0023 trade-off 追記
 
 残タスク (= 受入基準 verify):
 
@@ -86,9 +86,9 @@ push 後の deploy で AR に image が publish される。 dotfiles 側の `dm
 ## Service Account の前提条件 (本リポで apply 済)
 
 - `exe-coder@gen-ai-hironow.iam.gserviceaccount.com` には以下が grant 済み (本リポ `tofu/iam_pubsub.tf` + `tofu/telemetry.tf`):
-  - `roles/pubsub.subscriber` on `dmail-inbound-receiver`
-  - `roles/pubsub.publisher` on `dmail-outbound` topic
-  - `roles/cloudtrace.agent` (project-level)
+    - `roles/pubsub.subscriber` on `dmail-inbound-receiver`
+    - `roles/pubsub.publisher` on `dmail-outbound` topic
+    - `roles/cloudtrace.agent` (project-level)
 - ただし dmail daemon が動く SA は **dotfiles 側 var.workspace_sa_email** (`exe-workspace@…`)。 上記 `exe-coder` SA とは別。 Phase 3 で workspace SA に同じ Pub/Sub IAM を grant し直す必要あり (dotfiles 側 tofu か runops-gateway 側 tofu のいずれか、 Phase 3 で確定)
 
 ## 受入基準
