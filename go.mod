@@ -5,7 +5,7 @@ go 1.26.1
 require (
 	cloud.google.com/go/firestore v1.22.0
 	cloud.google.com/go/pubsub/v2 v2.6.0
-	cloud.google.com/go/run v1.20.0
+	cloud.google.com/go/run v1.21.0
 	cloud.google.com/go/secretmanager v1.20.0
 	github.com/MicahParks/keyfunc/v3 v3.8.0
 	github.com/bradleyfalzon/ghinstallation/v2 v2.18.0
@@ -21,9 +21,9 @@ require (
 	go.opentelemetry.io/otel/sdk v1.43.0
 	go.opentelemetry.io/otel/trace v1.43.0
 	golang.org/x/sync v0.20.0
-	google.golang.org/api v0.277.0
-	google.golang.org/grpc v1.81.0
-	modernc.org/sqlite v1.50.0
+	google.golang.org/api v0.279.0
+	google.golang.org/grpc v1.81.1
+	modernc.org/sqlite v1.50.1
 	sigs.k8s.io/yaml v1.6.0
 )
 
@@ -70,7 +70,7 @@ require (
 	google.golang.org/genproto/googleapis/api v0.0.0-20260401024825-9d38bb4040a9 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260427160629-7cedc36a6bc4 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
-	modernc.org/libc v1.72.0 // indirect
+	modernc.org/libc v1.72.3 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
