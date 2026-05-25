@@ -8,7 +8,7 @@
 新しい session を開始するとき、または将来このリポジトリに戻ってくるとき、
 最初に読むべきページとして書く。日付ベースで上書き更新する想定。
 
-最終更新: 2026-05-09 (後半 phase 3: framework codification + fmt-check gate hardening)
+最終更新: 2026-05-26 (deps 統合 PR + 本番 deploy + CD startup_failure/tag-push 修正 + token broker env durability fix / Phase 4 リポ配線)
 
 ## ブランチ運用ポリシー (重要)
 
@@ -63,6 +63,42 @@ or merge する運用とする。
 「draft」は Phase 4a 完了済みの今 (2026-05-05) は Phase 4b (tofu / 本番化) を指す。
 Phase 4a 実装内容そのものは git ログ (`feat(pubsub):` / `feat(usecase):` /
 `feat(slack):` の squash 前 commit) を読むのが早い。
+
+---
+
+## セッション 2026-05-26 — deps統合 → 本番deploy → CD修復 → Phase4配線
+
+### やったこと
+
+- deps + slack fix 統合 (#127): dependabot gcp/sqlite bump 2件 + slack
+  sql_instance_name button fix を 1 PR に統合 → develop。dependabot #124/#125 close。
+- Security 強化: Dependabot security updates / Secret scanning / push protection
+  を有効化。CodeQL(Go) 追加 (#128, SHA pin, public 無料)。
+- 本番 promote+deploy: develop→main #126 (80 commit、2026-05-06 以来初の大型release)。
+  auth_boundary 分類のため手動 dispatch で deploy → revision 00072 serving、smoke green。
+- CD latent bug 2件を修復 (本番 CD が動かなかった原因):
+    - #129: cd.yaml deploy-log heredoc が column 0 で run:| の YAML block scalar を
+    破壊 → startup_failure (0-job + dispatch 422)。{ printf } に置換して解消。
+    - #131: deploy job が contents:read で prod-* tag push 403 → job-level contents:write 付与。
+- token broker env durability fix / Phase4 配線 (#133): BROKER_*/GITHUB_APP_* を
+  tofu 変数 + main.tf env で宣言管理 (gcloud 手動 set だと tofu apply で消える gap 解消)。
+  cd.yaml infra Apply に TF_VAR_broker_*、docs rollout 更新、tofu test 追加。
+  broker は dormant (空 default)。#134 で main へ promote (apply せず graceful skip)。
+
+### 現在の本番状態
+
+- Cloud Run: revision 00072-jmg (image=main 127a14c 相当)、smoke green、broker dormant。
+- rollback SoT: revision label prod-sha7 + git tag prod-20260525-*。前 prod=revision 00068。
+- broker IaC (secret/firestore/IAM) は本番未適用 (github-app-private-key NOT_FOUND、
+  最終 infra apply は 2026-05-06)。
+
+### 次 (Phase 4 活性化、operator 主導)
+
+1. GitHub App 作成 (App ID + private key) — hironow / GitHub UI
+2. repo variables (BROKER_AUDIENCE / SA allowlist 等) 設定
+3. gcloud secrets versions add github-app-private-key --data-file=...
+4. gh workflow run cd.yaml --ref main -f ref=main -f declared_category=auth_boundary -f reason=...
+   → 初回大規模 infra apply + deploy。詳細: docs/runops-gateway-env-vars.md
 
 ---
 
@@ -940,6 +976,29 @@ denied error。 distroless `:nonroot` image は uid 65532 固定で起動
 
 ---
 
+### 13. cd.yaml の heredoc は run:| の block scalar を壊す (startup_failure)
+
+heredoc 本体を column 0 で書くと run:| の YAML literal block scalar が途中終了し、
+GitHub が "workflow file issue" で起動失敗 (0-job)。prek の Rust check-yaml は
+すり抜けるが GitHub/actionlint は reject。block scalar 内のファイル生成は { printf } で。
+(2026-05-26、#129 で踏んだ。最初の auth_boundary promote まで latent だった)
+
+### 14. auth_boundary promote は merge だけでは deploy されない (手動 dispatch 必須)
+
+token broker / tofu/** / auth adapter / meta ファイルを含む promote は release-gate が
+auth_boundary 分類 → cd.yaml gate-check が proceed=false で graceful skip。実 deploy は
+`gh workflow run cd.yaml --ref main -f ref=main -f declared_category=auth_boundary -f reason=...`
+の手動 dispatch 必須 (ADR 0031)。default branch=develop なので main の cd.yaml が壊れてると
+dispatch trigger が登録されず 422。catch-up deploy では check-changes (HEAD~1..HEAD) が
+tofu 変更を拾えず infra が skip されやすい点も注意。
+
+### 15. prod-* tag push は contents:write が要る (prod_tags ruleset は本番未適用)
+
+deploy job が workflow-level contents:read だと prod-* tag push が 403。job-level
+contents:write で解消 (#131)。tofu の prod_tags ruleset は本番未適用 (github_repo_name
+空で count=0) なので現状 bot push 可。将来 ruleset 適用時は release-gate App token
+(actions/create-github-app-token) 経由 push か bot を bypass_actors 追加が必要。
+
 ## テスト戦略
 
 ### 既存（維持）
@@ -1106,6 +1165,11 @@ type (human-operator / gateway-service / workspace-daemon / ai-agent)
 が `POST /broker/token` で短期 GitHub installation token を受け取る経路。
 2026-05-08 に **PR #53-#82 の 28 PR 連続着地で機能完成** し、operator が
 env を設定するだけで activate 可能な状態になった。
+
+> 2026-05-26 追記: #133 で BROKER_*/ GITHUB_APP_* を tofu 管理化 (env durability
+> fix — gcloud 手動 set だと tofu apply で消える gap を解消)。本番は依然 **dormant** で
+> broker IaC も **未 apply** (github-app-private-key secret NOT_FOUND)。活性化手順は
+> 冒頭「セッション 2026-05-26」節の "次 (Phase 4 活性化)" を参照。
 
 ### 28 PR の進行 (2026-05-07 → 2026-05-08)
 
