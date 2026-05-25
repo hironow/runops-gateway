@@ -314,6 +314,19 @@ jobs:
           TF_VAR_otel_traces_sampler_arg: ${{ vars.OTEL_TRACES_SAMPLER_ARG }}
           TF_VAR_exe_coder_vm_sa_email: ${{ vars.EXE_CODER_VM_SA_EMAIL }}
           TF_VAR_dlq_alert_email: ${{ vars.DLQ_ALERT_EMAIL }}
+          # Token broker (refs#0007, ADR 0032). Sourced from GitHub repo
+          # variables; unset => empty string => tofu var default "" =>
+          # broker stays dormant. Setting these repo variables (auth_boundary
+          # grant matrix, governed by repo-settings edit permission) and then
+          # applying activates the broker. The private key VALUE is uploaded
+          # out-of-band to Secret Manager, never via TF_VAR.
+          TF_VAR_broker_audience: ${{ vars.BROKER_AUDIENCE }}
+          TF_VAR_broker_gateway_service_sas: ${{ vars.BROKER_GATEWAY_SERVICE_SAS }}
+          TF_VAR_broker_workspace_daemon_sas: ${{ vars.BROKER_WORKSPACE_DAEMON_SAS }}
+          TF_VAR_broker_operator_emails: ${{ vars.BROKER_OPERATOR_EMAILS }}
+          TF_VAR_github_app_id: ${{ vars.GITHUB_APP_ID }}
+          TF_VAR_github_app_private_key_secret_name: ${{ vars.GITHUB_APP_PRIVATE_KEY_SECRET_NAME }}
+          TF_VAR_broker_use_firestore_registry: ${{ vars.BROKER_USE_FIRESTORE_REGISTRY }}
           # Cloud Run scaling — fall back to the tofu code defaults when the
           # GitHub repo variable is unset, because tofu's number type rejects
           # the empty string. Set CLOUD_RUN_MIN_INSTANCES=1 when enabling

@@ -180,3 +180,87 @@ variable "exe_coder_vm_sa_email" {
     error_message = "exe_coder_vm_sa_email must be the workspace VM SA (per ADR 0023): an email of the form 'exe-workspace@<project>.iam.gserviceaccount.com', or empty during bootstrap. Plugging in the control-plane SA (exe-coder@…) would let the daemons start with the wrong identity and fail at first Pub/Sub call. If you really need a different naming convention, rename the variable in tofu/variables.tf and update this validation."
   }
 }
+
+# -----------------------------------------------------------------------------
+# Token broker (refs#0007, ADR 0032) — Cloud Run env wiring.
+# -----------------------------------------------------------------------------
+#
+# These drive the BROKER_* / GITHUB_APP_* env vars consumed by
+# internal/composition/broker_config.go and gated by cmd/server/main.go
+# (broker mounts only when BROKER_AUDIENCE is non-empty). All default to
+# "" so the broker stays DORMANT: an apply with these unset injects empty
+# env values, which the code treats as "broker disabled" — no behaviour
+# change for the existing Slack / admin endpoints.
+#
+# Declaring them here (rather than setting them out-of-band via
+# `gcloud run services update --update-env-vars`) is deliberate: the Cloud
+# Run service's lifecycle.ignore_changes covers only `image`, so any env
+# set outside tofu would be reverted on the next `tofu apply`. Keeping the
+# broker env under tofu makes activation durable.
+#
+# Values are auth_boundary (grant matrix per ADR 0032). The canonical
+# source is GitHub repo variables piped to TF_VAR_* by the cd.yaml infra
+# Apply step; they are governed by repo-settings edit permission, not by
+# PR review of committed tfvars.
+
+variable "broker_audience" {
+  description = "BROKER_AUDIENCE: broker URL pinned in the aud claim of every caller identity token. Empty (default) keeps the broker dormant (POST /broker/token not mounted)."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.broker_audience == "" || can(regex("^https://", var.broker_audience))
+    error_message = "broker_audience must be an https:// URL, or empty to keep the broker dormant."
+  }
+}
+
+variable "broker_gateway_service_sas" {
+  description = "BROKER_GATEWAY_SERVICE_SAS: comma-separated SA emails allowed to mint via the cloudrun_iam verifier (gateway-service caller). Empty until broker activation."
+  type        = string
+  default     = ""
+}
+
+variable "broker_workspace_daemon_sas" {
+  description = "BROKER_WORKSPACE_DAEMON_SAS: comma-separated SA emails allowed to mint via the workload_identity verifier (workspace-daemon caller). Empty until broker activation."
+  type        = string
+  default     = ""
+}
+
+variable "broker_operator_emails" {
+  description = "BROKER_OPERATOR_EMAILS: comma-separated human operator emails allowed to mint via the gcloud_identity verifier. Empty until broker activation."
+  type        = string
+  default     = ""
+}
+
+variable "github_app_id" {
+  description = "GITHUB_APP_ID: numeric GitHub App ID whose installation tokens the broker mints. Empty until broker activation."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.github_app_id == "" || can(regex("^[0-9]+$", var.github_app_id))
+    error_message = "github_app_id must be a positive integer (the numeric App ID, not the slug), or empty."
+  }
+}
+
+variable "github_app_private_key_secret_name" {
+  description = "GITHUB_APP_PRIVATE_KEY_SECRET_NAME: Secret Manager resource name (projects/<p>/secrets/<s>/versions/<v>) the broker fetches the GitHub App private key from in production. The key VALUE is uploaded out-of-band (tofu state never sees it). Empty until broker activation."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.github_app_private_key_secret_name == "" || can(regex("^projects/.+/secrets/.+/versions/.+$", var.github_app_private_key_secret_name))
+    error_message = "github_app_private_key_secret_name must be a Secret Manager resource name 'projects/<p>/secrets/<s>/versions/<v>', or empty."
+  }
+}
+
+variable "broker_use_firestore_registry" {
+  description = "BROKER_USE_FIRESTORE_REGISTRY: 'true'/'1' selects the Firestore-backed agent session registry (Cloud Run multi-instance safe); empty/'false'/'0' keeps the in-memory registry. Requires GOOGLE_CLOUD_PROJECT when true."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = contains(["", "true", "false", "1", "0"], var.broker_use_firestore_registry)
+    error_message = "broker_use_firestore_registry must be one of \"\", \"true\", \"false\", \"1\", \"0\"."
+  }
+}

@@ -206,6 +206,44 @@ resource "google_cloud_run_v2_service" "runops_gateway" {
         value = "2000"
       }
 
+      # Token broker (refs#0007, ADR 0032). All values come from tofu
+      # variables that default to "" so the broker stays DORMANT: an
+      # empty BROKER_AUDIENCE makes cmd/server/main.go skip mounting
+      # POST /broker/token. Declared here (not set out-of-band via
+      # gcloud) so the env stays under tofu management — lifecycle
+      # .ignore_changes covers only `image`, so any externally-set env
+      # would otherwise be reverted on the next apply. The private key
+      # itself is fetched from Secret Manager by the code via
+      # GITHUB_APP_PRIVATE_KEY_SECRET_NAME; it is never injected as env.
+      env {
+        name  = "BROKER_AUDIENCE"
+        value = var.broker_audience
+      }
+      env {
+        name  = "BROKER_GATEWAY_SERVICE_SAS"
+        value = var.broker_gateway_service_sas
+      }
+      env {
+        name  = "BROKER_WORKSPACE_DAEMON_SAS"
+        value = var.broker_workspace_daemon_sas
+      }
+      env {
+        name  = "BROKER_OPERATOR_EMAILS"
+        value = var.broker_operator_emails
+      }
+      env {
+        name  = "GITHUB_APP_ID"
+        value = var.github_app_id
+      }
+      env {
+        name  = "GITHUB_APP_PRIVATE_KEY_SECRET_NAME"
+        value = var.github_app_private_key_secret_name
+      }
+      env {
+        name  = "BROKER_USE_FIRESTORE_REGISTRY"
+        value = var.broker_use_firestore_registry
+      }
+
       resources {
         limits = {
           cpu    = "1"
