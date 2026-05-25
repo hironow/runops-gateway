@@ -46,23 +46,39 @@ runops-gateway を構成する 4 つの binary (`cmd/server` / `cmd/runops` / `c
 
 #### Production rollout 手順
 
-ADR 0032 の grant matrix と plan v8 §5.5 の token leakage policy に沿って、 4 step:
+ADR 0032 の grant matrix と plan v8 §5.5 の token leakage policy に沿って活性化する。
+
+> **重要**: `BROKER_*` / `GITHUB_APP_*` の Cloud Run env は **tofu 管理** (`tofu/main.tf`
+> の env ブロック + `tofu/variables.tf` の変数)。`gcloud run services update --update-env-vars`
+> で手動 set すると **次の `tofu apply` で巻き戻されて消える** (Cloud Run service の
+> `lifecycle.ignore_changes` は `image` のみ) ので **使わない**。値は GitHub repo variables
+> を正とし、`cd.yaml` の infra Apply step が `TF_VAR_*` に流す。
 
 ```bash
-# 1. Secret Manager + Cloud Run IAM binding を作成 (Phase 4-2 IaC)
-cd tofu && tofu apply
+# 1. GitHub App を作成し、App ID と private key (.pem) を取得
+#    (App は broker が installation token を mint する対象)
 
-# 2. GitHub App private key を out-of-band で upload (Terraform state 外)
+# 2. 活性化値を GitHub repo variables に設定 (auth_boundary grant matrix。
+#    PR review ではなく repo-settings 編集権限で統制される)。cd.yaml が TF_VAR_* に流す:
+#      BROKER_AUDIENCE / BROKER_GATEWAY_SERVICE_SAS / BROKER_WORKSPACE_DAEMON_SAS /
+#      BROKER_OPERATOR_EMAILS / GITHUB_APP_ID /
+#      GITHUB_APP_PRIVATE_KEY_SECRET_NAME / BROKER_USE_FIRESTORE_REGISTRY
+#    (手動 apply 派は gen-ai-hironow.tfvars か `-var=` でも可)
+
+# 3. GitHub App private key を out-of-band で Secret Manager に upload (Terraform state 外)
 gcloud secrets versions add github-app-private-key --data-file=/path/to/github-app.pem
 
-# 3. Cloud Run service env vars を上記表に従ってセット
-gcloud run services update runops-gateway \
-  --update-env-vars=BROKER_AUDIENCE=https://broker.example.com,BROKER_GATEWAY_SERVICE_SAS=...,BROKER_WORKSPACE_DAEMON_SAS=...,GITHUB_APP_ID=12345,GITHUB_APP_PRIVATE_KEY_SECRET_NAME=projects/proj/secrets/github-app-private-key/versions/latest,BROKER_USE_FIRESTORE_REGISTRY=true
-
-# 4. Re-deploy。 構造化ログ "token broker registered (#0007)" が出れば activation 成功
+# 4. auth_boundary deploy を dispatch (tofu/** は auth_boundary なので main push では
+#    auto-apply されない)。infra job が tofu apply で BROKER_* env を Cloud Run に反映 + deploy:
+gh workflow run cd.yaml --ref main \
+  -f ref=main \
+  -f declared_category=auth_boundary \
+  -f reason="activate token broker (refs#0007)"
+#    → 構造化ログ "token broker registered (#0007)" が出れば activation 成功
 ```
 
-ロールバック: 上記 env を全て unset すると broker は disable され、 既存 Slack / admin endpoint は影響を受けない (= opt-in pattern)。
+ロールバック: repo variable `BROKER_AUDIENCE` を空にして再 apply/deploy すると broker は
+disable され、 既存 Slack / admin endpoint は影響を受けない (= opt-in pattern)。
 
 ## dmail-receiver / dmail-emitter
 
