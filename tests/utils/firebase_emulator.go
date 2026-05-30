@@ -15,6 +15,8 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"path/filepath"
+	"runtime"
 	"time"
 
 	"github.com/testcontainers/testcontainers-go"
@@ -25,10 +27,17 @@ import (
 // same value for the Pub/Sub and Firestore clients.
 const FirebaseProjectID = "runops-local"
 
-// dockerfileContext is the build context relative to tests/utils/ (where this
-// file lives). The Dockerfile builds the firebase emulator suite (Pub/Sub +
-// Firestore + hub) — see docker/firebase-emulator/Dockerfile.
-const dockerfileContext = "../../docker/firebase-emulator"
+// dockerfileContextDir resolves the build context (the repo's
+// docker/firebase-emulator) from THIS file's own location via runtime.Caller,
+// not from the test's working directory. testcontainers' FromDockerfile.Context
+// is interpreted relative to the go test CWD (the calling package's dir), which
+// differs per package (tests/integration vs internal/adapter/output/state), so a
+// fixed relative path would resolve from one but not the other. The Dockerfile
+// builds the firebase emulator suite (Pub/Sub + Firestore + hub).
+func dockerfileContextDir() string {
+	_, thisFile, _, _ := runtime.Caller(0) // tests/utils/firebase_emulator.go
+	return filepath.Join(filepath.Dir(thisFile), "..", "..", "docker", "firebase-emulator")
+}
 
 // FirebaseEmulator is a running firebase emulator container plus the dynamic
 // host:port mappings tests inject into PUBSUB_EMULATOR_HOST /
@@ -50,7 +59,7 @@ func RunFirebaseEmulator(ctx context.Context) (*FirebaseEmulator, error) {
 	req := testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			FromDockerfile: testcontainers.FromDockerfile{
-				Context:    dockerfileContext,
+				Context:    dockerfileContextDir(),
 				Dockerfile: "Dockerfile",
 				KeepImage:  true,
 			},
