@@ -5,7 +5,6 @@ package state_test
 import (
 	"context"
 	"errors"
-	"os"
 	"testing"
 	"time"
 
@@ -13,19 +12,14 @@ import (
 	"github.com/hironow/runops-gateway/internal/adapter/output/state"
 	"github.com/hironow/runops-gateway/internal/core/domain"
 	"github.com/hironow/runops-gateway/internal/core/port"
+	testutils "github.com/hironow/runops-gateway/tests/utils"
 )
 
 // newFirestorePendingStoreTest mirrors newFirestoreTest but for the
 // PendingStore port. Per-test collection names avoid cross-test pollution.
 func newFirestorePendingStoreTest(t *testing.T) (port.PendingStore, func()) {
 	t.Helper()
-	if os.Getenv("FIRESTORE_EMULATOR_HOST") == "" {
-		t.Skip("FIRESTORE_EMULATOR_HOST not set; start emulator with 'just firestore-up'")
-	}
-	projectID := os.Getenv("GOOGLE_CLOUD_PROJECT")
-	if projectID == "" {
-		projectID = "runops-local"
-	}
+	projectID := testutils.FirebaseProjectID
 	ctx := context.Background()
 	client, err := firestore.NewClient(ctx, projectID)
 	if err != nil {

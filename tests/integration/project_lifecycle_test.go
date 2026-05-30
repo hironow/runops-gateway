@@ -131,7 +131,9 @@ func TestProjectLifecycle_RegistryFactoryFailClosed(t *testing.T) {
 		t.Errorf("error should reference env var, got %v", err)
 	}
 
-	// Firestore reserved for #0011
+	// Firestore selected but GOOGLE_CLOUD_PROJECT absent → fail-closed.
+	// (Firestore is implemented since #0011; the factory now rejects on the
+	// missing project id rather than on a "reserved" stub.)
 	_, cleanup2, err := state.NewProjectRegistryFromEnv(context.Background(), func(k string) string {
 		if k == "RUNOPS_PROJECT_REGISTRY" {
 			return "firestore"
@@ -139,7 +141,7 @@ func TestProjectLifecycle_RegistryFactoryFailClosed(t *testing.T) {
 		return ""
 	})
 	t.Cleanup(func() { _ = cleanup2() })
-	if err == nil || !strings.Contains(err.Error(), "0011") {
-		t.Errorf("firestore should fail with #0011 reference, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "GOOGLE_CLOUD_PROJECT") {
+		t.Errorf("firestore without GOOGLE_CLOUD_PROJECT should fail-closed, got %v", err)
 	}
 }

@@ -1,13 +1,13 @@
 # Local development services for runops-gateway.
 #
-# Currently runs the Firebase Pub/Sub emulator so Phase 2a/2b/2c integration
-# tests (and manual /agent dispatch flows) can exercise the publish path
-# without touching real GCP. Adapted from /Users/nino/ai-code/async/impl/.
+# Runs Jaeger v2 as the local OpenTelemetry trace backend (ADR 0020). The
+# firebase Pub/Sub + Firestore emulator is NOT defined here — integration tests
+# start it via testcontainers from docker/firebase-emulator/Dockerfile
+# (ADR 0041). There is no compose-based emulator and no `just pubsub-up`.
 #
-# Quick start (see docs/local-verification.md):
-#   just pubsub-up      # start emulator + create topics/subscriptions
-#   just test-integration
-#   just pubsub-down
+# Quick start:
+#   just trace-up           # start Jaeger (OTLP gRPC :4317, UI :16686)
+#   just test-integration   # integration tests (testcontainers, needs Docker)
 
 services:
   # Jaeger v2 all-in-one. OTLP gRPC (4317) is on by default in v2 — no
@@ -20,28 +20,4 @@ services:
       - "16686:16686" # Jaeger UI
       - "4317:4317"   # OTLP gRPC (default ingest)
       - "4318:4318"   # OTLP HTTP
-    restart: unless-stopped
-
-  pubsub-emulator:
-    # Service name kept for backward compat with `just pubsub-up` etc.
-    # The image now bundles both the Pub/Sub and Firestore emulators
-    # (issue #0011): Firestore is exposed on port 8080.
-    image: ghcr.io/hironow/firebase-pubsub-emulator:latest
-    build:
-      context: ./docker/firebase-emulator
-      dockerfile: Dockerfile
-    container_name: runops-pubsub-emulator
-    ports:
-      - "9399:9399" # Pub/Sub emulator
-      - "8080:8080" # Firestore emulator (#0011)
-      - "4400:4400" # Emulator hub (used by healthcheck)
-      - "4000:4000" # Emulator UI (optional, browser at http://localhost:4000)
-    environment:
-      - FIREBASE_PROJECT_ID=runops-local
-    healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:4400/emulators"]
-      interval: 5s
-      timeout: 3s
-      retries: 30
-      start_period: 30s
     restart: unless-stopped

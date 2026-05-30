@@ -16,21 +16,16 @@ import (
 	phonewaveinput "github.com/hironow/runops-gateway/internal/adapter/input/phonewave"
 	pubsubadapter "github.com/hironow/runops-gateway/internal/adapter/output/pubsub"
 	"github.com/hironow/runops-gateway/internal/core/domain"
-)
-
-const (
-	defaultOutboundTopic = "dmail-outbound"
-	defaultOutboundSub   = "runops-gateway-sub"
+	testutils "github.com/hironow/runops-gateway/tests/utils"
 )
 
 func TestIntegration_DmailEmitter_PublishesArchivedFiles(t *testing.T) {
-	requireEmulator(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	projectID := envOr("PUBSUB_PROJECT_ID", defaultProjectID)
-	topicID := envOr("PUBSUB_DMAIL_OUTBOUND_TOPIC", defaultOutboundTopic)
-	subID := envOr("PUBSUB_DMAIL_OUTBOUND_SUB", defaultOutboundSub)
+	projectID := testutils.FirebaseProjectID
+	topicID := testutils.TopicOutbound
+	subID := testutils.SubGateway
 
 	// 1. Publisher pointed at the outbound topic.
 	pub, err := pubsubadapter.NewPublisher(ctx, projectID, topicID)
@@ -107,13 +102,12 @@ func TestIntegration_DmailEmitter_PublishesArchivedFiles(t *testing.T) {
 // on the published Pub/Sub message, mirroring the receiver-side multi-mode
 // gating from #0006.
 func TestIntegration_DmailEmitter_MultiModeAttachesProjectIDAttribute(t *testing.T) {
-	requireEmulator(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	projectID := envOr("PUBSUB_PROJECT_ID", defaultProjectID)
-	topicID := envOr("PUBSUB_DMAIL_OUTBOUND_TOPIC", defaultOutboundTopic)
-	subID := envOr("PUBSUB_DMAIL_OUTBOUND_SUB", defaultOutboundSub)
+	projectID := testutils.FirebaseProjectID
+	topicID := testutils.TopicOutbound
+	subID := testutils.SubGateway
 
 	pub, err := pubsubadapter.NewPublisher(ctx, projectID, topicID)
 	if err != nil {
@@ -197,13 +191,12 @@ func TestIntegration_DmailEmitter_MultiModeAttachesProjectIDAttribute(t *testing
 // know is read but never published, mirroring the receiver-side DLQ but
 // without producing any traffic at all (read-only watcher, ADR 0029).
 func TestIntegration_DmailEmitter_MultiModeSkipsUnmappedDir(t *testing.T) {
-	requireEmulator(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	projectID := envOr("PUBSUB_PROJECT_ID", defaultProjectID)
-	topicID := envOr("PUBSUB_DMAIL_OUTBOUND_TOPIC", defaultOutboundTopic)
-	subID := envOr("PUBSUB_DMAIL_OUTBOUND_SUB", defaultOutboundSub)
+	projectID := testutils.FirebaseProjectID
+	topicID := testutils.TopicOutbound
+	subID := testutils.SubGateway
 
 	pub, err := pubsubadapter.NewPublisher(ctx, projectID, topicID)
 	if err != nil {

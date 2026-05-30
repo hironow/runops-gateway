@@ -1,20 +1,15 @@
 //go:build integration
 
-// Package integration runs end-to-end tests against the local Firebase
-// Pub/Sub emulator. Requires:
-//
-//	just pubsub-up
-//	just pubsub-init
-//	PUBSUB_EMULATOR_HOST=localhost:9399 PUBSUB_PROJECT_ID=runops-local just test-integration
-//
-// The build tag keeps these out of `just test` so the unit suite stays fast
-// and offline.
+// Package integration runs end-to-end tests against a firebase Pub/Sub
+// emulator started by testcontainers (see setup_test.go's TestMain). The tests
+// depend ONLY on testcontainers — no locally-running emulator, no external
+// PUBSUB_EMULATOR_HOST, no docker compose. The build tag keeps these out of
+// `just test` so the unit suite stays fast and offline.
 package integration
 
 import (
 	"context"
 	"errors"
-	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -25,67 +20,15 @@ import (
 	"github.com/hironow/runops-gateway/internal/adapter/output/dispatcher"
 	pubsubadapter "github.com/hironow/runops-gateway/internal/adapter/output/pubsub"
 	"github.com/hironow/runops-gateway/internal/core/domain"
+	testutils "github.com/hironow/runops-gateway/tests/utils"
 )
-
-const (
-	defaultProjectID    = "runops-local"
-	defaultInboundTopic = "dmail-inbound"
-	defaultInboundSub   = "dmail-receiver-sub"
-)
-
-func envOr(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
-}
-
-func requireEmulator(t *testing.T) {
-	t.Helper()
-	if os.Getenv("PUBSUB_EMULATOR_HOST") == "" {
-		t.Skip("integration test skipped: PUBSUB_EMULATOR_HOST not set (run `just pubsub-up && just pubsub-init` first)")
-	}
-}
-
-// receiveOne pulls a single message from sub or returns an error if nothing
-// arrives within deadline. Acks the message so subsequent tests start clean.
-func receiveOne(ctx context.Context, t *testing.T, client *gpubsub.Client, subID string, deadline time.Duration) (*gpubsub.Message, error) {
-	t.Helper()
-	sub := client.Subscriber(subID)
-	pullCtx, cancel := context.WithTimeout(ctx, deadline)
-	defer cancel()
-
-	var (
-		mu  sync.Mutex
-		got *gpubsub.Message
-	)
-	err := sub.Receive(pullCtx, func(_ context.Context, m *gpubsub.Message) {
-		mu.Lock()
-		defer mu.Unlock()
-		if got == nil {
-			got = m
-			m.Ack()
-			cancel() // stop after the first message
-			return
-		}
-		m.Nack()
-	})
-	if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
-		return nil, err
-	}
-	if got == nil {
-		return nil, errors.New("no message received within deadline")
-	}
-	return got, nil
-}
 
 func TestIntegration_PubsubDispatcher_PublishesDispatchAsSpecificationDMail(t *testing.T) {
-	requireEmulator(t)
 	ctx := context.Background()
 
-	projectID := envOr("PUBSUB_PROJECT_ID", defaultProjectID)
-	topicID := envOr("PUBSUB_DMAIL_INBOUND_TOPIC", defaultInboundTopic)
-	subID := envOr("PUBSUB_DMAIL_INBOUND_SUB", defaultInboundSub)
+	projectID := testutils.FirebaseProjectID
+	topicID := testutils.TopicInbound
+	subID := testutils.SubReceiver
 
 	pub, err := pubsubadapter.NewPublisher(ctx, projectID, topicID)
 	if err != nil {
@@ -112,7 +55,7 @@ func TestIntegration_PubsubDispatcher_PublishesDispatchAsSpecificationDMail(t *t
 	}
 	defer subClient.Close()
 
-	msg, err := receiveOne(ctx, t, subClient, subID, 10*time.Second)
+	msg, err := testutils.ReceiveOne(ctx, t, subClient, subID, 10*time.Second)
 	if err != nil {
 		t.Fatalf("did not receive published message: %v", err)
 	}
@@ -147,12 +90,11 @@ func TestIntegration_PubsubDispatcher_PublishesDispatchAsSpecificationDMail(t *t
 }
 
 func TestIntegration_PubsubDispatcher_PreservesOrderingPerTarget(t *testing.T) {
-	requireEmulator(t)
 	ctx := context.Background()
 
-	projectID := envOr("PUBSUB_PROJECT_ID", defaultProjectID)
-	topicID := envOr("PUBSUB_DMAIL_INBOUND_TOPIC", defaultInboundTopic)
-	subID := envOr("PUBSUB_DMAIL_INBOUND_SUB", defaultInboundSub)
+	projectID := testutils.FirebaseProjectID
+	topicID := testutils.TopicInbound
+	subID := testutils.SubReceiver
 
 	pub, err := pubsubadapter.NewPublisher(ctx, projectID, topicID)
 	if err != nil {

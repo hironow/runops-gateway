@@ -21,16 +21,8 @@ import (
 	"github.com/hironow/runops-gateway/internal/core/domain"
 	"github.com/hironow/runops-gateway/internal/core/port"
 	"github.com/hironow/runops-gateway/internal/usecase"
+	testutils "github.com/hironow/runops-gateway/tests/utils"
 )
-
-// outboundMsgAdapter mirrors the one in cmd/server.
-type outboundMsgAdapter struct{ inner *gpubsub.Message }
-
-func (m outboundMsgAdapter) ID() string                    { return m.inner.ID }
-func (m outboundMsgAdapter) Data() []byte                  { return m.inner.Data }
-func (m outboundMsgAdapter) Attributes() map[string]string { return m.inner.Attributes }
-func (m outboundMsgAdapter) Ack()                          { m.inner.Ack() }
-func (m outboundMsgAdapter) Nack()                         { m.inner.Nack() }
 
 // dropPrimary is a no-op port.Notifier whose UpdateMessage always returns a
 // response_url-style 404 so FallbackNotifier always falls through to
@@ -54,13 +46,12 @@ func (dropPrimary) RebuildInitialApproval(_ context.Context, _ port.NotifyTarget
 }
 
 func TestIntegration_DmailOutbound_PostsToSlackThread(t *testing.T) {
-	requireEmulator(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	projectID := envOr("PUBSUB_PROJECT_ID", defaultProjectID)
-	topicID := envOr("PUBSUB_DMAIL_OUTBOUND_TOPIC", defaultOutboundTopic)
-	subID := envOr("PUBSUB_DMAIL_OUTBOUND_SUB", defaultOutboundSub)
+	projectID := testutils.FirebaseProjectID
+	topicID := testutils.TopicOutbound
+	subID := testutils.SubGateway
 
 	// 1. Mock Slack chat.postMessage server.
 	var (
@@ -97,7 +88,7 @@ func TestIntegration_DmailOutbound_PostsToSlackThread(t *testing.T) {
 	go func() {
 		sub := subClient.Subscriber(subID)
 		receiveDone <- sub.Receive(ctx, func(ctx context.Context, m *gpubsub.Message) {
-			receiver.OnMessage(ctx, outboundMsgAdapter{inner: m})
+			receiver.OnMessage(ctx, testutils.MsgAdapter{Inner: m})
 		})
 	}()
 
