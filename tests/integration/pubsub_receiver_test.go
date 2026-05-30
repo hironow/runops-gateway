@@ -132,23 +132,6 @@ func waitForOutboxFileWithBody(t *testing.T, dir, marker string, timeout time.Du
 	return ""
 }
 
-// outboxIsEmpty reports whether dir contains zero non-directory entries.
-// Multi-mode tests assert that messages addressed to one project never
-// leak into another project's outbox.
-func outboxIsEmpty(t *testing.T, dir string) bool {
-	t.Helper()
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatalf("read outbox %q: %v", dir, err)
-	}
-	for _, e := range entries {
-		if !e.IsDir() {
-			return false
-		}
-	}
-	return true
-}
-
 // publishWithProjectID publishes a one-off DMail with the given project_id
 // attribute and body marker so the receiver can be observed routing it.
 // Returns the body string used as the outbox-file marker.
@@ -267,13 +250,24 @@ func TestIntegration_Receiver_MultiModeNacksUnknownProjectID(t *testing.T) {
 	}()
 
 	markerGhost := "multi-mode-ghost-marker"
-	publishWithProjectID(t, ctx, projectID, topicID, "ghost", markerGhost)
+	markerSentinel := "multi-mode-sentinel-marker"
 
-	// Wait long enough for the message to be redelivered a few times by
-	// the emulator (which honours nack), then assert no outbox writes.
-	time.Sleep(3 * time.Second)
-	if !outboxIsEmpty(t, dirA) {
-		t.Errorf("dirA should be empty when project_id is unmapped; got entries")
+	// Publish the unmapped ghost FIRST, then a mapped sentinel routed to dirA.
+	publishWithProjectID(t, ctx, projectID, topicID, "ghost", markerGhost)
+	publishWithProjectID(t, ctx, projectID, topicID, "foo", markerSentinel)
+
+	// Positive control: the mapped sentinel MUST land in dirA. Waiting for its
+	// arrival (instead of a fixed sleep) proves the receiver loop is live and
+	// the foo route writes — so the ghost has provably had its turn through the
+	// same subscription. Because "ghost" is unmapped it is nacked and never
+	// written regardless of emulator delivery order, so this cannot false-pass.
+	if got := waitForOutboxFileWithBody(t, dirA, markerSentinel, 15*time.Second); got == "" {
+		t.Fatalf("sentinel marker never landed in dirA; receiver not live? dir=%s", dirA)
+	}
+
+	// The unmapped ghost must never appear in the outbox.
+	if name := waitForOutboxFileWithBody(t, dirA, markerGhost, 1*time.Second); name != "" {
+		t.Errorf("unmapped project_id leaked into dirA as %q", name)
 	}
 
 	cancel()

@@ -53,7 +53,7 @@ type FirebaseEmulator struct {
 //
 // KeepImage avoids rebuilding the (slow) firebase image on every package's
 // TestMain. The 4400 hub HTTP 200 only means the hub is up; the 9399/8080
-// listeners can lag, so callers (PubSubInit / FirestoreInit) must retry the
+// listeners can lag, so callers (InitPubSub / FirestoreReady) must retry the
 // actual service connection before issuing real RPCs.
 func RunFirebaseEmulator(ctx context.Context) (*FirebaseEmulator, error) {
 	req := testcontainers.GenericContainerRequest{

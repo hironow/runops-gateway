@@ -30,6 +30,14 @@ func TestMain(m *testing.M) {
 	os.Setenv("FIRESTORE_EMULATOR_HOST", em.FirestoreHost)
 	os.Setenv("GOOGLE_CLOUD_PROJECT", testutils.FirebaseProjectID)
 
+	// Gate on the 8080 listener being reachable (4400 hub HTTP 200 != 8080
+	// listen ready). Fail loud rather than racing the listener per-test.
+	if err := testutils.FirestoreReady(ctx, testutils.FirebaseProjectID); err != nil {
+		fmt.Fprintf(os.Stderr, "TestMain: firestore not ready: %v\n", err)
+		_ = em.Terminate(context.Background())
+		os.Exit(1)
+	}
+
 	code := m.Run()
 
 	if err := em.Terminate(context.Background()); err != nil {

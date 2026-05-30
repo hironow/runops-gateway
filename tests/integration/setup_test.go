@@ -30,8 +30,12 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
+	// This package exercises only the Pub/Sub bridge (and SQLite via
+	// project_lifecycle); it does not touch Firestore, so FIRESTORE_EMULATOR_HOST
+	// is intentionally not set here. The Firestore registry tests live in
+	// internal/adapter/output/state and gate on FirestoreReady in their own
+	// TestMain.
 	os.Setenv("PUBSUB_EMULATOR_HOST", em.PubSubHost)
-	os.Setenv("FIRESTORE_EMULATOR_HOST", em.FirestoreHost)
 
 	if err := testutils.InitPubSub(ctx, testutils.FirebaseProjectID); err != nil {
 		fmt.Fprintf(os.Stderr, "TestMain: init pubsub: %v\n", err)
