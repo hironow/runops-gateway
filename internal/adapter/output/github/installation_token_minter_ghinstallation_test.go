@@ -29,7 +29,7 @@ func validRSAKeyPEM(t *testing.T) []byte {
 // against a real GitHub App test secret; this test only confirms
 // the wiring + ctor failure paths.
 func TestNewGhinstallationMinter_HappyCtor(t *testing.T) {
-	m, err := NewGhinstallationMinter(12345, validRSAKeyPEM(t), nil)
+	m, err := NewGhinstallationMinter(12345, validRSAKeyPEM(t), "", nil)
 	if err != nil {
 		t.Fatalf("ctor: %v", err)
 	}
@@ -41,7 +41,7 @@ func TestNewGhinstallationMinter_HappyCtor(t *testing.T) {
 // app_id <= 0 is rejected at ctor time.
 func TestNewGhinstallationMinter_RejectsInvalidAppID(t *testing.T) {
 	for _, appID := range []int64{0, -1, -12345} {
-		_, err := NewGhinstallationMinter(appID, validRSAKeyPEM(t), nil)
+		_, err := NewGhinstallationMinter(appID, validRSAKeyPEM(t), "", nil)
 		if !errors.Is(err, ErrGhinstallationInvalidAppID) {
 			t.Errorf("appID=%d: want ErrGhinstallationInvalidAppID, got %v", appID, err)
 		}
@@ -51,7 +51,7 @@ func TestNewGhinstallationMinter_RejectsInvalidAppID(t *testing.T) {
 // Empty / nil private key is rejected at ctor time.
 func TestNewGhinstallationMinter_RejectsMissingPrivateKey(t *testing.T) {
 	for _, key := range [][]byte{nil, {}} {
-		_, err := NewGhinstallationMinter(12345, key, nil)
+		_, err := NewGhinstallationMinter(12345, key, "", nil)
 		if !errors.Is(err, ErrGhinstallationMissingPrivateKey) {
 			t.Errorf("key=%v: want ErrGhinstallationMissingPrivateKey, got %v", key, err)
 		}
@@ -62,7 +62,7 @@ func TestNewGhinstallationMinter_RejectsMissingPrivateKey(t *testing.T) {
 // ctor time so the failure surface is at startup, not on the first
 // inbound broker request.
 func TestNewGhinstallationMinter_RejectsMalformedPrivateKey(t *testing.T) {
-	_, err := NewGhinstallationMinter(12345, []byte("not-a-pem-key"), nil)
+	_, err := NewGhinstallationMinter(12345, []byte("not-a-pem-key"), "", nil)
 	if err == nil {
 		t.Errorf("malformed key must error at ctor time")
 	}
@@ -74,7 +74,7 @@ func TestNewGhinstallationMinter_RejectsMalformedPrivateKey(t *testing.T) {
 // nil http.Client falls back to http.DefaultClient — production
 // callers can pass nil when they do not need a custom transport.
 func TestNewGhinstallationMinter_NilClientFallsBackToDefault(t *testing.T) {
-	m, err := NewGhinstallationMinter(12345, validRSAKeyPEM(t), nil)
+	m, err := NewGhinstallationMinter(12345, validRSAKeyPEM(t), "", nil)
 	if err != nil {
 		t.Fatalf("ctor: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestNewGhinstallationMinter_NilClientFallsBackToDefault(t *testing.T) {
 // composition can inject an OTel-instrumented transport.
 func TestNewGhinstallationMinter_PreservesCustomClient(t *testing.T) {
 	custom := &http.Client{}
-	m, err := NewGhinstallationMinter(12345, validRSAKeyPEM(t), custom)
+	m, err := NewGhinstallationMinter(12345, validRSAKeyPEM(t), "", custom)
 	if err != nil {
 		t.Fatalf("ctor: %v", err)
 	}
