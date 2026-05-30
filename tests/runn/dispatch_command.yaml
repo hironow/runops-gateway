@@ -4,58 +4,67 @@ labels:
   - slack
   - phase1
 runners:
-  req: "{{vars.endpoint}}"
+  req: "${RUNN_ENDPOINT:-http://localhost:8080}"
 vars:
-  endpoint: http://localhost:8080
-  # Signing secret must match SLACK_SIGNING_SECRET env var of the running server.
-  # Signatures are pre-computed for timestamp=1700000000 with secret=test-secret.
-  timestamp: "1700000000"
+  # Signing secret must match the server's SLACK_SIGNING_SECRET (ADR 0016 freshness).
+  secret: "${SLACK_SIGNING_SECRET:-test-secret}"
   valid_body: "command=%2Fagent&text=paintress+fix+M-42&user_id=U0123ABCD&response_url=http%3A%2F%2Flocalhost%2Fcallback"
-  valid_sig: "v0=9ba3a3e6a493c79dcf6474386e8d421295841b4a4e571d208a128b18bc1b2a86"
   unknown_role_body: "command=%2Fagent&text=phonewave+do+something&user_id=U0123ABCD&response_url=http%3A%2F%2Flocalhost%2Fcallback"
-  unknown_role_sig: "v0=4f68eacdf8defe5b652a973b22b38b9753464c9f0afc33b26d8d3bfacd594573"
   empty_text_body: "command=%2Fagent&text=&user_id=U0123ABCD&response_url=http%3A%2F%2Flocalhost%2Fcallback"
-  empty_text_sig: "v0=5001e29eef2c1e39095b424ad4d98434e3cca9e14e04a6a653615b66c07917e3"
 steps:
-  - desc: "Operator dispatches /agent paintress fix M-42 — accepted, empty 200"
+  - desc: "Compute a fresh timestamp + per-body Slack signatures (ADR 0016 freshness window)"
+    exec:
+      command: |
+        ts=$(date +%s)
+        sign() { printf 'v0:%s:%s' "$ts" "$1" | openssl dgst -sha256 -hmac '{{vars.secret}}' | awk '{print $NF}'; }
+        printf '%s v0=%s v0=%s v0=%s' "$ts" "$(sign '{{vars.valid_body}}')" "$(sign '{{vars.unknown_role_body}}')" "$(sign '{{vars.empty_text_body}}')"
+  - desc: "Operator dispatches /agent paintress fix M-42 — ephemeral dispatch confirmation (approve/deny gate)"
     req:
       /slack/command:
         post:
           headers:
             Content-Type: application/x-www-form-urlencoded
-            X-Slack-Request-Timestamp: "{{vars.timestamp}}"
-            X-Slack-Signature: "{{vars.valid_sig}}"
+            X-Slack-Request-Timestamp: "{{ split(steps[0].stdout, ' ')[0] }}"
+            X-Slack-Signature: "{{ split(steps[0].stdout, ' ')[1] }}"
           body:
             string: "{{vars.valid_body}}"
     test: |
       current.res.status == 200
-      && string(current.res.body) == ""
+      && current.res.body.response_type == "ephemeral"
+      && current.res.rawBody contains "dispatch_approve"
+      && current.res.rawBody contains "dispatch_deny"
+      && current.res.rawBody contains "paintress"
+      && current.res.rawBody contains "fix M-42"
   - desc: "Operator dispatches with unknown role 'phonewave' — ephemeral error"
     req:
       /slack/command:
         post:
           headers:
             Content-Type: application/x-www-form-urlencoded
-            X-Slack-Request-Timestamp: "{{vars.timestamp}}"
-            X-Slack-Signature: "{{vars.unknown_role_sig}}"
+            X-Slack-Request-Timestamp: "{{ split(steps[0].stdout, ' ')[0] }}"
+            X-Slack-Signature: "{{ split(steps[0].stdout, ' ')[2] }}"
           body:
             string: "{{vars.unknown_role_body}}"
     test: |
       current.res.status == 200
       && current.res.body.response_type == "ephemeral"
-  - desc: "Operator dispatches with role only (empty text) — ephemeral usage hint"
+      && current.res.body.text contains "unknown agent role"
+      && current.res.body.text contains "phonewave"
+  - desc: "Operator dispatches with empty text — ephemeral unknown-role error listing valid roles"
     req:
       /slack/command:
         post:
           headers:
             Content-Type: application/x-www-form-urlencoded
-            X-Slack-Request-Timestamp: "{{vars.timestamp}}"
-            X-Slack-Signature: "{{vars.empty_text_sig}}"
+            X-Slack-Request-Timestamp: "{{ split(steps[0].stdout, ' ')[0] }}"
+            X-Slack-Signature: "{{ split(steps[0].stdout, ' ')[3] }}"
           body:
             string: "{{vars.empty_text_body}}"
     test: |
       current.res.status == 200
       && current.res.body.response_type == "ephemeral"
+      && current.res.body.text contains "unknown agent role"
+      && current.res.body.text contains "paintress"
   - desc: "Unsigned /slack/command request is rejected with 401"
     req:
       /slack/command:

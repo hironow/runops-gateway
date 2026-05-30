@@ -3,9 +3,7 @@ labels:
   - security
   - slack
 runners:
-  req: "{{vars.endpoint}}"
-vars:
-  endpoint: http://localhost:8080
+  req: "${RUNN_ENDPOINT:-http://localhost:8080}"
 steps:
   - desc: "Agent sends interactive request without Slack signature headers"
     req:

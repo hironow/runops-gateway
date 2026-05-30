@@ -81,9 +81,13 @@ docker-build:
 tidy:
     go mod tidy
 
-# Run scenario tests (requires server to be running with SLACK_SIGNING_SECRET=test-secret)
+# Run scenario tests. Requires the dev server running first:
+#   SLACK_SIGNING_SECRET=test-secret just run
+# --scopes run:exec lets each runbook shell out (openssl) to compute a fresh
+# Slack signature for the current time, so the signed scenarios satisfy ADR
+# 0016's ±5min timestamp freshness window instead of using stale hardcoded sigs.
 test-runn:
-    runn run tests/runn/*.yaml
+    runn run --scopes run:exec tests/runn/*.yaml
 
 # Run integration tests. testcontainers starts the firebase emulator inside the
 # test process (ADR 0041) — no external emulator, no docker compose, no init
