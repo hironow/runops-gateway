@@ -92,21 +92,12 @@ test-runn:
 test-integration:
     go test -tags=integration ./tests/integration/... ./internal/adapter/output/state/...
 
-# Start local Jaeger v2 (OpenTelemetry trace backend, ADR 0020)
-trace-up:
-    docker compose -f compose.yaml up -d jaeger
-    @echo "Jaeger UI: http://localhost:16686"
-    @echo "Set OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 in your shell to ship spans there."
-
-# Stop local Jaeger
-trace-down:
-    docker compose -f compose.yaml stop jaeger
-
-# Open Jaeger UI in browser
-trace-view:
-    @command -v open >/dev/null 2>&1 && open http://localhost:16686 \
-        || command -v xdg-open >/dev/null 2>&1 && xdg-open http://localhost:16686 \
-        || echo "Please open http://localhost:16686 manually"
+# Local OpenTelemetry tracing is provided by the shared dotfiles `tel` stack
+# (otel-collector on :4317 -> Tempo/Grafana), not a per-repo Jaeger. There is no
+# compose.yaml and no trace-up/down/view here anymore (ADR 0042). From a dotfiles
+# checkout run `just tel-up`, then start binaries with
+# OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317. ADR 0020 (direct OTLP
+# export) is unchanged — only the local backend moved to the shared stack.
 
 # Test notify-slack.sh: dry-run payload structure + bash/Go compress_gz round-trip
 # Requires: bash, gzip, base64, jq
