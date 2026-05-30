@@ -85,43 +85,12 @@ tidy:
 test-runn:
     runn run tests/runn/*.yaml
 
-# Run integration tests (require Pub/Sub emulator: just pubsub-up + just pubsub-init)
+# Run integration tests. testcontainers starts the firebase emulator inside the
+# test process (ADR 0041) — no external emulator, no docker compose, no init
+# scripts; only a running Docker daemon is required. Covers the Pub/Sub bridge
+# (tests/integration) and the Firestore registry (internal/.../state).
 test-integration:
-    PUBSUB_EMULATOR_HOST=localhost:9399 PUBSUB_PROJECT_ID=runops-local \
-        go test -tags=integration ./tests/integration/...
-
-# Start Pub/Sub emulator (Phase 2a/2b/2c local development)
-pubsub-up:
-    docker compose -f compose.yaml up -d pubsub-emulator
-    @echo "waiting for emulator to be healthy (timeout 60s)..."
-    @timeout 60 sh -c 'until docker inspect -f "{{{{.State.Health.Status}}}}" runops-pubsub-emulator | grep -q healthy; do sleep 2; done'
-    @echo "emulator ready: http://localhost:9399 (UI: http://localhost:4000)"
-
-# Initialize topics + subscriptions on the running emulator
-pubsub-init:
-    {{justfile_directory()}}/scripts/init-pubsub.sh
-
-# Stop the emulator
-pubsub-down:
-    docker compose -f compose.yaml stop pubsub-emulator
-
-# Start Firestore emulator (issue #0011 — bundled in the same firebase
-# image as Pub/Sub, so this is an alias for pubsub-up that emphasizes the
-# Firestore use case)
-firestore-up: pubsub-up
-    @echo "firestore emulator ready: http://localhost:8080 (UI: http://localhost:4000)"
-
-# Probe the Firestore emulator with a sentinel doc round-trip
-firestore-init:
-    {{justfile_directory()}}/scripts/init-firestore.sh
-
-# Stop the Firestore emulator (alias for pubsub-down — same container)
-firestore-down: pubsub-down
-
-# Run Firestore integration tests against the emulator
-test-firestore-integration:
-    FIRESTORE_EMULATOR_HOST=localhost:8080 GOOGLE_CLOUD_PROJECT=runops-local \
-        go test -tags=integration -run Firestore ./internal/adapter/output/state/...
+    go test -tags=integration ./tests/integration/... ./internal/adapter/output/state/...
 
 # Start local Jaeger v2 (OpenTelemetry trace backend, ADR 0020)
 trace-up:
