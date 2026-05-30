@@ -89,7 +89,7 @@ func TestIntegration_PubsubDispatcher_PublishesDispatchAsSpecificationDMail(t *t
 	}
 }
 
-func TestIntegration_PubsubDispatcher_PreservesOrderingPerTarget(t *testing.T) {
+func TestIntegration_PubsubDispatcher_DeliversAllPerTarget(t *testing.T) {
 	ctx := context.Background()
 
 	projectID := testutils.FirebaseProjectID
@@ -149,6 +149,11 @@ func TestIntegration_PubsubDispatcher_PreservesOrderingPerTarget(t *testing.T) {
 			ordered = append(ordered, "B")
 		case strings.Contains(string(m.Data), batch+"-C"):
 			ordered = append(ordered, "C")
+		default:
+			// Carries our batch prefix but is none of A/B/C: the only way this
+			// fires is corrupted/extra test data, which would otherwise inflate
+			// the completeness count silently. Fail loud instead.
+			t.Errorf("in-batch message matched prefix but not A/B/C: %q", string(m.Data))
 		}
 		m.Ack()
 		if len(ordered) >= 3 {
@@ -159,11 +164,12 @@ func TestIntegration_PubsubDispatcher_PreservesOrderingPerTarget(t *testing.T) {
 		t.Fatalf("receive: %v", err)
 	}
 
-	// All three messages must be delivered. Strict ordering is asserted in
-	// production against Cloud Pub/Sub itself; the Firebase emulator does
-	// not honour ordering keys reliably (documented limitation), so we
-	// assert delivery completeness here and leave order verification to
-	// production smoke tests.
+	// This test asserts delivery COMPLETENESS, not order. Strict per-target
+	// ordering is a production-only guarantee of Cloud Pub/Sub (it requires
+	// ordering keys plus a single ordering region); the integration suite
+	// deliberately does NOT assert order against the emulator, so this test
+	// verifies only that all three dispatches are delivered. The function name
+	// reflects that scope on purpose — it does not claim to preserve order.
 	if len(ordered) != 3 {
 		t.Fatalf("expected 3 in-batch messages, got %v", ordered)
 	}
