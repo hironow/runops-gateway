@@ -36,8 +36,6 @@ import (
 	"github.com/hironow/runops-gateway/internal/usecase/admin_approval"
 )
 
-const slackChatPostMessageURL = "https://slack.com/api/chat.postMessage"
-
 func main() {
 	// Load and validate required config
 	cfg, err := loadConfig()
@@ -89,7 +87,7 @@ func main() {
 	// have not provisioned the Bot Token yet).
 	var notifier port.Notifier = primary
 	if cfg.slackBotToken != "" {
-		notifier = slacknotifier.NewFallbackNotifier(primary, slackChatPostMessageURL, cfg.slackBotToken, cfg.slackDefaultChannelID)
+		notifier = slacknotifier.NewFallbackNotifier(primary, cfg.slackChatPostMessageURL, cfg.slackBotToken, cfg.slackDefaultChannelID)
 		slog.Info("FallbackNotifier enabled", "default_channel_id", cfg.slackDefaultChannelID)
 	} else {
 		slog.Warn("SLACK_BOT_TOKEN unset — chat.postMessage fallback is DISABLED; long-running operations may lose Slack updates")
@@ -243,7 +241,7 @@ func main() {
 	var adminApprovalTarget port.NotifyTarget
 	adminChannel := os.Getenv("RUNOPS_ADMIN_APPROVAL_CHANNEL")
 	if cfg.slackBotToken != "" && adminChannel != "" {
-		adminApprovalRequester = slacknotifier.NewApprovalRequester(slackChatPostMessageURL, cfg.slackBotToken)
+		adminApprovalRequester = slacknotifier.NewApprovalRequester(cfg.slackChatPostMessageURL, cfg.slackBotToken)
 		adminApprovalTarget = port.NotifyTarget{
 			Mode:      port.ModeSlack,
 			ChannelID: adminChannel,
@@ -483,7 +481,7 @@ func startOutboundSubscriber(ctx context.Context, cfg config, notifier port.Noti
 	// available, build an ApprovalRequester so HIGH severity convergence
 	// surfaces as a 4-eyes approval prompt instead of a plain reply.
 	if cfg.slackBotToken != "" {
-		approver := slacknotifier.NewApprovalRequester(slackChatPostMessageURL, cfg.slackBotToken)
+		approver := slacknotifier.NewApprovalRequester(cfg.slackChatPostMessageURL, cfg.slackBotToken)
 		handler = handler.WithApprovalRequester(approver)
 		slog.Info("Phase 4a HIGH severity approval requester enabled")
 	}
@@ -521,29 +519,37 @@ type config struct {
 	slackSigningSecret    string
 	slackBotToken         string // optional — enables FallbackNotifier (ADR 0017)
 	slackDefaultChannelID string // optional — only used when target.ChannelID is empty
-	port                  string
-	dispatcherBackend     string // "stub" (default) or "pubsub" (Phase 2a)
-	pubsubProjectID       string // required when backend=pubsub OR outbound sub is set
-	pubsubInboundTopic    string // required when backend=pubsub
-	pubsubOutboundSub     string // optional — enables Phase 3 OutboundReceiver
+	// slackChatPostMessageURL is the Slack chat.postMessage endpoint. Defaults to
+	// the real Slack API; override via SLACK_CHAT_POST_MESSAGE_URL to point at a
+	// local emulator (e.g. emulate http://localhost:4102/api/chat.postMessage).
+	slackChatPostMessageURL string
+	port                    string
+	dispatcherBackend       string // "stub" (default) or "pubsub" (Phase 2a)
+	pubsubProjectID         string // required when backend=pubsub OR outbound sub is set
+	pubsubInboundTopic      string // required when backend=pubsub
+	pubsubOutboundSub       string // optional — enables Phase 3 OutboundReceiver
 }
 
 func loadConfig() (config, error) {
 	cfg := config{
-		slackSigningSecret:    os.Getenv("SLACK_SIGNING_SECRET"),
-		slackBotToken:         os.Getenv("SLACK_BOT_TOKEN"),
-		slackDefaultChannelID: os.Getenv("SLACK_DEFAULT_CHANNEL_ID"),
-		port:                  os.Getenv("PORT"),
-		dispatcherBackend:     os.Getenv("DISPATCHER_BACKEND"),
-		pubsubProjectID:       os.Getenv("PUBSUB_PROJECT_ID"),
-		pubsubInboundTopic:    os.Getenv("PUBSUB_DMAIL_INBOUND_TOPIC"),
-		pubsubOutboundSub:     os.Getenv("PUBSUB_DMAIL_OUTBOUND_SUB"),
+		slackSigningSecret:      os.Getenv("SLACK_SIGNING_SECRET"),
+		slackBotToken:           os.Getenv("SLACK_BOT_TOKEN"),
+		slackDefaultChannelID:   os.Getenv("SLACK_DEFAULT_CHANNEL_ID"),
+		slackChatPostMessageURL: os.Getenv("SLACK_CHAT_POST_MESSAGE_URL"),
+		port:                    os.Getenv("PORT"),
+		dispatcherBackend:       os.Getenv("DISPATCHER_BACKEND"),
+		pubsubProjectID:         os.Getenv("PUBSUB_PROJECT_ID"),
+		pubsubInboundTopic:      os.Getenv("PUBSUB_DMAIL_INBOUND_TOPIC"),
+		pubsubOutboundSub:       os.Getenv("PUBSUB_DMAIL_OUTBOUND_SUB"),
 	}
 	if cfg.slackSigningSecret == "" {
 		return config{}, fmt.Errorf("SLACK_SIGNING_SECRET is required")
 	}
 	if cfg.port == "" {
 		cfg.port = "8080"
+	}
+	if cfg.slackChatPostMessageURL == "" {
+		cfg.slackChatPostMessageURL = "https://slack.com/api/chat.postMessage"
 	}
 	if cfg.dispatcherBackend == "" {
 		cfg.dispatcherBackend = "stub"
