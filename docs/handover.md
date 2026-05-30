@@ -8,7 +8,7 @@
 新しい session を開始するとき、または将来このリポジトリに戻ってくるとき、
 最初に読むべきページとして書く。日付ベースで上書き更新する想定。
 
-最終更新: 2026-05-26 (deps 統合 PR + 本番 deploy + CD startup_failure/tag-push 修正 + token broker env durability fix / Phase 4 リポ配線)
+最終更新: 2026-05-31 (local 開発基盤 = dotfiles telemetry/emulator/emu-api/portless を間借り + outbound URL 注入改修 [Slack chat.postMessage env 化 / GitHub minter baseURL] + nil transport panic fix)
 
 ## ブランチ運用ポリシー (重要)
 
@@ -63,6 +63,56 @@ or merge する運用とする。
 「draft」は Phase 4a 完了済みの今 (2026-05-05) は Phase 4b (tofu / 本番化) を指す。
 Phase 4a 実装内容そのものは git ログ (`feat(pubsub):` / `feat(usecase):` /
 `feat(slack):` の squash 前 commit) を読むのが早い。
+
+---
+
+## セッション 2026-05-31 — local 開発基盤接続 + outbound URL 注入改修 (B)
+
+### やったこと
+
+- **local 開発基盤の確立**: dotfiles の共通基盤 (telemetry/emulator/emu-api/portless)
+  を runops の local 開発環境として間借りする構成を確立。詳細は memory
+  `dotfiles-local-dev-stack` + 下記「このセッションのハマりどころ」。
+- **outbound URL 注入改修** (branch `feat/local-emulator-outbound-url`、develop 未 merge、4 commit):
+    - `feat(server)`: Slack chat.postMessage URL を `SLACK_CHAT_POST_MESSAGE_URL` env で
+      差し替え可能に (default api、emulate は `http://localhost:4102/api/chat.postMessage`)。
+      adapter (FallbackNotifier/ApprovalRequester) は既に URL 引数受領、cmd/server の const 廃止。
+    - `refactor(broker)`: GhinstallationMinter に baseURL 引数追加 (全 call site `""` で挙動不変)。
+      `client.BaseURL` 直セット (WithEnterpriseURLs は非 `api.` ホストに `/api/v3/` 付与で emulate と不整合)。
+    - `fix(broker)`: Mint が `http.DefaultClient.Transport`(nil) で AppsTransport RoundTrip
+      panic する潜在 bug を発掘・修正 (`http.DefaultTransport` fallback)。broker dormant で未発火だった。
+    - `feat(broker)`: `GITHUB_API_BASE_URL` env で minter を emulate github(4100) に向ける。
+- **E2E 検証**: GitHub は probe で実 emulate(4100) 接続成功 (baseURL 注入が効き
+  `POST localhost:4100/app/installations/.../access_tokens` 到達、emulate が JWT contract 再現で 401)。
+  Slack は unit test + gateway 配線ログ (ApprovalRequester/OutboundReceiver 起動) で検証。
+  Slack 実 publish→着弾は OrbStack(Docker 9399) が 3 度落ちる環境不安定で未達 → OrbStack 安定後に別途。
+- 全 742 test green、`just lint` (commit hook prek) pass。
+
+### 現在の状態
+
+- branch `feat/local-emulator-outbound-url` に 4 commit (develop 未 merge)。working tree クリーン。
+- production・main・develop には未反映 (env はすべて opt-in default = 未設定で本番 byte-identical)。
+
+### 次
+
+1. `feat/local-emulator-outbound-url` → develop の PR を起票 (squash merge)。
+   `docs/runops-gateway-env-vars.md` に `SLACK_CHAT_POST_MESSAGE_URL` / `GITHUB_API_BASE_URL` を追記。
+2. 依存削減 (別 PR、調査済): cobra を `//go:build cli` で cmd/runops 限定 +
+   sqlite を `//go:build dev,test` で production binary から分離 (ADR 0025/0026 準拠)。
+   production binary から cobra+pflag / sqlite+libc 等が外れる (~150-200KB、direct require 17→15)。
+3. (環境) OrbStack が local で繰り返し落ちる。安定化は別途調査。emu-api(npx) は安定。
+
+### このセッションのハマりどころ
+
+- **OrbStack 不安定**: local で 3 度 daemon down。Docker 依存 (Pub/Sub 9399 / Firestore 8080 /
+  telemetry 4317) が巻き添え。emu-api(npx ホストプロセス) は無事。復旧は `orb start`。
+- **emu-api の min-release-age guardrail**: `~/.npmrc` の `min-release-age=7` +
+  `registry=npm.flatt.tech` (supply-chain 防御) で emulate@0.6.0 (7日内 release) が弾かれる。
+  起動だけ `npm_config_min_release_age=0 npx ...` で局所 override (恒久的に緩めない)。
+- **portless は HTTP(S) のみ**: Slack/GitHub (HTTPS REST) は `https://X.localhost` に乗るが、
+  OTLP gRPC(4317)/Pub/Sub(9399)/Firestore(8080) は raw TCP/SDK EMULATOR_HOST で直 127.0.0.1。
+- **D-Mail frontmatter は flat key:value parser** (dmail.go、yaml 非依存)。`metadata:` ネストは
+  TrimSpace で flat 拾いされるが、severity 等は top-level 平置きが確実。`dmail-schema-version` (not `schema_version`)。
 
 ---
 
