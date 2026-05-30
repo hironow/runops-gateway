@@ -81,7 +81,15 @@ func NewGhinstallationMinter(appID int64, privateKeyPEM []byte, baseURL string, 
 // not in matrix) etc. — the use case / handler then renders the
 // right HTTP status to the caller.
 func (m *GhinstallationMinter) Mint(ctx context.Context, installationID int64, opts *gogh.InstallationTokenOptions) (*gogh.InstallationToken, error) {
-	transport, err := ghinstallation.NewAppsTransport(m.httpClient.Transport, m.appID, m.privateKeyPEM)
+	// http.DefaultClient.Transport is nil; ghinstallation's AppsTransport
+	// dereferences the supplied RoundTripper in RoundTrip and would panic.
+	// Fall back to http.DefaultTransport so a nil-Transport client (the
+	// common production case from NewBrokerDependencies(..., nil)) works.
+	baseRT := m.httpClient.Transport
+	if baseRT == nil {
+		baseRT = http.DefaultTransport
+	}
+	transport, err := ghinstallation.NewAppsTransport(baseRT, m.appID, m.privateKeyPEM)
 	if err != nil {
 		return nil, fmt.Errorf("ghinstallation: build apps transport: %w", err)
 	}

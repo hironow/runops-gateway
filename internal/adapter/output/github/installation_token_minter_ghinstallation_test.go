@@ -1,13 +1,17 @@
 package github
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"testing"
+
+	gogh "github.com/google/go-github/v84/github"
 )
 
 // validRSAKeyPEM generates a fresh 2048-bit RSA key and returns
@@ -103,4 +107,40 @@ func TestNewGhinstallationMinter_PreservesCustomClient(t *testing.T) {
 // a guard.)
 func TestGhinstallationMinter_SatisfiesTokenMinterInterface(t *testing.T) {
 	var _ Minter = (*GhinstallationMinter)(nil)
+}
+
+// A non-empty baseURL redirects the installation-token exchange to the
+// supplied endpoint (e.g. a local GitHub API emulator) instead of
+// api.github.com. The App JWT is signed normally; the stub server accepts
+// it without verification and returns a token, so this exercises the
+// client.BaseURL override path without any external network call.
+func TestMint_UsesCustomBaseURL(t *testing.T) {
+	// given
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"token":"ghs_emulated","expires_at":"2099-01-01T00:00:00Z"}`))
+	}))
+	defer srv.Close()
+
+	m, err := NewGhinstallationMinter(12345, validRSAKeyPEM(t), srv.URL, nil)
+	if err != nil {
+		t.Fatalf("ctor: %v", err)
+	}
+
+	// when
+	tok, err := m.Mint(context.Background(), 678, &gogh.InstallationTokenOptions{})
+
+	// then
+	if err != nil {
+		t.Fatalf("Mint: %v", err)
+	}
+	if tok.GetToken() != "ghs_emulated" {
+		t.Errorf("token = %q, want ghs_emulated", tok.GetToken())
+	}
+	if gotPath != "/app/installations/678/access_tokens" {
+		t.Errorf("request path = %q, want /app/installations/678/access_tokens", gotPath)
+	}
 }
