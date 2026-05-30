@@ -20,6 +20,7 @@ import (
 	slackadapter "github.com/hironow/runops-gateway/internal/adapter/output/slack"
 	"github.com/hironow/runops-gateway/internal/core/domain"
 	"github.com/hironow/runops-gateway/internal/usecase"
+	testutils "github.com/hironow/runops-gateway/tests/utils"
 )
 
 // TestIntegration_HighSeverityConvergence_PostsApprovalRequestBlocks runs the
@@ -28,13 +29,12 @@ import (
 // to DispatchResultHandler with an ApprovalRequester wired in, and ends up as
 // a real chat.postMessage call carrying a Block Kit approval request payload.
 func TestIntegration_HighSeverityConvergence_PostsApprovalRequestBlocks(t *testing.T) {
-	requireEmulator(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	projectID := envOr("PUBSUB_PROJECT_ID", defaultProjectID)
-	topicID := envOr("PUBSUB_DMAIL_OUTBOUND_TOPIC", defaultOutboundTopic)
-	subID := envOr("PUBSUB_DMAIL_OUTBOUND_SUB", defaultOutboundSub)
+	projectID := testutils.FirebaseProjectID
+	topicID := testutils.TopicOutbound
+	subID := testutils.SubGateway
 
 	// 1. Mock Slack chat.postMessage server records every POST.
 	var (
@@ -70,7 +70,7 @@ func TestIntegration_HighSeverityConvergence_PostsApprovalRequestBlocks(t *testi
 	go func() {
 		sub := subClient.Subscriber(subID)
 		receiveDone <- sub.Receive(ctx, func(ctx context.Context, m *gpubsub.Message) {
-			receiver.OnMessage(ctx, outboundMsgAdapter{inner: m})
+			receiver.OnMessage(ctx, testutils.MsgAdapter{Inner: m})
 		})
 	}()
 
