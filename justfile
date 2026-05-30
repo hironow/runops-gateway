@@ -21,6 +21,17 @@ build:
 run:
     go run ./cmd/server
 
+# Run the HTTP server with local-dev env loaded (.env.local, then optional .env
+# overrides). Presumes the dotfiles stack is up: emu-up-only firebase-emulator + tel-up.
+dev:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    set -a
+    source .env.local
+    [ -f .env ] && source .env
+    set +a
+    go run ./cmd/server
+
 # Run all tests
 test:
     go test ./...
