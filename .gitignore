@@ -9,6 +9,8 @@
 # Environment
 .env
 .env.*
+# .env.local is committed: local-dev defaults only, NO real secrets (see its header).
+!.env.local
 
 # OS
 .DS_Store
