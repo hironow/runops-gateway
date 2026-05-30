@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strings"
 
 	"github.com/bradleyfalzon/ghinstallation/v2"
 	gogh "github.com/google/go-github/v84/github"
@@ -32,6 +34,7 @@ import (
 type GhinstallationMinter struct {
 	appID         int64
 	privateKeyPEM []byte
+	baseURL       string
 	httpClient    *http.Client
 }
 
@@ -39,7 +42,12 @@ type GhinstallationMinter struct {
 // misconfigured deployment fails at startup rather than on the
 // first inbound broker request. nil http.Client falls back to the
 // stdlib default (suitable when no custom transport is needed).
-func NewGhinstallationMinter(appID int64, privateKeyPEM []byte, client *http.Client) (*GhinstallationMinter, error) {
+//
+// baseURL overrides the GitHub API endpoint (default
+// https://api.github.com). Empty string keeps the default; set it to
+// point at a local emulator (e.g. emulate http://localhost:4100) for
+// offline broker verification.
+func NewGhinstallationMinter(appID int64, privateKeyPEM []byte, baseURL string, client *http.Client) (*GhinstallationMinter, error) {
 	if appID <= 0 {
 		return nil, ErrGhinstallationInvalidAppID
 	}
@@ -58,6 +66,7 @@ func NewGhinstallationMinter(appID int64, privateKeyPEM []byte, client *http.Cli
 	return &GhinstallationMinter{
 		appID:         appID,
 		privateKeyPEM: privateKeyPEM,
+		baseURL:       baseURL,
 		httpClient:    client,
 	}, nil
 }
@@ -72,11 +81,31 @@ func NewGhinstallationMinter(appID int64, privateKeyPEM []byte, client *http.Cli
 // not in matrix) etc. — the use case / handler then renders the
 // right HTTP status to the caller.
 func (m *GhinstallationMinter) Mint(ctx context.Context, installationID int64, opts *gogh.InstallationTokenOptions) (*gogh.InstallationToken, error) {
-	transport, err := ghinstallation.NewAppsTransport(m.httpClient.Transport, m.appID, m.privateKeyPEM)
+	// http.DefaultClient.Transport is nil; ghinstallation's AppsTransport
+	// dereferences the supplied RoundTripper in RoundTrip and would panic.
+	// Fall back to http.DefaultTransport so a nil-Transport client (the
+	// common production case from NewBrokerDependencies(..., nil)) works.
+	baseRT := m.httpClient.Transport
+	if baseRT == nil {
+		baseRT = http.DefaultTransport
+	}
+	transport, err := ghinstallation.NewAppsTransport(baseRT, m.appID, m.privateKeyPEM)
 	if err != nil {
 		return nil, fmt.Errorf("ghinstallation: build apps transport: %w", err)
 	}
 	client := gogh.NewClient(&http.Client{Transport: transport})
+	// baseURL override (e.g. local emulator). Empty keeps go-github's
+	// api.github.com default. WithEnterpriseURLs is intentionally avoided
+	// here: it appends "/api/v3/" for non-"api."-prefixed hosts, which does
+	// not match the GitHub.com-shaped emulator endpoints. Set BaseURL
+	// directly instead (go-github requires a trailing slash).
+	if m.baseURL != "" {
+		base, perr := url.Parse(strings.TrimRight(m.baseURL, "/") + "/")
+		if perr != nil {
+			return nil, fmt.Errorf("ghinstallation: parse base URL %q: %w", m.baseURL, perr)
+		}
+		client.BaseURL = base
+	}
 	tok, _, err := client.Apps.CreateInstallationToken(ctx, installationID, opts)
 	if err != nil {
 		return nil, err

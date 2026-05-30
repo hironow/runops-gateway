@@ -56,6 +56,11 @@ type BrokerConfig struct {
 	// Format: projects/<project>/secrets/<secret>/versions/<version>.
 	// Mutually exclusive with GitHubAppPrivateKeyPath.
 	GitHubAppPrivateKeySecretName string
+	// GitHubAPIBaseURL overrides the GitHub API endpoint (default
+	// https://api.github.com when empty). Optional; set GITHUB_API_BASE_URL
+	// to point the installation-token minter at a local emulator (e.g.
+	// emulate http://localhost:4100) for offline broker verification.
+	GitHubAPIBaseURL string
 	// UseFirestoreRegistry selects between the Firestore-backed
 	// agent session registry (production) and the in-memory
 	// registry (dev / staging). Default is in-memory until Phase
@@ -121,6 +126,7 @@ func LoadBrokerConfig() (*BrokerConfig, error) {
 		GitHubAppID:                   appID,
 		GitHubAppPrivateKeyPath:       keyPath,
 		GitHubAppPrivateKeySecretName: keySecret,
+		GitHubAPIBaseURL:              strings.TrimSpace(os.Getenv("GITHUB_API_BASE_URL")),
 		UseFirestoreRegistry:          parseBool(os.Getenv("BROKER_USE_FIRESTORE_REGISTRY")),
 	}, nil
 }

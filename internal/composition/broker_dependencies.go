@@ -67,7 +67,7 @@ func NewBrokerDependencies(ctx context.Context, cfg *BrokerConfig, projectRegist
 		return nil, fmt.Errorf("composition: fetch GitHub App private key: %w", err)
 	}
 
-	minter, err := githubadapter.NewGhinstallationMinter(cfg.GitHubAppID, keyPEM, nil)
+	minter, err := githubadapter.NewGhinstallationMinter(cfg.GitHubAppID, keyPEM, cfg.GitHubAPIBaseURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("composition: build ghinstallation minter: %w", err)
 	}
