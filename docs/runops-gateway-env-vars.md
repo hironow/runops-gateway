@@ -15,7 +15,6 @@ runops-gateway を構成する 4 つの binary (`cmd/server` / `cmd/runops` / `c
 | `BUTTON_EXPIRY_SECONDS` | — | `7200` | ボタン有効期限 (秒) |
 | `SLACK_BOT_TOKEN` | △ | — | `xoxb-...`、 ADR 0017 (FallbackNotifier) と ADR 0019 (4-eyes approval) で必須。 空なら fallback 無効 |
 | `SLACK_DEFAULT_CHANNEL_ID` | — | `""` | response_url 切れ時の `chat.postMessage` 既定チャンネル |
-| `SLACK_RESPONSE_URL_ALLOWED_HOSTS` | — | `hooks.slack.com` | response_url の POST 先 host allowlist (CSV)。SSRF 防御 (CodeQL `go/request-forgery`)。本番は未設定 = `hooks.slack.com` のみ。dev/emulator で `localhost` 等を追加 |
 | `DISPATCHER_BACKEND` | — | `stub` | `stub` (Phase 1 Slack 内完結) / `pubsub` (Phase 2a 以降、 5 本柱と Pub/Sub bridge) |
 | `PUBSUB_PROJECT_ID` | △ | — | `DISPATCHER_BACKEND=pubsub` 時に必須 |
 | `PUBSUB_DMAIL_INBOUND_TOPIC` | △ | — | 同上 |

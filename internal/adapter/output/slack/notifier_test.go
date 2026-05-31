@@ -33,16 +33,30 @@ func incompressibleNames(n int) (names, revisions string) {
 // compile-time interface assertion
 var _ port.Notifier = (*ResponseURLNotifier)(nil)
 
-// newTestNotifier returns a notifier that allows the given test server's host
-// (httptest binds a loopback host) in addition to the default hooks.slack.com,
-// since post() now validates the response_url host against an allowlist.
-func newTestNotifier(t *testing.T, serverURL string) *ResponseURLNotifier {
+// testSlackURL is a constant hooks.slack.com response_url that passes post()'s
+// host check; slackRoutingTransport reroutes it to the httptest server.
+const testSlackURL = "https://hooks.slack.com/actions/T000/B000/test"
+
+// slackRoutingTransport routes every request to base (an httptest server) so a
+// test can use the constant hooks.slack.com response_url (which post() requires)
+// while the request actually reaches the local test server.
+type slackRoutingTransport struct{ base *url.URL }
+
+func (rt slackRoutingTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	r.URL.Scheme = rt.base.Scheme
+	r.URL.Host = rt.base.Host
+	return http.DefaultTransport.RoundTrip(r)
+}
+
+// newRoutingNotifier builds a notifier whose HTTP client routes the constant
+// hooks.slack.com URL to srv.
+func newRoutingNotifier(t *testing.T, serverURL string) *ResponseURLNotifier {
 	t.Helper()
 	u, err := url.Parse(serverURL)
 	if err != nil {
 		t.Fatalf("parse test server URL: %v", err)
 	}
-	return NewResponseURLNotifier(WithAllowedHosts(u.Hostname()))
+	return NewResponseURLNotifier(WithHTTPClient(&http.Client{Transport: slackRoutingTransport{base: u}}))
 }
 
 // TestPost_RejectsHostNotInAllowlist pins the SSRF guard (CodeQL go/request-forgery):
@@ -58,7 +72,7 @@ func TestPost_RejectsHostNotInAllowlist(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := NewResponseURLNotifier() // default allowlist = {hooks.slack.com}
+	n := NewResponseURLNotifier() // only hooks.slack.com is allowed
 	target := port.NotifyTarget{CallbackURL: srv.URL, Mode: port.ModeSlack}
 
 	// when
@@ -82,8 +96,8 @@ func TestUpdateMessage_SlackMode_Success(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := newTestNotifier(t, srv.URL)
-	target := port.NotifyTarget{CallbackURL: srv.URL, Mode: port.ModeSlack}
+	n := newRoutingNotifier(t, srv.URL)
+	target := port.NotifyTarget{CallbackURL: testSlackURL, Mode: port.ModeSlack}
 
 	// when
 	err := n.UpdateMessage(context.Background(), target, "hello")
@@ -123,8 +137,8 @@ func TestReplaceMessage_SlackMode_ReplaceOriginalTrue(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := newTestNotifier(t, srv.URL)
-	target := port.NotifyTarget{CallbackURL: srv.URL, Mode: port.ModeSlack}
+	n := newRoutingNotifier(t, srv.URL)
+	target := port.NotifyTarget{CallbackURL: testSlackURL, Mode: port.ModeSlack}
 
 	// when
 	err := n.ReplaceMessage(context.Background(), target, "hello")
@@ -170,8 +184,8 @@ func TestSendEphemeral_SlackMode_EphemeralPayload(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := newTestNotifier(t, srv.URL)
-	target := port.NotifyTarget{CallbackURL: srv.URL, Mode: port.ModeSlack}
+	n := newRoutingNotifier(t, srv.URL)
+	target := port.NotifyTarget{CallbackURL: testSlackURL, Mode: port.ModeSlack}
 
 	// when
 	err := n.SendEphemeral(context.Background(), target, "U123", "please check")
@@ -235,8 +249,8 @@ func TestOfferContinuation_TooLongButtonValue_SendsErrorMessage(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := newTestNotifier(t, srv.URL)
-	target := port.NotifyTarget{CallbackURL: srv.URL, Mode: port.ModeSlack}
+	n := newRoutingNotifier(t, srv.URL)
+	target := port.NotifyTarget{CallbackURL: testSlackURL, Mode: port.ModeSlack}
 
 	// when
 	err := n.OfferContinuation(context.Background(), target, "✅ 完了", nextReq, nil)
@@ -275,8 +289,8 @@ func TestOfferContinuation_NormalLength_SendsBlocksMessage(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := newTestNotifier(t, srv.URL)
-	target := port.NotifyTarget{CallbackURL: srv.URL, Mode: port.ModeSlack}
+	n := newRoutingNotifier(t, srv.URL)
+	target := port.NotifyTarget{CallbackURL: testSlackURL, Mode: port.ModeSlack}
 
 	// when
 	err := n.OfferContinuation(context.Background(), target, "✅ 完了", nextReq, nil)
@@ -331,8 +345,8 @@ func TestUpdateMessage_ServerError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := newTestNotifier(t, srv.URL)
-	target := port.NotifyTarget{CallbackURL: srv.URL, Mode: port.ModeSlack}
+	n := newRoutingNotifier(t, srv.URL)
+	target := port.NotifyTarget{CallbackURL: testSlackURL, Mode: port.ModeSlack}
 
 	// when
 	err := n.UpdateMessage(context.Background(), target, "hello")
@@ -354,8 +368,8 @@ func TestPost_200Ok_NoError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := newTestNotifier(t, srv.URL)
-	target := port.NotifyTarget{CallbackURL: srv.URL, Mode: port.ModeSlack}
+	n := newRoutingNotifier(t, srv.URL)
+	target := port.NotifyTarget{CallbackURL: testSlackURL, Mode: port.ModeSlack}
 
 	// when
 	err := n.UpdateMessage(context.Background(), target, "test")
@@ -374,8 +388,8 @@ func TestPost_200InvalidBlocks_NoErrorButLogsWarning(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := newTestNotifier(t, srv.URL)
-	target := port.NotifyTarget{CallbackURL: srv.URL, Mode: port.ModeSlack}
+	n := newRoutingNotifier(t, srv.URL)
+	target := port.NotifyTarget{CallbackURL: testSlackURL, Mode: port.ModeSlack}
 
 	// when — current implementation logs but does not error
 	err := n.UpdateMessage(context.Background(), target, "test")
@@ -394,8 +408,8 @@ func TestPost_404_ReturnsErrorWithBody(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := newTestNotifier(t, srv.URL)
-	target := port.NotifyTarget{CallbackURL: srv.URL, Mode: port.ModeSlack}
+	n := newRoutingNotifier(t, srv.URL)
+	target := port.NotifyTarget{CallbackURL: testSlackURL, Mode: port.ModeSlack}
 
 	// when
 	err := n.UpdateMessage(context.Background(), target, "test")
@@ -420,8 +434,8 @@ func TestPost_503_ReturnsErrorWithBody(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := newTestNotifier(t, srv.URL)
-	target := port.NotifyTarget{CallbackURL: srv.URL, Mode: port.ModeSlack}
+	n := newRoutingNotifier(t, srv.URL)
+	target := port.NotifyTarget{CallbackURL: testSlackURL, Mode: port.ModeSlack}
 
 	// when
 	err := n.UpdateMessage(context.Background(), target, "test")
@@ -463,8 +477,8 @@ func TestOfferContinuation_SlackReturns404_ReturnsError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := newTestNotifier(t, srv.URL)
-	target := port.NotifyTarget{CallbackURL: srv.URL, Mode: port.ModeSlack}
+	n := newRoutingNotifier(t, srv.URL)
+	target := port.NotifyTarget{CallbackURL: testSlackURL, Mode: port.ModeSlack}
 	nextReq := &domain.ApprovalRequest{
 		Project:       "test-project",
 		Location:      "asia-northeast1",
@@ -495,8 +509,8 @@ func TestOfferContinuation_SlackReturnsInvalidBlocks_NoError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := newTestNotifier(t, srv.URL)
-	target := port.NotifyTarget{CallbackURL: srv.URL, Mode: port.ModeSlack}
+	n := newRoutingNotifier(t, srv.URL)
+	target := port.NotifyTarget{CallbackURL: testSlackURL, Mode: port.ModeSlack}
 	nextReq := &domain.ApprovalRequest{
 		Project:       "test-project",
 		Location:      "asia-northeast1",
@@ -533,8 +547,8 @@ func TestUpdateMessageOk_ThenOfferContinuation404(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := newTestNotifier(t, srv.URL)
-	target := port.NotifyTarget{CallbackURL: srv.URL, Mode: port.ModeSlack}
+	n := newRoutingNotifier(t, srv.URL)
+	target := port.NotifyTarget{CallbackURL: testSlackURL, Mode: port.ModeSlack}
 
 	// when — UpdateMessage succeeds
 	err1 := n.UpdateMessage(context.Background(), target, "⏳ 処理中...")
@@ -580,8 +594,8 @@ func TestUpdateMessageOk_ThenOfferContinuation500(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := newTestNotifier(t, srv.URL)
-	target := port.NotifyTarget{CallbackURL: srv.URL, Mode: port.ModeSlack}
+	n := newRoutingNotifier(t, srv.URL)
+	target := port.NotifyTarget{CallbackURL: testSlackURL, Mode: port.ModeSlack}
 
 	// when
 	err1 := n.UpdateMessage(context.Background(), target, "⏳ 処理中...")
@@ -621,8 +635,8 @@ func TestOfferContinuation_PayloadContainsBlocksWithButtons(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := newTestNotifier(t, srv.URL)
-	target := port.NotifyTarget{CallbackURL: srv.URL, Mode: port.ModeSlack}
+	n := newRoutingNotifier(t, srv.URL)
+	target := port.NotifyTarget{CallbackURL: testSlackURL, Mode: port.ModeSlack}
 
 	nextReq := &domain.ApprovalRequest{
 		Project:       "test-project",
@@ -728,8 +742,8 @@ func TestOfferContinuation_NoNextReq_NoActionsBlock(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := newTestNotifier(t, srv.URL)
-	target := port.NotifyTarget{CallbackURL: srv.URL, Mode: port.ModeSlack}
+	n := newRoutingNotifier(t, srv.URL)
+	target := port.NotifyTarget{CallbackURL: testSlackURL, Mode: port.ModeSlack}
 
 	// when — nextReq and stopReq are both nil
 	err := n.OfferContinuation(context.Background(), target, "✅ 100%完了", nil, nil)
@@ -767,8 +781,8 @@ func TestReplaceMessage_PayloadIsBlocksArray(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := newTestNotifier(t, srv.URL)
-	target := port.NotifyTarget{CallbackURL: srv.URL, Mode: port.ModeSlack}
+	n := newRoutingNotifier(t, srv.URL)
+	target := port.NotifyTarget{CallbackURL: testSlackURL, Mode: port.ModeSlack}
 
 	// when — pass text, adapter wraps in section block
 	err := n.ReplaceMessage(context.Background(), target, ":x: 拒否されました")
@@ -816,8 +830,8 @@ func TestReplaceMessage_404_ReturnsError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := newTestNotifier(t, srv.URL)
-	target := port.NotifyTarget{CallbackURL: srv.URL, Mode: port.ModeSlack}
+	n := newRoutingNotifier(t, srv.URL)
+	target := port.NotifyTarget{CallbackURL: testSlackURL, Mode: port.ModeSlack}
 
 	// when
 	err := n.ReplaceMessage(context.Background(), target, "test")
@@ -841,8 +855,8 @@ func TestSendEphemeral_404_ReturnsError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := newTestNotifier(t, srv.URL)
-	target := port.NotifyTarget{CallbackURL: srv.URL, Mode: port.ModeSlack}
+	n := newRoutingNotifier(t, srv.URL)
+	target := port.NotifyTarget{CallbackURL: testSlackURL, Mode: port.ModeSlack}
 
 	// when
 	err := n.SendEphemeral(context.Background(), target, "U123", "test")
@@ -865,8 +879,8 @@ func TestPost_SendsApplicationJsonContentType(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := newTestNotifier(t, srv.URL)
-	target := port.NotifyTarget{CallbackURL: srv.URL, Mode: port.ModeSlack}
+	n := newRoutingNotifier(t, srv.URL)
+	target := port.NotifyTarget{CallbackURL: testSlackURL, Mode: port.ModeSlack}
 
 	// when
 	_ = n.UpdateMessage(context.Background(), target, "test")
@@ -911,8 +925,8 @@ func TestRebuildInitialApproval_AllThreeButtons_PostsBlockKitPayload(t *testing.
 	}))
 	defer srv.Close()
 
-	n := newTestNotifier(t, srv.URL)
-	target := port.NotifyTarget{CallbackURL: srv.URL, Mode: port.ModeSlack}
+	n := newRoutingNotifier(t, srv.URL)
+	target := port.NotifyTarget{CallbackURL: testSlackURL, Mode: port.ModeSlack}
 
 	// when
 	err := n.RebuildInitialApproval(context.Background(), target, "❌ バックアップエラー: 403", jobReq, svcReq, denyReq)
@@ -969,8 +983,8 @@ func TestRebuildInitialApproval_NoJobReq_SuppressesMigrationButton(t *testing.T)
 	}))
 	defer srv.Close()
 
-	n := newTestNotifier(t, srv.URL)
-	target := port.NotifyTarget{CallbackURL: srv.URL, Mode: port.ModeSlack}
+	n := newRoutingNotifier(t, srv.URL)
+	target := port.NotifyTarget{CallbackURL: testSlackURL, Mode: port.ModeSlack}
 
 	// when
 	err := n.RebuildInitialApproval(context.Background(), target, "err", nil, svcReq, denyReq)
@@ -1027,8 +1041,8 @@ func TestRebuildInitialApproval_TooLongButtonValue_SendsErrorMessage(t *testing.
 	}))
 	defer srv.Close()
 
-	n := newTestNotifier(t, srv.URL)
-	target := port.NotifyTarget{CallbackURL: srv.URL, Mode: port.ModeSlack}
+	n := newRoutingNotifier(t, srv.URL)
+	target := port.NotifyTarget{CallbackURL: testSlackURL, Mode: port.ModeSlack}
 
 	// when
 	err := n.RebuildInitialApproval(context.Background(), target, "err", nil, svcReq, nil)

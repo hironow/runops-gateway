@@ -9,60 +9,39 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"os"
-	"strings"
 
 	"github.com/hironow/runops-gateway/internal/core/domain"
 	"github.com/hironow/runops-gateway/internal/core/port"
 )
 
-// defaultResponseURLHost is the only host Slack ever uses for response_url.
-// It is the secure-by-default allowlist entry; dev/emulator hosts are added via
-// SLACK_RESPONSE_URL_ALLOWED_HOSTS or the WithAllowedHosts option.
-const defaultResponseURLHost = "hooks.slack.com"
+// responseURLHost is the only host Slack ever uses for response_url. The
+// response_url rides in the (signature-verified) Slack payload but is still
+// attacker-influenced input, so post() rejects any other host before issuing a
+// request (defense-in-depth against SSRF / CodeQL go/request-forgery). It is a
+// compile-time constant so the host check is a recognized taint barrier.
+const responseURLHost = "hooks.slack.com"
 
 // ResponseURLNotifier sends Slack messages via response_url (no Bot Token needed).
 type ResponseURLNotifier struct {
 	client *http.Client
-	// allowedHosts is the SSRF allowlist for response_url destinations. The
-	// response_url arrives in the (signature-verified) Slack payload, but it is
-	// still attacker-influenced input, so the destination host is validated
-	// against this set before any request is issued (CodeQL go/request-forgery).
-	allowedHosts map[string]bool
 }
 
 // Option configures a ResponseURLNotifier.
 type Option func(*ResponseURLNotifier)
 
-// WithAllowedHosts adds hosts to the response_url allowlist (in addition to the
-// default hooks.slack.com and any from SLACK_RESPONSE_URL_ALLOWED_HOSTS). Used by
-// tests to permit an httptest loopback host.
-func WithAllowedHosts(hosts ...string) Option {
+// WithHTTPClient overrides the HTTP client. Tests inject a client whose
+// transport routes the (constant) hooks.slack.com URL to an httptest server.
+func WithHTTPClient(c *http.Client) Option {
 	return func(n *ResponseURLNotifier) {
-		for _, h := range hosts {
-			if h = strings.TrimSpace(h); h != "" {
-				n.allowedHosts[h] = true
-			}
+		if c != nil {
+			n.client = c
 		}
 	}
 }
 
 // NewResponseURLNotifier creates a notifier using Slack's response_url mechanism.
-// The response_url allowlist defaults to hooks.slack.com and is widened by the
-// comma-separated SLACK_RESPONSE_URL_ALLOWED_HOSTS env var (for local emulator
-// dev) and by WithAllowedHosts options.
 func NewResponseURLNotifier(opts ...Option) *ResponseURLNotifier {
-	n := &ResponseURLNotifier{
-		client:       http.DefaultClient,
-		allowedHosts: map[string]bool{defaultResponseURLHost: true},
-	}
-	if extra := os.Getenv("SLACK_RESPONSE_URL_ALLOWED_HOSTS"); extra != "" {
-		for _, h := range strings.Split(extra, ",") {
-			if h = strings.TrimSpace(h); h != "" {
-				n.allowedHosts[h] = true
-			}
-		}
-	}
+	n := &ResponseURLNotifier{client: http.DefaultClient}
 	for _, opt := range opts {
 		opt(n)
 	}
@@ -164,11 +143,11 @@ func (n *ResponseURLNotifier) post(ctx context.Context, rawURL string, payload S
 	if err != nil {
 		return fmt.Errorf("slack notifier: parse response_url: %w", err)
 	}
-	if parsed.Scheme != "https" && parsed.Scheme != "http" {
+	if parsed.Scheme != "https" {
 		return fmt.Errorf("slack notifier: response_url scheme %q not allowed", parsed.Scheme)
 	}
-	if !n.allowedHosts[parsed.Hostname()] {
-		return fmt.Errorf("slack notifier: response_url host %q not in allowlist", parsed.Hostname())
+	if parsed.Hostname() != responseURLHost {
+		return fmt.Errorf("slack notifier: response_url host %q not allowed (want %s)", parsed.Hostname(), responseURLHost)
 	}
 	if err := payload.Validate(); err != nil {
 		return fmt.Errorf("slack notifier: %w", err)
