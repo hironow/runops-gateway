@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -32,6 +33,46 @@ func incompressibleNames(n int) (names, revisions string) {
 // compile-time interface assertion
 var _ port.Notifier = (*ResponseURLNotifier)(nil)
 
+// newTestNotifier returns a notifier that allows the given test server's host
+// (httptest binds a loopback host) in addition to the default hooks.slack.com,
+// since post() now validates the response_url host against an allowlist.
+func newTestNotifier(t *testing.T, serverURL string) *ResponseURLNotifier {
+	t.Helper()
+	u, err := url.Parse(serverURL)
+	if err != nil {
+		t.Fatalf("parse test server URL: %v", err)
+	}
+	return NewResponseURLNotifier(WithAllowedHosts(u.Hostname()))
+}
+
+// TestPost_RejectsHostNotInAllowlist pins the SSRF guard (CodeQL go/request-forgery):
+// a response_url whose host is not in the allowlist must be rejected before any
+// HTTP request is issued.
+func TestPost_RejectsHostNotInAllowlist(t *testing.T) {
+	// given — a server that must NOT be reached; the default allowlist permits
+	// only hooks.slack.com, so the server's loopback host is rejected.
+	hit := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hit = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	n := NewResponseURLNotifier() // default allowlist = {hooks.slack.com}
+	target := port.NotifyTarget{CallbackURL: srv.URL, Mode: port.ModeSlack}
+
+	// when
+	err := n.UpdateMessage(context.Background(), target, "hello")
+
+	// then — rejected before any request is issued
+	if err == nil {
+		t.Fatal("expected error for response_url host not in allowlist, got nil")
+	}
+	if hit {
+		t.Fatal("SSRF: request was sent to a host outside the allowlist")
+	}
+}
+
 func TestUpdateMessage_SlackMode_Success(t *testing.T) {
 	// given
 	var received map[string]any
@@ -41,7 +82,7 @@ func TestUpdateMessage_SlackMode_Success(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := NewResponseURLNotifier()
+	n := newTestNotifier(t, srv.URL)
 	target := port.NotifyTarget{CallbackURL: srv.URL, Mode: port.ModeSlack}
 
 	// when
@@ -82,7 +123,7 @@ func TestReplaceMessage_SlackMode_ReplaceOriginalTrue(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := NewResponseURLNotifier()
+	n := newTestNotifier(t, srv.URL)
 	target := port.NotifyTarget{CallbackURL: srv.URL, Mode: port.ModeSlack}
 
 	// when
@@ -129,7 +170,7 @@ func TestSendEphemeral_SlackMode_EphemeralPayload(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := NewResponseURLNotifier()
+	n := newTestNotifier(t, srv.URL)
 	target := port.NotifyTarget{CallbackURL: srv.URL, Mode: port.ModeSlack}
 
 	// when
@@ -194,7 +235,7 @@ func TestOfferContinuation_TooLongButtonValue_SendsErrorMessage(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := NewResponseURLNotifier()
+	n := newTestNotifier(t, srv.URL)
 	target := port.NotifyTarget{CallbackURL: srv.URL, Mode: port.ModeSlack}
 
 	// when
@@ -234,7 +275,7 @@ func TestOfferContinuation_NormalLength_SendsBlocksMessage(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := NewResponseURLNotifier()
+	n := newTestNotifier(t, srv.URL)
 	target := port.NotifyTarget{CallbackURL: srv.URL, Mode: port.ModeSlack}
 
 	// when
@@ -290,7 +331,7 @@ func TestUpdateMessage_ServerError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := NewResponseURLNotifier()
+	n := newTestNotifier(t, srv.URL)
 	target := port.NotifyTarget{CallbackURL: srv.URL, Mode: port.ModeSlack}
 
 	// when
@@ -313,7 +354,7 @@ func TestPost_200Ok_NoError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := NewResponseURLNotifier()
+	n := newTestNotifier(t, srv.URL)
 	target := port.NotifyTarget{CallbackURL: srv.URL, Mode: port.ModeSlack}
 
 	// when
@@ -333,7 +374,7 @@ func TestPost_200InvalidBlocks_NoErrorButLogsWarning(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := NewResponseURLNotifier()
+	n := newTestNotifier(t, srv.URL)
 	target := port.NotifyTarget{CallbackURL: srv.URL, Mode: port.ModeSlack}
 
 	// when — current implementation logs but does not error
@@ -353,7 +394,7 @@ func TestPost_404_ReturnsErrorWithBody(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := NewResponseURLNotifier()
+	n := newTestNotifier(t, srv.URL)
 	target := port.NotifyTarget{CallbackURL: srv.URL, Mode: port.ModeSlack}
 
 	// when
@@ -379,7 +420,7 @@ func TestPost_503_ReturnsErrorWithBody(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := NewResponseURLNotifier()
+	n := newTestNotifier(t, srv.URL)
 	target := port.NotifyTarget{CallbackURL: srv.URL, Mode: port.ModeSlack}
 
 	// when
@@ -422,7 +463,7 @@ func TestOfferContinuation_SlackReturns404_ReturnsError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := NewResponseURLNotifier()
+	n := newTestNotifier(t, srv.URL)
 	target := port.NotifyTarget{CallbackURL: srv.URL, Mode: port.ModeSlack}
 	nextReq := &domain.ApprovalRequest{
 		Project:       "test-project",
@@ -454,7 +495,7 @@ func TestOfferContinuation_SlackReturnsInvalidBlocks_NoError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := NewResponseURLNotifier()
+	n := newTestNotifier(t, srv.URL)
 	target := port.NotifyTarget{CallbackURL: srv.URL, Mode: port.ModeSlack}
 	nextReq := &domain.ApprovalRequest{
 		Project:       "test-project",
@@ -492,7 +533,7 @@ func TestUpdateMessageOk_ThenOfferContinuation404(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := NewResponseURLNotifier()
+	n := newTestNotifier(t, srv.URL)
 	target := port.NotifyTarget{CallbackURL: srv.URL, Mode: port.ModeSlack}
 
 	// when — UpdateMessage succeeds
@@ -539,7 +580,7 @@ func TestUpdateMessageOk_ThenOfferContinuation500(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := NewResponseURLNotifier()
+	n := newTestNotifier(t, srv.URL)
 	target := port.NotifyTarget{CallbackURL: srv.URL, Mode: port.ModeSlack}
 
 	// when
@@ -580,7 +621,7 @@ func TestOfferContinuation_PayloadContainsBlocksWithButtons(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := NewResponseURLNotifier()
+	n := newTestNotifier(t, srv.URL)
 	target := port.NotifyTarget{CallbackURL: srv.URL, Mode: port.ModeSlack}
 
 	nextReq := &domain.ApprovalRequest{
@@ -687,7 +728,7 @@ func TestOfferContinuation_NoNextReq_NoActionsBlock(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := NewResponseURLNotifier()
+	n := newTestNotifier(t, srv.URL)
 	target := port.NotifyTarget{CallbackURL: srv.URL, Mode: port.ModeSlack}
 
 	// when — nextReq and stopReq are both nil
@@ -726,7 +767,7 @@ func TestReplaceMessage_PayloadIsBlocksArray(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := NewResponseURLNotifier()
+	n := newTestNotifier(t, srv.URL)
 	target := port.NotifyTarget{CallbackURL: srv.URL, Mode: port.ModeSlack}
 
 	// when — pass text, adapter wraps in section block
@@ -775,7 +816,7 @@ func TestReplaceMessage_404_ReturnsError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := NewResponseURLNotifier()
+	n := newTestNotifier(t, srv.URL)
 	target := port.NotifyTarget{CallbackURL: srv.URL, Mode: port.ModeSlack}
 
 	// when
@@ -800,7 +841,7 @@ func TestSendEphemeral_404_ReturnsError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := NewResponseURLNotifier()
+	n := newTestNotifier(t, srv.URL)
 	target := port.NotifyTarget{CallbackURL: srv.URL, Mode: port.ModeSlack}
 
 	// when
@@ -824,7 +865,7 @@ func TestPost_SendsApplicationJsonContentType(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := NewResponseURLNotifier()
+	n := newTestNotifier(t, srv.URL)
 	target := port.NotifyTarget{CallbackURL: srv.URL, Mode: port.ModeSlack}
 
 	// when
@@ -870,7 +911,7 @@ func TestRebuildInitialApproval_AllThreeButtons_PostsBlockKitPayload(t *testing.
 	}))
 	defer srv.Close()
 
-	n := NewResponseURLNotifier()
+	n := newTestNotifier(t, srv.URL)
 	target := port.NotifyTarget{CallbackURL: srv.URL, Mode: port.ModeSlack}
 
 	// when
@@ -928,7 +969,7 @@ func TestRebuildInitialApproval_NoJobReq_SuppressesMigrationButton(t *testing.T)
 	}))
 	defer srv.Close()
 
-	n := NewResponseURLNotifier()
+	n := newTestNotifier(t, srv.URL)
 	target := port.NotifyTarget{CallbackURL: srv.URL, Mode: port.ModeSlack}
 
 	// when
@@ -986,7 +1027,7 @@ func TestRebuildInitialApproval_TooLongButtonValue_SendsErrorMessage(t *testing.
 	}))
 	defer srv.Close()
 
-	n := NewResponseURLNotifier()
+	n := newTestNotifier(t, srv.URL)
 	target := port.NotifyTarget{CallbackURL: srv.URL, Mode: port.ModeSlack}
 
 	// when

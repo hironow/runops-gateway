@@ -15,11 +15,12 @@ runops-gateway を構成する 4 つの binary (`cmd/server` / `cmd/runops` / `c
 | `BUTTON_EXPIRY_SECONDS` | — | `7200` | ボタン有効期限 (秒) |
 | `SLACK_BOT_TOKEN` | △ | — | `xoxb-...`、 ADR 0017 (FallbackNotifier) と ADR 0019 (4-eyes approval) で必須。 空なら fallback 無効 |
 | `SLACK_DEFAULT_CHANNEL_ID` | — | `""` | response_url 切れ時の `chat.postMessage` 既定チャンネル |
+| `SLACK_RESPONSE_URL_ALLOWED_HOSTS` | — | `hooks.slack.com` | response_url の POST 先 host allowlist (CSV)。SSRF 防御 (CodeQL `go/request-forgery`)。本番は未設定 = `hooks.slack.com` のみ。dev/emulator で `localhost` 等を追加 |
 | `DISPATCHER_BACKEND` | — | `stub` | `stub` (Phase 1 Slack 内完結) / `pubsub` (Phase 2a 以降、 5 本柱と Pub/Sub bridge) |
 | `PUBSUB_PROJECT_ID` | △ | — | `DISPATCHER_BACKEND=pubsub` 時に必須 |
 | `PUBSUB_DMAIL_INBOUND_TOPIC` | △ | — | 同上 |
 | `PUBSUB_DMAIL_OUTBOUND_SUB` | — | `""` | 設定すると Phase 3 OutboundReceiver を gateway 内 goroutine で起動 (ADR 0018) |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | — | `""` | 空なら no-op TracerProvider。 `http://localhost:4317` (Jaeger v2 local) / `telemetry.googleapis.com:443` (prod Cloud Trace) |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | — | `""` | 空なら no-op TracerProvider。 `http://localhost:4317` (local: 共有 dotfiles `tel` collector、ADR 0042) / `telemetry.googleapis.com:443` (prod Cloud Trace) |
 | `OTEL_SERVICE_NAME` | — | `runops-gateway` | resource attribute `service.name` |
 | `OTEL_SERVICE_VERSION` | — | — | resource attribute `service.version` (build pipeline で `-ldflags` 経由) |
 | `OTEL_TRACES_SAMPLER` | — | `parentbased_always_on` | `parentbased_always_on` / `parentbased_traceidratio` |
