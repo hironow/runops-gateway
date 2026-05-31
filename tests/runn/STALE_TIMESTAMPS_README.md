@@ -1,93 +1,86 @@
-# tests/runn シナリオの既知制約 — timestamp 鮮度チェック
+# tests/runn シナリオ — Slack 署名と timestamp 鮮度の扱い
 
-## 制約サマリ
+> **状態: 解決済み (動的署名を実装)**。以前ここに記載していた「ハードコード
+> timestamp=1700000000 + 事前計算署名により全シナリオが 401 で失敗する」既知
+> 制約は解消した。各 runbook が **リクエスト毎に現在時刻で署名を動的計算** する
+> ため、ADR 0016 の `now ± 5 分` 鮮度ウィンドウを正規に満たす。ファイル名は
+> ADR 0016 からの参照アンカーとして維持している。
 
-`tests/runn/*.yaml` 内の **`X-Slack-Request-Timestamp` は固定値 `1700000000`
-(2023-11-15 22:13:20 UTC)** で、署名 (`X-Slack-Signature`) も事前計算された
-ハードコード値が埋め込まれている。
+## 背景 (ADR 0016)
 
-ADR 0016 / Issue 0019 (本 PR で導入) により、Slack 署名検証は **`now ± 5 分`**
-の鮮度ウィンドウを強制する。
-**現在 (2026-05-05) 時点で既存 runn シナリオを `just test-runn` で実行すると、
-全シナリオが 401 Unauthorized で失敗する。**
+Slack 署名検証は **`X-Slack-Request-Timestamp` が `now ± 5 分`** の鮮度
+ウィンドウ内であることを要求する (replay 攻撃拒否, fail-closed)。固定の
+過去 timestamp + 事前計算署名では、この窓を満たせず 401 になる。
 
+過去に検討して **却下** した代替案:
+
+- **案 B: `SLACK_SKIP_FRESHNESS` env で鮮度チェックを無効化** — Issue 0019 で
+  却下。fail-closed を堅持したく、production 誤設定リスクが高い。
+- **案 C: シナリオ削除** — HMAC 経路 + 200 OK パターンの動作確認が失われ過剰。
+
+採用したのは **案 A: runbook 内で timestamp と署名を動的計算** する方式。
+
+## 仕組み (動的署名)
+
+各署名付き runbook は最初の step で `exec` runner を使い、現在時刻の
+timestamp と HMAC-SHA256 署名を計算して後続 step の header に注入する:
+
+```yaml
+runners:
+  req: "${RUNN_ENDPOINT:-http://localhost:8080}"
+vars:
+  secret: "${SLACK_SIGNING_SECRET:-test-secret}"   # server の SLACK_SIGNING_SECRET と一致させる
+  body: "payload=..."                              # 署名対象 = 送信 body と完全一致
+steps:
+  - exec:
+      command: |
+        ts=$(date +%s)
+        sig=$(printf 'v0:%s:%s' "$ts" '{{vars.body}}' | openssl dgst -sha256 -hmac '{{vars.secret}}' | awk '{print $NF}')
+        printf '%s v0=%s' "$ts" "$sig"
+  - req:
+      /slack/interactive:
+        post:
+          headers:
+            X-Slack-Request-Timestamp: "{{ split(steps[0].stdout, ' ')[0] }}"
+            X-Slack-Signature: "{{ split(steps[0].stdout, ' ')[1] }}"
+          body:
+            string: "{{vars.body}}"
+    test: |
+      current.res.status == 200
+      && current.res.rawBody == ""
 ```
-desc: "Operator dispatches /agent paintress fix M-42 — accepted, empty 200"
-...
-expected: current.res.status == 200
-actual:   current.res.status == 401
-reason:   slack timestamp out of replay window
-```
 
-## 影響範囲
+`dispatch_command.yaml` は 3 種の body それぞれに署名が要るため、1 つの `exec`
+で `ts` + 3 署名を空白区切りで出力し、`split(steps[0].stdout, ' ')[1..3]` で
+参照する。
 
-| シナリオ | 影響 |
-|---|---|
-| `approve_canary.yaml` | ✗ 全 step 401 |
-| `deny_operation.yaml` | ✗ 全 step 401 |
-| `dispatch_command.yaml` | ✗ 4 step 中 3 step 401 (unsigned step は元から 401) |
-| `invalid_signature.yaml` | ✓ pass (401 が期待値、署名なしで先に弾かれる) |
-| `healthz.yaml` | ✓ pass (Slack 署名不要) |
+## 実行
 
-## なぜ修正していないか
-
-3 案を検討して見送り:
-
-### 案 A: runn シナリオで動的に timestamp と署名を計算する
-
-runn の `runners` で `executor:` script を呼べば bash + openssl で計算可能だが:
-
-- 全シナリオに共通の前処理を入れる boilerplate が大きい
-- runn 標準の宣言的シナリオの読みやすさを損なう
-- HMAC を bash で組むとテスト失敗時の原因切り分けが面倒
-
-### 案 B: gateway server に "freshness skip" env var を追加
-
-`SLACK_SKIP_FRESHNESS=1` で鮮度チェックを無効化できるようにする案。
-**Issue 0019 で却下** (`fail-closed` を保ちたい、production 誤設定リスクが高い)。
-
-### 案 C: シナリオファイルを完全に削除
-
-既存の Phase 0 動作確認 (HMAC 経路 + 200 OK パターン) が消えるため過剰。
-
-## 実用上の代替手段
-
-ローカルで `/slack/command` をテストしたい場合:
+`exec` runner は runn のセキュリティスコープで保護されているため、
+**`--scopes run:exec`** が必須。`just test-runn` recipe が付与済み:
 
 ```bash
-# 1. サーバー起動
-SLACK_SIGNING_SECRET=test-secret PORT=8080 go run ./cmd/server
+# 1. dev サーバー起動 (別ターミナル)
+SLACK_SIGNING_SECRET=test-secret just run
 
-# 2. 別ターミナルで current timestamp で署名計算してリクエスト送信
-ts=$(date +%s)
-body="command=%2Fagent&text=paintress+fix+M-42&user_id=U0123ABCD&response_url=http%3A%2F%2Flocalhost%2Fcallback"
-sig="v0=$(printf 'v0:%s:%s' "$ts" "$body" | openssl dgst -sha256 -hmac test-secret -binary | xxd -p -c 256)"
-curl -X POST http://localhost:8080/slack/command \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  -H "X-Slack-Request-Timestamp: ${ts}" \
-  -H "X-Slack-Signature: ${sig}" \
-  -d "${body}"
-# -> 200 OK, body 空 (StubDispatcher の slog 出力をサーバーログで確認)
+# 2. シナリオ実行
+just test-runn        # = runn run --scopes run:exec tests/runn/*.yaml
 ```
 
-`/slack/interactive` (既存 ChatOps) も同パターンで再現可能。
+ホストに `openssl` と `awk` が必要 (macOS / 標準 Linux に同梱)。
 
-## 復旧手順 (シナリオを再生可能にしたい場合)
+## シナリオ一覧と検証内容
 
-将来 runn シナリオを生かしたくなった場合の選択肢:
-
-1. **案 A を実装** (script executor で動的計算)
-2. **gateway 側に freshness skip env を追加** (Issue 0019 を re-open)
-3. **fakeclock を全プロセスに inject** (clock パッケージを domain 層に追加し、
-   テスト用 binary を別ビルド)
-
-いずれも Phase 1 の本流ではないため、**当面は手動 curl でローカル動作確認** する
-方針を維持する。
+| シナリオ | 検証 |
+|---|---|
+| `healthz.yaml` | `GET /_healthz` が 200 + `body.status == "ok"` |
+| `approve_canary.yaml` | 署名付き approve interactive が 200 + 空 body (ack) |
+| `deny_operation.yaml` | 署名付き deny interactive が 200 + 空 body (ack) |
+| `dispatch_command.yaml` | valid `/agent` が ephemeral dispatch 確認 (approve/deny ボタン)、不明ロール/空 text が `unknown agent role` ephemeral、未署名が 401 |
+| `invalid_signature.yaml` | 未署名 interactive が 401 で拒否 (replay/署名保護) |
 
 ## 関連
 
 - ADR 0016: Slack request timestamp の鮮度を検証して replay attack を拒否する
-- Issue 0019: Slack request timestamp 鮮度チェックで replay attack を拒否する
-- Codex Review (round 2, 2026-05-05): replay protection 欠落を指摘
+- Issue 0019: 鮮度チェック (案 B の skip env はここで却下)
 - `internal/adapter/input/slack/verify.go`
-- `docs/handover.md` Phase 1 review findings F-6

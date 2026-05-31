@@ -19,7 +19,7 @@ runops-gateway を構成する 4 つの binary (`cmd/server` / `cmd/runops` / `c
 | `PUBSUB_PROJECT_ID` | △ | — | `DISPATCHER_BACKEND=pubsub` 時に必須 |
 | `PUBSUB_DMAIL_INBOUND_TOPIC` | △ | — | 同上 |
 | `PUBSUB_DMAIL_OUTBOUND_SUB` | — | `""` | 設定すると Phase 3 OutboundReceiver を gateway 内 goroutine で起動 (ADR 0018) |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | — | `""` | 空なら no-op TracerProvider。 `http://localhost:4317` (Jaeger v2 local) / `telemetry.googleapis.com:443` (prod Cloud Trace) |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | — | `""` | 空なら no-op TracerProvider。 `http://localhost:4317` (local: 共有 dotfiles `tel` collector、ADR 0042) / `telemetry.googleapis.com:443` (prod Cloud Trace) |
 | `OTEL_SERVICE_NAME` | — | `runops-gateway` | resource attribute `service.name` |
 | `OTEL_SERVICE_VERSION` | — | — | resource attribute `service.version` (build pipeline で `-ldflags` 経由) |
 | `OTEL_TRACES_SAMPLER` | — | `parentbased_always_on` | `parentbased_always_on` / `parentbased_traceidratio` |

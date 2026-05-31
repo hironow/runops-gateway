@@ -16,21 +16,16 @@ import (
 	phonewaveinput "github.com/hironow/runops-gateway/internal/adapter/input/phonewave"
 	pubsubadapter "github.com/hironow/runops-gateway/internal/adapter/output/pubsub"
 	"github.com/hironow/runops-gateway/internal/core/domain"
-)
-
-const (
-	defaultOutboundTopic = "dmail-outbound"
-	defaultOutboundSub   = "runops-gateway-sub"
+	testutils "github.com/hironow/runops-gateway/tests/utils"
 )
 
 func TestIntegration_DmailEmitter_PublishesArchivedFiles(t *testing.T) {
-	requireEmulator(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	projectID := envOr("PUBSUB_PROJECT_ID", defaultProjectID)
-	topicID := envOr("PUBSUB_DMAIL_OUTBOUND_TOPIC", defaultOutboundTopic)
-	subID := envOr("PUBSUB_DMAIL_OUTBOUND_SUB", defaultOutboundSub)
+	projectID := testutils.FirebaseProjectID
+	topicID := testutils.TopicOutbound
+	subID := testutils.SubGateway
 
 	// 1. Publisher pointed at the outbound topic.
 	pub, err := pubsubadapter.NewPublisher(ctx, projectID, topicID)
@@ -107,13 +102,12 @@ func TestIntegration_DmailEmitter_PublishesArchivedFiles(t *testing.T) {
 // on the published Pub/Sub message, mirroring the receiver-side multi-mode
 // gating from #0006.
 func TestIntegration_DmailEmitter_MultiModeAttachesProjectIDAttribute(t *testing.T) {
-	requireEmulator(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	projectID := envOr("PUBSUB_PROJECT_ID", defaultProjectID)
-	topicID := envOr("PUBSUB_DMAIL_OUTBOUND_TOPIC", defaultOutboundTopic)
-	subID := envOr("PUBSUB_DMAIL_OUTBOUND_SUB", defaultOutboundSub)
+	projectID := testutils.FirebaseProjectID
+	topicID := testutils.TopicOutbound
+	subID := testutils.SubGateway
 
 	pub, err := pubsubadapter.NewPublisher(ctx, projectID, topicID)
 	if err != nil {
@@ -197,13 +191,12 @@ func TestIntegration_DmailEmitter_MultiModeAttachesProjectIDAttribute(t *testing
 // know is read but never published, mirroring the receiver-side DLQ but
 // without producing any traffic at all (read-only watcher, ADR 0029).
 func TestIntegration_DmailEmitter_MultiModeSkipsUnmappedDir(t *testing.T) {
-	requireEmulator(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	projectID := envOr("PUBSUB_PROJECT_ID", defaultProjectID)
-	topicID := envOr("PUBSUB_DMAIL_OUTBOUND_TOPIC", defaultOutboundTopic)
-	subID := envOr("PUBSUB_DMAIL_OUTBOUND_SUB", defaultOutboundSub)
+	projectID := testutils.FirebaseProjectID
+	topicID := testutils.TopicOutbound
+	subID := testutils.SubGateway
 
 	pub, err := pubsubadapter.NewPublisher(ctx, projectID, topicID)
 	if err != nil {
@@ -228,16 +221,18 @@ func TestIntegration_DmailEmitter_MultiModeSkipsUnmappedDir(t *testing.T) {
 		t.Fatalf("router init: %v", err)
 	}
 	emitter := phonewaveinput.NewEmitter(pub, router)
-	// Watcher is told about the ghost dir explicitly so it generates an
-	// fsnotify event; the router still rejects it.
-	watcher := phonewaveinput.NewWatcher(emitter, archiveGhost)
+	// Watch BOTH dirs: archiveFoo is the positive control (mapped → must
+	// publish) and archiveGhost is the assertion target (unmapped → the router
+	// rejects it even though fsnotify fires).
+	watcher := phonewaveinput.NewWatcher(emitter, archiveGhost, archiveFoo)
 
 	runDone := make(chan error, 1)
 	go func() { runDone <- watcher.Run(ctx) }()
 	time.Sleep(200 * time.Millisecond)
 
-	ghostMarker := "ghost-skip-marker " + time.Now().Format("150405.000000")
-	mail := domain.DMail{
+	stamp := time.Now().Format("150405.000000")
+	ghostMarker := "ghost-skip-marker " + stamp
+	ghostMail := domain.DMail{
 		ID:             "01HZW_GHOST",
 		Kind:           domain.DMailKindReport,
 		Target:         "amadeus",
@@ -245,40 +240,76 @@ func TestIntegration_DmailEmitter_MultiModeSkipsUnmappedDir(t *testing.T) {
 		IdempotencyKey: "k-ghost",
 		Body:           ghostMarker,
 	}
-	path := filepath.Join(archiveGhost, "ghost.md")
-	if err := os.WriteFile(path, []byte(mail.RenderMarkdown()), 0o644); err != nil {
-		t.Fatalf("write archive .md: %v", err)
+	ghostPath := filepath.Join(archiveGhost, "ghost.md")
+	if err := os.WriteFile(ghostPath, []byte(ghostMail.RenderMarkdown()), 0o644); err != nil {
+		t.Fatalf("write ghost archive .md: %v", err)
 	}
 
-	// Drain the topic; we expect *zero* messages with our ghost marker.
+	// Positive control: a mapped file in archiveFoo MUST be published.
+	sentinelMarker := "foo-sentinel-marker " + stamp
+	sentinelMail := domain.DMail{
+		ID:             "01HZW_FOO",
+		Kind:           domain.DMailKindReport,
+		Target:         "amadeus",
+		Source:         "paintress",
+		IdempotencyKey: "k-foo-sentinel",
+		Body:           sentinelMarker,
+	}
+	if err := os.WriteFile(filepath.Join(archiveFoo, "foo.md"), []byte(sentinelMail.RenderMarkdown()), 0o644); err != nil {
+		t.Fatalf("write foo archive .md: %v", err)
+	}
+
+	// Watch the topic for both markers: the mapped sentinel (positive control)
+	// and the ghost marker (the leak we must NOT see).
 	subClient, err := gpubsub.NewClient(ctx, projectID)
 	if err != nil {
 		t.Fatalf("subscriber client: %v", err)
 	}
 	defer subClient.Close()
 
-	pullCtx, pullCancel := context.WithTimeout(ctx, 4*time.Second)
+	pullCtx, pullCancel := context.WithTimeout(ctx, 15*time.Second)
 	defer pullCancel()
 
 	leak := make(chan struct{}, 1)
+	sentinel := make(chan struct{}, 1)
 	sub := subClient.Subscriber(subID)
 	go func() {
 		_ = sub.Receive(pullCtx, func(_ context.Context, m *gpubsub.Message) {
 			defer m.Ack()
-			if strings.Contains(string(m.Data), ghostMarker) {
+			switch {
+			case strings.Contains(string(m.Data), ghostMarker):
 				select {
 				case leak <- struct{}{}:
+				default:
+				}
+			case strings.Contains(string(m.Data), sentinelMarker):
+				select {
+				case sentinel <- struct{}{}:
 				default:
 				}
 			}
 		})
 	}()
 
+	// Positive control: wait until the mapped sentinel is published. This
+	// proves the watcher is live and the foo route emits — so the ghost file
+	// has had its chance through the same watcher. A fixed sleep could pass
+	// even if the watcher never started.
+	select {
+	case <-sentinel:
+		// watcher is live and the foo route published
+	case <-leak:
+		t.Fatalf("unmapped path %q leaked into Pub/Sub before sentinel; emitter must skip", ghostPath)
+	case <-pullCtx.Done():
+		t.Fatalf("sentinel never published within deadline; watcher not live?")
+	}
+
+	// Sentinel arrived → the unmapped ghost must not have leaked.
 	select {
 	case <-leak:
-		t.Fatalf("unmapped path %q leaked into Pub/Sub; emitter must skip", path)
-	case <-time.After(3 * time.Second):
-		// no leak detected — pass
+		t.Fatalf("unmapped path %q leaked into Pub/Sub; emitter must skip", ghostPath)
+	default:
+		// no leak — pass
 	}
 
 	cancel()

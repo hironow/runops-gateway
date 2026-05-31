@@ -7,13 +7,13 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
-	"os"
 	"testing"
 
 	"cloud.google.com/go/firestore"
 	"github.com/hironow/runops-gateway/internal/adapter/output/state"
 	"github.com/hironow/runops-gateway/internal/core/domain"
 	"github.com/hironow/runops-gateway/internal/core/port"
+	testutils "github.com/hironow/runops-gateway/tests/utils"
 )
 
 // newFirestoreTest sets up a Firestore client against the emulator and
@@ -22,13 +22,7 @@ import (
 // junk lives until the container is restarted, which is acceptable for CI.
 func newFirestoreTest(t *testing.T) (port.ProjectRegistry, func()) {
 	t.Helper()
-	if os.Getenv("FIRESTORE_EMULATOR_HOST") == "" {
-		t.Skip("FIRESTORE_EMULATOR_HOST not set; start emulator with 'just firestore-up'")
-	}
-	projectID := os.Getenv("GOOGLE_CLOUD_PROJECT")
-	if projectID == "" {
-		projectID = "runops-local"
-	}
+	projectID := testutils.FirebaseProjectID
 	ctx := context.Background()
 	client, err := firestore.NewClient(ctx, projectID)
 	if err != nil {

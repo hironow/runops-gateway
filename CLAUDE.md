@@ -148,6 +148,30 @@ just check-all     # prek run + just check + just test (CI 同等の gate)
   でカバー
 - 除外 path: `output/` / `node_modules/` / `.venv/` / `tofu/.terraform/`
 
+## ローカル開発 (テスト / dev サーバー)
+
+本リポは local で **自前のインフラを起動しない**。emulator / trace backend は
+`hironow/dotfiles` の共通スタックを間借りする (ADR 0041 / 0042)。
+
+- **integration テスト**: `just test-integration` は testcontainers が firebase
+  emulator を test プロセス内で起動する (ADR 0041)。**Docker daemon さえ動いていれば
+  外部 emulator は不要**。daemon 不在は skip ではなく hard fail (fail-loud)。
+- **dev サーバー**: `just dev` が `.env.local` → 任意 `.env` の順に source して
+  `go run ./cmd/server`。`.env.local` は **git 管理** (`.gitignore` の `!.env.local`)
+  で **local/dummy 値のみ** (`SLACK_SIGNING_SECRET=test-secret` /
+  `PUBSUB_EMULATOR_HOST=localhost:9399` / `FIRESTORE_EMULATOR_HOST=localhost:8080` /
+  `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317`)。**実 secret は禁止** —
+  実 secret や個人 override は gitignored の `.env` に置く。`SLACK_SIGNING_SECRET`
+  だけでも起動可 (default backend = stub)。
+- **dotfiles スタックの起動** (dotfiles checkout 側で): `just emu-up-only
+  firebase-emulator` (Pub/Sub :9399 + Firestore :8080) + `just tel-up` (OTLP :4317
+  → Grafana/Tempo) のみ。重量級フルスタックは不要。
+- **runn シナリオ**: `just test-runn` は dev サーバー起動が前提 + `--scopes run:exec`
+  (runbook が `openssl` で現在時刻の Slack 署名を動的計算し ADR 0016 の鮮度窓を満たす;
+  recipe に scope 組込み済)。詳細は `tests/runn/STALE_TIMESTAMPS_README.md`。
+- **OrbStack / 起動中コンテナは user 管理**。アシスタントが勝手に kill / stop しない。
+  停止は dotfiles `just emu-stop && just tel-down`。
+
 ## cdr (Coder CLI wrapper) — Issue 0001 deploy verify 手順
 
 dmail-receiver / dmail-emitter の OCI image は本リポの CD で

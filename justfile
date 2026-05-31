@@ -21,6 +21,17 @@ build:
 run:
     go run ./cmd/server
 
+# Run the HTTP server with local-dev env loaded (.env.local, then optional .env
+# overrides). Presumes the dotfiles stack is up: emu-up-only firebase-emulator + tel-up.
+dev:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    set -a
+    source .env.local
+    [ -f .env ] && source .env
+    set +a
+    go run ./cmd/server
+
 # Run all tests
 test:
     go test ./...
@@ -81,63 +92,27 @@ docker-build:
 tidy:
     go mod tidy
 
-# Run scenario tests (requires server to be running with SLACK_SIGNING_SECRET=test-secret)
+# Run scenario tests. Requires the dev server running first:
+#   SLACK_SIGNING_SECRET=test-secret just run
+# --scopes run:exec lets each runbook shell out (openssl) to compute a fresh
+# Slack signature for the current time, so the signed scenarios satisfy ADR
+# 0016's ±5min timestamp freshness window instead of using stale hardcoded sigs.
 test-runn:
-    runn run tests/runn/*.yaml
+    runn run --scopes run:exec tests/runn/*.yaml
 
-# Run integration tests (require Pub/Sub emulator: just pubsub-up + just pubsub-init)
+# Run integration tests. testcontainers starts the firebase emulator inside the
+# test process (ADR 0041) — no external emulator, no docker compose, no init
+# scripts; only a running Docker daemon is required. Covers the Pub/Sub bridge
+# (tests/integration) and the Firestore registry (internal/.../state).
 test-integration:
-    PUBSUB_EMULATOR_HOST=localhost:9399 PUBSUB_PROJECT_ID=runops-local \
-        go test -tags=integration ./tests/integration/...
+    go test -tags=integration ./tests/integration/... ./internal/adapter/output/state/...
 
-# Start Pub/Sub emulator (Phase 2a/2b/2c local development)
-pubsub-up:
-    docker compose -f compose.yaml up -d pubsub-emulator
-    @echo "waiting for emulator to be healthy (timeout 60s)..."
-    @timeout 60 sh -c 'until docker inspect -f "{{{{.State.Health.Status}}}}" runops-pubsub-emulator | grep -q healthy; do sleep 2; done'
-    @echo "emulator ready: http://localhost:9399 (UI: http://localhost:4000)"
-
-# Initialize topics + subscriptions on the running emulator
-pubsub-init:
-    {{justfile_directory()}}/scripts/init-pubsub.sh
-
-# Stop the emulator
-pubsub-down:
-    docker compose -f compose.yaml stop pubsub-emulator
-
-# Start Firestore emulator (issue #0011 — bundled in the same firebase
-# image as Pub/Sub, so this is an alias for pubsub-up that emphasizes the
-# Firestore use case)
-firestore-up: pubsub-up
-    @echo "firestore emulator ready: http://localhost:8080 (UI: http://localhost:4000)"
-
-# Probe the Firestore emulator with a sentinel doc round-trip
-firestore-init:
-    {{justfile_directory()}}/scripts/init-firestore.sh
-
-# Stop the Firestore emulator (alias for pubsub-down — same container)
-firestore-down: pubsub-down
-
-# Run Firestore integration tests against the emulator
-test-firestore-integration:
-    FIRESTORE_EMULATOR_HOST=localhost:8080 GOOGLE_CLOUD_PROJECT=runops-local \
-        go test -tags=integration -run Firestore ./internal/adapter/output/state/...
-
-# Start local Jaeger v2 (OpenTelemetry trace backend, ADR 0020)
-trace-up:
-    docker compose -f compose.yaml up -d jaeger
-    @echo "Jaeger UI: http://localhost:16686"
-    @echo "Set OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 in your shell to ship spans there."
-
-# Stop local Jaeger
-trace-down:
-    docker compose -f compose.yaml stop jaeger
-
-# Open Jaeger UI in browser
-trace-view:
-    @command -v open >/dev/null 2>&1 && open http://localhost:16686 \
-        || command -v xdg-open >/dev/null 2>&1 && xdg-open http://localhost:16686 \
-        || echo "Please open http://localhost:16686 manually"
+# Local OpenTelemetry tracing is provided by the shared dotfiles `tel` stack
+# (otel-collector on :4317 -> Tempo/Grafana), not a per-repo Jaeger. There is no
+# compose.yaml and no trace-up/down/view here anymore (ADR 0042). From a dotfiles
+# checkout run `just tel-up`, then start binaries with
+# OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317. ADR 0020 (direct OTLP
+# export) is unchanged — only the local backend moved to the shared stack.
 
 # Test notify-slack.sh: dry-run payload structure + bash/Go compress_gz round-trip
 # Requires: bash, gzip, base64, jq

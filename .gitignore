@@ -9,6 +9,8 @@
 # Environment
 .env
 .env.*
+# .env.local is committed: local-dev defaults only, NO real secrets (see its header).
+!.env.local
 
 # OS
 .DS_Store
@@ -32,3 +34,9 @@ gradient.json
 lumina.md
 gommage.md
 continent-config.yaml
+
+# Local-only working docs — handover / intent are kept in the working tree
+# but not committed (per 2026-05-31 decision). Edit them locally; they no
+# longer travel with the repo.
+docs/handover.md
+docs/intent.md

@@ -18,25 +18,16 @@ import (
 	"github.com/hironow/runops-gateway/internal/adapter/output/phonewave"
 	pubsubadapter "github.com/hironow/runops-gateway/internal/adapter/output/pubsub"
 	"github.com/hironow/runops-gateway/internal/core/domain"
+	testutils "github.com/hironow/runops-gateway/tests/utils"
 )
 
-// pubsubMsgAdapter adapts *pubsub.Message to pubsubinput.Message.
-type pubsubMsgAdapter struct{ inner *gpubsub.Message }
-
-func (m pubsubMsgAdapter) ID() string                    { return m.inner.ID }
-func (m pubsubMsgAdapter) Data() []byte                  { return m.inner.Data }
-func (m pubsubMsgAdapter) Attributes() map[string]string { return m.inner.Attributes }
-func (m pubsubMsgAdapter) Ack()                          { m.inner.Ack() }
-func (m pubsubMsgAdapter) Nack()                         { m.inner.Nack() }
-
 func TestIntegration_DispatchPublish_ReceivedAndWrittenToOutbox(t *testing.T) {
-	requireEmulator(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	projectID := envOr("PUBSUB_PROJECT_ID", defaultProjectID)
-	topicID := envOr("PUBSUB_DMAIL_INBOUND_TOPIC", defaultInboundTopic)
-	subID := envOr("PUBSUB_DMAIL_INBOUND_SUB", defaultInboundSub)
+	projectID := testutils.FirebaseProjectID
+	topicID := testutils.TopicInbound
+	subID := testutils.SubReceiver
 
 	// 1. Spin up the receiver against a temp outbox dir.
 	outboxDir := t.TempDir()
@@ -54,7 +45,7 @@ func TestIntegration_DispatchPublish_ReceivedAndWrittenToOutbox(t *testing.T) {
 	go func() {
 		sub := subClient.Subscriber(subID)
 		receiveDone <- sub.Receive(ctx, func(ctx context.Context, m *gpubsub.Message) {
-			receiver.OnMessage(ctx, pubsubMsgAdapter{inner: m})
+			receiver.OnMessage(ctx, testutils.MsgAdapter{Inner: m})
 		})
 	}()
 
@@ -141,23 +132,6 @@ func waitForOutboxFileWithBody(t *testing.T, dir, marker string, timeout time.Du
 	return ""
 }
 
-// outboxIsEmpty reports whether dir contains zero non-directory entries.
-// Multi-mode tests assert that messages addressed to one project never
-// leak into another project's outbox.
-func outboxIsEmpty(t *testing.T, dir string) bool {
-	t.Helper()
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatalf("read outbox %q: %v", dir, err)
-	}
-	for _, e := range entries {
-		if !e.IsDir() {
-			return false
-		}
-	}
-	return true
-}
-
 // publishWithProjectID publishes a one-off DMail with the given project_id
 // attribute and body marker so the receiver can be observed routing it.
 // Returns the body string used as the outbox-file marker.
@@ -188,13 +162,12 @@ func publishWithProjectID(t *testing.T, ctx context.Context, projectID, topicID,
 // path for multi-mode routing: two messages with distinct project_id
 // attributes land in their respective outboxes (#0006).
 func TestIntegration_Receiver_MultiModeRoutesByProjectID(t *testing.T) {
-	requireEmulator(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	projectID := envOr("PUBSUB_PROJECT_ID", defaultProjectID)
-	topicID := envOr("PUBSUB_DMAIL_INBOUND_TOPIC", defaultInboundTopic)
-	subID := envOr("PUBSUB_DMAIL_INBOUND_SUB", defaultInboundSub)
+	projectID := testutils.FirebaseProjectID
+	topicID := testutils.TopicInbound
+	subID := testutils.SubReceiver
 
 	dirA := t.TempDir()
 	dirB := t.TempDir()
@@ -214,7 +187,7 @@ func TestIntegration_Receiver_MultiModeRoutesByProjectID(t *testing.T) {
 	go func() {
 		sub := subClient.Subscriber(subID)
 		receiveDone <- sub.Receive(ctx, func(ctx context.Context, m *gpubsub.Message) {
-			receiver.OnMessage(ctx, pubsubMsgAdapter{inner: m})
+			receiver.OnMessage(ctx, testutils.MsgAdapter{Inner: m})
 		})
 	}()
 
@@ -249,13 +222,12 @@ func TestIntegration_Receiver_MultiModeRoutesByProjectID(t *testing.T) {
 // fail-closed branch: a message whose project_id is not in the router
 // gets nacked, so neither outbox writes anything (#0006 / ADR 0028).
 func TestIntegration_Receiver_MultiModeNacksUnknownProjectID(t *testing.T) {
-	requireEmulator(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	projectID := envOr("PUBSUB_PROJECT_ID", defaultProjectID)
-	topicID := envOr("PUBSUB_DMAIL_INBOUND_TOPIC", defaultInboundTopic)
-	subID := envOr("PUBSUB_DMAIL_INBOUND_SUB", defaultInboundSub)
+	projectID := testutils.FirebaseProjectID
+	topicID := testutils.TopicInbound
+	subID := testutils.SubReceiver
 
 	dirA := t.TempDir()
 	subClient, err := gpubsub.NewClient(ctx, projectID)
@@ -273,18 +245,29 @@ func TestIntegration_Receiver_MultiModeNacksUnknownProjectID(t *testing.T) {
 	go func() {
 		sub := subClient.Subscriber(subID)
 		receiveDone <- sub.Receive(ctx, func(ctx context.Context, m *gpubsub.Message) {
-			receiver.OnMessage(ctx, pubsubMsgAdapter{inner: m})
+			receiver.OnMessage(ctx, testutils.MsgAdapter{Inner: m})
 		})
 	}()
 
 	markerGhost := "multi-mode-ghost-marker"
-	publishWithProjectID(t, ctx, projectID, topicID, "ghost", markerGhost)
+	markerSentinel := "multi-mode-sentinel-marker"
 
-	// Wait long enough for the message to be redelivered a few times by
-	// the emulator (which honours nack), then assert no outbox writes.
-	time.Sleep(3 * time.Second)
-	if !outboxIsEmpty(t, dirA) {
-		t.Errorf("dirA should be empty when project_id is unmapped; got entries")
+	// Publish the unmapped ghost FIRST, then a mapped sentinel routed to dirA.
+	publishWithProjectID(t, ctx, projectID, topicID, "ghost", markerGhost)
+	publishWithProjectID(t, ctx, projectID, topicID, "foo", markerSentinel)
+
+	// Positive control: the mapped sentinel MUST land in dirA. Waiting for its
+	// arrival (instead of a fixed sleep) proves the receiver loop is live and
+	// the foo route writes — so the ghost has provably had its turn through the
+	// same subscription. Because "ghost" is unmapped it is nacked and never
+	// written regardless of emulator delivery order, so this cannot false-pass.
+	if got := waitForOutboxFileWithBody(t, dirA, markerSentinel, 15*time.Second); got == "" {
+		t.Fatalf("sentinel marker never landed in dirA; receiver not live? dir=%s", dirA)
+	}
+
+	// The unmapped ghost must never appear in the outbox.
+	if name := waitForOutboxFileWithBody(t, dirA, markerGhost, 1*time.Second); name != "" {
+		t.Errorf("unmapped project_id leaked into dirA as %q", name)
 	}
 
 	cancel()
@@ -298,13 +281,12 @@ func TestIntegration_Receiver_MultiModeNacksUnknownProjectID(t *testing.T) {
 // receiver writes to its sole outbox even if project_id is set on the
 // inbound message (#0006 / ADR 0028).
 func TestIntegration_Receiver_SingleModeIgnoresProjectIDAttribute(t *testing.T) {
-	requireEmulator(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	projectID := envOr("PUBSUB_PROJECT_ID", defaultProjectID)
-	topicID := envOr("PUBSUB_DMAIL_INBOUND_TOPIC", defaultInboundTopic)
-	subID := envOr("PUBSUB_DMAIL_INBOUND_SUB", defaultInboundSub)
+	projectID := testutils.FirebaseProjectID
+	topicID := testutils.TopicInbound
+	subID := testutils.SubReceiver
 
 	dir := t.TempDir()
 	subClient, err := gpubsub.NewClient(ctx, projectID)
@@ -321,7 +303,7 @@ func TestIntegration_Receiver_SingleModeIgnoresProjectIDAttribute(t *testing.T) 
 	go func() {
 		sub := subClient.Subscriber(subID)
 		receiveDone <- sub.Receive(ctx, func(ctx context.Context, m *gpubsub.Message) {
-			receiver.OnMessage(ctx, pubsubMsgAdapter{inner: m})
+			receiver.OnMessage(ctx, testutils.MsgAdapter{Inner: m})
 		})
 	}()
 

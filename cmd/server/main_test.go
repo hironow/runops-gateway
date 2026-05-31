@@ -31,6 +31,37 @@ func TestLoadConfig_DefaultPort(t *testing.T) {
 	}
 }
 
+func TestLoadConfig_DefaultChatPostMessageURL(t *testing.T) {
+	os.Setenv("SLACK_SIGNING_SECRET", "secret")
+	os.Unsetenv("SLACK_CHAT_POST_MESSAGE_URL")
+	defer os.Unsetenv("SLACK_SIGNING_SECRET")
+
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = "https://slack.com/api/chat.postMessage"
+	if cfg.slackChatPostMessageURL != want {
+		t.Errorf("slackChatPostMessageURL = %q, want %q", cfg.slackChatPostMessageURL, want)
+	}
+}
+
+func TestLoadConfig_CustomChatPostMessageURL(t *testing.T) {
+	os.Setenv("SLACK_SIGNING_SECRET", "secret")
+	os.Setenv("SLACK_CHAT_POST_MESSAGE_URL", "http://localhost:4102/api/chat.postMessage")
+	defer os.Unsetenv("SLACK_SIGNING_SECRET")
+	defer os.Unsetenv("SLACK_CHAT_POST_MESSAGE_URL")
+
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = "http://localhost:4102/api/chat.postMessage"
+	if cfg.slackChatPostMessageURL != want {
+		t.Errorf("slackChatPostMessageURL = %q, want %q", cfg.slackChatPostMessageURL, want)
+	}
+}
+
 func TestHealthzEndpoint(t *testing.T) {
 	// given
 	mux := http.NewServeMux()

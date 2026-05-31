@@ -1,20 +1,15 @@
 //go:build integration
 
-// Package integration runs end-to-end tests against the local Firebase
-// Pub/Sub emulator. Requires:
-//
-//	just pubsub-up
-//	just pubsub-init
-//	PUBSUB_EMULATOR_HOST=localhost:9399 PUBSUB_PROJECT_ID=runops-local just test-integration
-//
-// The build tag keeps these out of `just test` so the unit suite stays fast
-// and offline.
+// Package integration runs end-to-end tests against a firebase Pub/Sub
+// emulator started by testcontainers (see setup_test.go's TestMain). The tests
+// depend ONLY on testcontainers — no locally-running emulator, no external
+// PUBSUB_EMULATOR_HOST, no docker compose. The build tag keeps these out of
+// `just test` so the unit suite stays fast and offline.
 package integration
 
 import (
 	"context"
 	"errors"
-	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -25,67 +20,15 @@ import (
 	"github.com/hironow/runops-gateway/internal/adapter/output/dispatcher"
 	pubsubadapter "github.com/hironow/runops-gateway/internal/adapter/output/pubsub"
 	"github.com/hironow/runops-gateway/internal/core/domain"
+	testutils "github.com/hironow/runops-gateway/tests/utils"
 )
-
-const (
-	defaultProjectID    = "runops-local"
-	defaultInboundTopic = "dmail-inbound"
-	defaultInboundSub   = "dmail-receiver-sub"
-)
-
-func envOr(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
-}
-
-func requireEmulator(t *testing.T) {
-	t.Helper()
-	if os.Getenv("PUBSUB_EMULATOR_HOST") == "" {
-		t.Skip("integration test skipped: PUBSUB_EMULATOR_HOST not set (run `just pubsub-up && just pubsub-init` first)")
-	}
-}
-
-// receiveOne pulls a single message from sub or returns an error if nothing
-// arrives within deadline. Acks the message so subsequent tests start clean.
-func receiveOne(ctx context.Context, t *testing.T, client *gpubsub.Client, subID string, deadline time.Duration) (*gpubsub.Message, error) {
-	t.Helper()
-	sub := client.Subscriber(subID)
-	pullCtx, cancel := context.WithTimeout(ctx, deadline)
-	defer cancel()
-
-	var (
-		mu  sync.Mutex
-		got *gpubsub.Message
-	)
-	err := sub.Receive(pullCtx, func(_ context.Context, m *gpubsub.Message) {
-		mu.Lock()
-		defer mu.Unlock()
-		if got == nil {
-			got = m
-			m.Ack()
-			cancel() // stop after the first message
-			return
-		}
-		m.Nack()
-	})
-	if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
-		return nil, err
-	}
-	if got == nil {
-		return nil, errors.New("no message received within deadline")
-	}
-	return got, nil
-}
 
 func TestIntegration_PubsubDispatcher_PublishesDispatchAsSpecificationDMail(t *testing.T) {
-	requireEmulator(t)
 	ctx := context.Background()
 
-	projectID := envOr("PUBSUB_PROJECT_ID", defaultProjectID)
-	topicID := envOr("PUBSUB_DMAIL_INBOUND_TOPIC", defaultInboundTopic)
-	subID := envOr("PUBSUB_DMAIL_INBOUND_SUB", defaultInboundSub)
+	projectID := testutils.FirebaseProjectID
+	topicID := testutils.TopicInbound
+	subID := testutils.SubReceiver
 
 	pub, err := pubsubadapter.NewPublisher(ctx, projectID, topicID)
 	if err != nil {
@@ -112,7 +55,7 @@ func TestIntegration_PubsubDispatcher_PublishesDispatchAsSpecificationDMail(t *t
 	}
 	defer subClient.Close()
 
-	msg, err := receiveOne(ctx, t, subClient, subID, 10*time.Second)
+	msg, err := testutils.ReceiveOne(ctx, t, subClient, subID, 10*time.Second)
 	if err != nil {
 		t.Fatalf("did not receive published message: %v", err)
 	}
@@ -146,13 +89,12 @@ func TestIntegration_PubsubDispatcher_PublishesDispatchAsSpecificationDMail(t *t
 	}
 }
 
-func TestIntegration_PubsubDispatcher_PreservesOrderingPerTarget(t *testing.T) {
-	requireEmulator(t)
+func TestIntegration_PubsubDispatcher_DeliversAllPerTarget(t *testing.T) {
 	ctx := context.Background()
 
-	projectID := envOr("PUBSUB_PROJECT_ID", defaultProjectID)
-	topicID := envOr("PUBSUB_DMAIL_INBOUND_TOPIC", defaultInboundTopic)
-	subID := envOr("PUBSUB_DMAIL_INBOUND_SUB", defaultInboundSub)
+	projectID := testutils.FirebaseProjectID
+	topicID := testutils.TopicInbound
+	subID := testutils.SubReceiver
 
 	pub, err := pubsubadapter.NewPublisher(ctx, projectID, topicID)
 	if err != nil {
@@ -207,6 +149,11 @@ func TestIntegration_PubsubDispatcher_PreservesOrderingPerTarget(t *testing.T) {
 			ordered = append(ordered, "B")
 		case strings.Contains(string(m.Data), batch+"-C"):
 			ordered = append(ordered, "C")
+		default:
+			// Carries our batch prefix but is none of A/B/C: the only way this
+			// fires is corrupted/extra test data, which would otherwise inflate
+			// the completeness count silently. Fail loud instead.
+			t.Errorf("in-batch message matched prefix but not A/B/C: %q", string(m.Data))
 		}
 		m.Ack()
 		if len(ordered) >= 3 {
@@ -217,11 +164,12 @@ func TestIntegration_PubsubDispatcher_PreservesOrderingPerTarget(t *testing.T) {
 		t.Fatalf("receive: %v", err)
 	}
 
-	// All three messages must be delivered. Strict ordering is asserted in
-	// production against Cloud Pub/Sub itself; the Firebase emulator does
-	// not honour ordering keys reliably (documented limitation), so we
-	// assert delivery completeness here and leave order verification to
-	// production smoke tests.
+	// This test asserts delivery COMPLETENESS, not order. Strict per-target
+	// ordering is a production-only guarantee of Cloud Pub/Sub (it requires
+	// ordering keys plus a single ordering region); the integration suite
+	// deliberately does NOT assert order against the emulator, so this test
+	// verifies only that all three dispatches are delivered. The function name
+	// reflects that scope on purpose — it does not claim to preserve order.
 	if len(ordered) != 3 {
 		t.Fatalf("expected 3 in-batch messages, got %v", ordered)
 	}

@@ -83,13 +83,12 @@ runops-gateway/
 │   └── ...
 ├── experiments/            # 設計判断の調査ノート (OTel / CloudEvents / DLQ / IaC test 等)
 ├── tests/
-│   ├── integration/        # Pub/Sub emulator + httptest を使う e2e 寄り (build tag: integration)
+│   ├── integration/        # testcontainers で firebase emulator を起動 (build tag: integration、 ADR 0041)
 │   └── runn/               # シナリオテスト (runn)
-├── compose.yaml            # local: Pub/Sub emulator + Jaeger v2
 ├── cloudbuild.yaml         # 管理対象アプリ用 CI/CD パイプラインのテンプレート
 ├── Dockerfile              # multi-stage build (distroless、 runops-gateway 本体)
 ├── docker/                 # multi-stage Dockerfile (dmail-receiver / dmail-emitter、 ADR 0023)
-└── justfile                # タスクランナー (test / lint / pubsub-up / trace-up / test-iac 等)
+└── justfile                # タスクランナー (test / test-integration / lint / test-iac 等)
 ```
 
 ## 関連 ADR
@@ -104,5 +103,7 @@ runops-gateway/
 - ADR 0020 / 0021 (OTel direct OTLP + Pub/Sub trace context)
 - ADR 0023 (dmail daemon を OCI image + workspace VM 配置)
 - ADR 0024 (IaC test split: tofu test / pytest)
+- ADR 0041 (testcontainers-only integration tests)
+- ADR 0042 (local trace backend = 共有 dotfiles tel スタック、 自前 Jaeger 廃止)
 
 詳細は [`docs/adr/`](adr/) 配下の各 ADR を参照。

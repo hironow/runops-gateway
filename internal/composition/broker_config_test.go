@@ -205,6 +205,33 @@ func TestLoadBrokerConfig_AcceptsSecretManagerOnly(t *testing.T) {
 	}
 }
 
+// GITHUB_API_BASE_URL is optional: unset → empty (minter uses
+// api.github.com), set → carried through so the broker can target a
+// local GitHub API emulator.
+func TestLoadBrokerConfig_GitHubAPIBaseURL(t *testing.T) {
+	t.Run("default empty", func(t *testing.T) {
+		envSet(t, happyEnv())
+		cfg, err := composition.LoadBrokerConfig()
+		if err != nil {
+			t.Fatalf("LoadBrokerConfig: %v", err)
+		}
+		if cfg.GitHubAPIBaseURL != "" {
+			t.Errorf("GitHubAPIBaseURL default = %q, want empty", cfg.GitHubAPIBaseURL)
+		}
+	})
+	t.Run("override", func(t *testing.T) {
+		envSet(t, happyEnv())
+		t.Setenv("GITHUB_API_BASE_URL", "http://localhost:4100")
+		cfg, err := composition.LoadBrokerConfig()
+		if err != nil {
+			t.Fatalf("LoadBrokerConfig: %v", err)
+		}
+		if cfg.GitHubAPIBaseURL != "http://localhost:4100" {
+			t.Errorf("GitHubAPIBaseURL = %q, want http://localhost:4100", cfg.GitHubAPIBaseURL)
+		}
+	})
+}
+
 // Custom GOOGLE_STS_ISSUER + GOOGLE_JWKS_URL override the defaults
 // — useful for local dev / staging against an emulator.
 func TestLoadBrokerConfig_CustomGoogleEndpointsOverride(t *testing.T) {
