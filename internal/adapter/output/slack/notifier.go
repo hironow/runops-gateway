@@ -28,7 +28,7 @@ type ResponseURLNotifier struct {
 	// response_url arrives in the (signature-verified) Slack payload, but it is
 	// still attacker-influenced input, so the destination host is validated
 	// against this set before any request is issued (CodeQL go/request-forgery).
-	allowedHosts map[string]struct{}
+	allowedHosts map[string]bool
 }
 
 // Option configures a ResponseURLNotifier.
@@ -41,7 +41,7 @@ func WithAllowedHosts(hosts ...string) Option {
 	return func(n *ResponseURLNotifier) {
 		for _, h := range hosts {
 			if h = strings.TrimSpace(h); h != "" {
-				n.allowedHosts[h] = struct{}{}
+				n.allowedHosts[h] = true
 			}
 		}
 	}
@@ -54,12 +54,12 @@ func WithAllowedHosts(hosts ...string) Option {
 func NewResponseURLNotifier(opts ...Option) *ResponseURLNotifier {
 	n := &ResponseURLNotifier{
 		client:       http.DefaultClient,
-		allowedHosts: map[string]struct{}{defaultResponseURLHost: {}},
+		allowedHosts: map[string]bool{defaultResponseURLHost: true},
 	}
 	if extra := os.Getenv("SLACK_RESPONSE_URL_ALLOWED_HOSTS"); extra != "" {
 		for _, h := range strings.Split(extra, ",") {
 			if h = strings.TrimSpace(h); h != "" {
-				n.allowedHosts[h] = struct{}{}
+				n.allowedHosts[h] = true
 			}
 		}
 	}
@@ -167,7 +167,7 @@ func (n *ResponseURLNotifier) post(ctx context.Context, rawURL string, payload S
 	if parsed.Scheme != "https" && parsed.Scheme != "http" {
 		return fmt.Errorf("slack notifier: response_url scheme %q not allowed", parsed.Scheme)
 	}
-	if _, ok := n.allowedHosts[parsed.Hostname()]; !ok {
+	if !n.allowedHosts[parsed.Hostname()] {
 		return fmt.Errorf("slack notifier: response_url host %q not in allowlist", parsed.Hostname())
 	}
 	if err := payload.Validate(); err != nil {
@@ -177,7 +177,9 @@ func (n *ResponseURLNotifier) post(ctx context.Context, rawURL string, payload S
 	if err != nil {
 		return fmt.Errorf("slack notifier: marshal payload: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, rawURL, bytes.NewReader(body))
+	// Build the request from the allowlist-validated parsed URL (not the raw
+	// string) so the host check sanitizes the value that reaches the request.
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, parsed.String(), bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("slack notifier: build request: %w", err)
 	}
