@@ -46,6 +46,14 @@ lint:
     CGO_ENABLED=0 go tool -modfile=tools/go.mod golangci-lint run ./...
     just semgrep
     just test-iac
+    just check-drift-gate-parity
+
+# Check tofu drift-gate input parity (ADR 0043): the TF_VAR_* set must match
+# across the cd.yaml infra job, the cd.yaml drift-gate job `with:`, and the
+# composite action. A var added to infra but not wired through downstream
+# would otherwise show as false-positive drift and block every deploy.
+check-drift-gate-parity:
+    bash scripts/check-drift-gate-parity.sh
 
 # Run OpenTofu native tests (validation block contract per ADR 0024).
 # Drop the cached terraform.tfstate first because a previous

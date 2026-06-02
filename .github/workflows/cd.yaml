@@ -335,22 +335,73 @@ jobs:
           TF_VAR_cloud_run_max_instances: ${{ vars.CLOUD_RUN_MAX_INSTANCES || '3' }}
 
   # -------------------------------------------------------------------------
+  # Deploy-time drift gate (ADR 0043). Runs AFTER infra so infra's just-applied
+  # changes are already reconciled; its real value is the infra-skipped path,
+  # where it catches un-applied tofu changes and manual gcloud/console drift.
+  # google_* only — github_* resources are excluded so the plan is token-free.
+  # Keep the `with:` inputs in parity with the infra Apply TF_VAR_* set
+  # (enforced by scripts/check-drift-gate-parity.sh).
+  # -------------------------------------------------------------------------
+  drift-gate:
+    name: Tofu Drift Gate
+    needs: [gate-check, check-changes, infra]
+    # always() so the tofu-unchanged (infra=skipped) path still runs the gate.
+    if: >-
+      always() &&
+      needs.gate-check.outputs.proceed == 'true' &&
+      (needs.infra.result == 'success' || needs.infra.result == 'skipped')
+    runs-on: ubuntu-24.04
+    environment: production
+    permissions:
+      contents: read
+      id-token: write   # required for Workload Identity Federation
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.gate-check.outputs.deploy_sha }}
+      - uses: ./.github/actions/tofu-drift-gate
+        with:
+          wif_provider:    ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+          state_bucket:    ${{ vars.TOFU_STATE_BUCKET }}
+          project_id:          ${{ vars.GCP_PROJECT_ID }}
+          allowed_slack_users: ${{ vars.ALLOWED_SLACK_USERS }}
+          github_repo:         ${{ github.repository }}
+          image: >-
+            ${{ vars.ARTIFACT_REGISTRY_LOCATION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/runops/runops-gateway:latest
+          slack_default_channel_id:           ${{ vars.SLACK_DEFAULT_CHANNEL_ID }}
+          otel_traces_sampler_arg:            ${{ vars.OTEL_TRACES_SAMPLER_ARG }}
+          exe_coder_vm_sa_email:              ${{ vars.EXE_CODER_VM_SA_EMAIL }}
+          dlq_alert_email:                    ${{ vars.DLQ_ALERT_EMAIL }}
+          broker_audience:                    ${{ vars.BROKER_AUDIENCE }}
+          broker_gateway_service_sas:         ${{ vars.BROKER_GATEWAY_SERVICE_SAS }}
+          broker_workspace_daemon_sas:        ${{ vars.BROKER_WORKSPACE_DAEMON_SAS }}
+          broker_operator_emails:             ${{ vars.BROKER_OPERATOR_EMAILS }}
+          github_app_id:                      ${{ vars.GITHUB_APP_ID }}
+          github_app_private_key_secret_name: ${{ vars.GITHUB_APP_PRIVATE_KEY_SECRET_NAME }}
+          broker_use_firestore_registry:      ${{ vars.BROKER_USE_FIRESTORE_REGISTRY }}
+          cloud_run_min_instances:            ${{ vars.CLOUD_RUN_MIN_INSTANCES || '0' }}
+          cloud_run_max_instances:            ${{ vars.CLOUD_RUN_MAX_INSTANCES || '3' }}
+
+  # -------------------------------------------------------------------------
   # Build container image and deploy to Cloud Run.
   # Always runs on push to main.
   # Waits for infra when tofu/ changed; starts immediately when skipped.
   # -------------------------------------------------------------------------
   deploy:
     name: Build & Deploy
-    needs: [gate-check, check-changes, infra]
+    needs: [gate-check, check-changes, infra, drift-gate]
     # Deploy ONLY when:
     #   - gate-check says proceed=true
     #   - infra succeeded OR was skipped
+    #   - drift-gate passed (no google_* drift)
     # Never deploy on auth_boundary/schema push (gate-check blocks);
     # those deploys go through workflow_dispatch with declared_category.
     if: >-
       always() &&
       needs.gate-check.outputs.proceed == 'true' &&
-      (needs.infra.result == 'success' || needs.infra.result == 'skipped')
+      (needs.infra.result == 'success' || needs.infra.result == 'skipped') &&
+      needs.drift-gate.result == 'success'
     runs-on: ubuntu-24.04
     environment: production
     # The deploy job pushes the prod-* immutable tag (ADR 0031). The
