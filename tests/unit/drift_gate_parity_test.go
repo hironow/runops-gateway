@@ -30,11 +30,11 @@ func parityScript(t *testing.T) string {
 	return filepath.Join(repoRoot(t), "scripts", "check-drift-gate-parity.sh")
 }
 
-// runParity runs the script with explicit cd.yaml / action.yaml paths and
-// returns its exit code plus combined output.
-func runParity(t *testing.T, cdPath, actionPath string) (int, string) {
+// runParity runs the script with explicit cd.yaml / action.yaml / drift-detect.yaml
+// paths and returns its exit code plus combined output.
+func runParity(t *testing.T, cdPath, actionPath, detectPath string) (int, string) {
 	t.Helper()
-	cmd := exec.Command("bash", parityScript(t), cdPath, actionPath)
+	cmd := exec.Command("bash", parityScript(t), cdPath, actionPath, detectPath)
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		return 0, string(out)
@@ -85,10 +85,15 @@ func realAction(t *testing.T) string {
 	return filepath.Join(repoRoot(t), ".github", "actions", "tofu-drift-gate", "action.yaml")
 }
 
+func realDetect(t *testing.T) string {
+	t.Helper()
+	return filepath.Join(repoRoot(t), ".github", "workflows", "drift-detect.yaml")
+}
+
 func TestParity_PassesOnRealFiles(t *testing.T) {
-	// given: the committed cd.yaml + action.yaml
+	// given: the committed cd.yaml + action.yaml + drift-detect.yaml
 	// when
-	code, out := runParity(t, realCD(t), realAction(t))
+	code, out := runParity(t, realCD(t), realAction(t), realDetect(t))
 	// then
 	if code != 0 {
 		t.Fatalf("expected exit 0 on real files, got %d:\n%s", code, out)
@@ -101,7 +106,7 @@ func TestParity_FailsWhenActionDropsTFVar(t *testing.T) {
 		return strings.Contains(line, "TF_VAR_dlq_alert_email:")
 	})
 	// when
-	code, out := runParity(t, realCD(t), brokenAction)
+	code, out := runParity(t, realCD(t), brokenAction, realDetect(t))
 	// then
 	if code == 0 {
 		t.Fatalf("expected non-zero exit when action drops a TF_VAR, got 0:\n%s", out)
@@ -117,9 +122,22 @@ func TestParity_FailsWhenDriftGateDropsInput(t *testing.T) {
 		return strings.HasPrefix(trimmed, "dlq_alert_email:")
 	})
 	// when
-	code, out := runParity(t, brokenCD, realAction(t))
+	code, out := runParity(t, brokenCD, realAction(t), realDetect(t))
 	// then
 	if code == 0 {
 		t.Fatalf("expected non-zero exit when drift-gate drops an input, got 0:\n%s", out)
+	}
+}
+
+func TestParity_FailsWhenRadarDropsInput(t *testing.T) {
+	// given: drift-detect.yaml with the radar `with:` dlq_alert_email input removed
+	brokenDetect := writeFixtureDroppingFirst(t, realDetect(t), func(line string) bool {
+		return strings.HasPrefix(strings.TrimSpace(line), "dlq_alert_email:")
+	})
+	// when
+	code, out := runParity(t, realCD(t), realAction(t), brokenDetect)
+	// then
+	if code == 0 {
+		t.Fatalf("expected non-zero exit when radar drops an input, got 0:\n%s", out)
 	}
 }
