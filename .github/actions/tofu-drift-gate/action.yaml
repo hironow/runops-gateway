@@ -1,0 +1,173 @@
+# Composite action: deploy-time OpenTofu drift gate.
+#
+# Runs `tofu plan -detailed-exitcode` against the GCS remote state just before
+# deploy and fails the job when any google_* resource has drifted (state vs live
+# infra). github_* resources are excluded so the plan needs no GitHub token: the
+# github provider configures anonymous + offline as long as owner/token stay empty
+# (this action deliberately never passes them). See docs/adr/0043.
+name: "tofu-drift-gate"
+description: "Fail the job if google_* infra has drifted from OpenTofu state (github_* excluded, token-free)."
+
+inputs:
+  wif_provider:
+    description: "GCP Workload Identity Provider (vars.GCP_WORKLOAD_IDENTITY_PROVIDER)."
+    required: true
+  service_account:
+    description: "GCP service account email (vars.GCP_SERVICE_ACCOUNT)."
+    required: true
+  state_bucket:
+    description: "GCS bucket for OpenTofu remote state (vars.TOFU_STATE_BUCKET)."
+    required: true
+  working_directory:
+    description: "Directory holding the tofu root module."
+    required: false
+    default: "tofu"
+  exclude_addresses:
+    description: "Newline-separated resource addresses to exclude from the plan. No-op when not in state."
+    required: false
+    default: |
+      github_repository_ruleset.prod_tags
+      github_repository_ruleset.develop_branch
+      github_repository_ruleset.main_branch
+  # The full TF_VAR set the infra Apply job uses, minus github_*. Must stay in
+  # parity with cd.yaml (enforced by scripts/check-drift-gate-parity.sh): an
+  # omitted var falls back to its tofu default and shows as false-positive drift.
+  project_id:
+    description: "TF_VAR_project_id."
+    required: true
+  image:
+    description: "TF_VAR_image placeholder (ignore_changes=[image] in main.tf)."
+    required: true
+  allowed_slack_users:
+    description: "TF_VAR_allowed_slack_users."
+    required: true
+  github_repo:
+    description: "TF_VAR_github_repo (WIF repo restriction; NOT the github provider owner)."
+    required: true
+  slack_default_channel_id:
+    description: "TF_VAR_slack_default_channel_id."
+    required: false
+    default: ""
+  otel_traces_sampler_arg:
+    description: "TF_VAR_otel_traces_sampler_arg."
+    required: false
+    default: ""
+  exe_coder_vm_sa_email:
+    description: "TF_VAR_exe_coder_vm_sa_email."
+    required: false
+    default: ""
+  dlq_alert_email:
+    description: "TF_VAR_dlq_alert_email."
+    required: false
+    default: ""
+  broker_audience:
+    description: "TF_VAR_broker_audience."
+    required: false
+    default: ""
+  broker_gateway_service_sas:
+    description: "TF_VAR_broker_gateway_service_sas."
+    required: false
+    default: ""
+  broker_workspace_daemon_sas:
+    description: "TF_VAR_broker_workspace_daemon_sas."
+    required: false
+    default: ""
+  broker_operator_emails:
+    description: "TF_VAR_broker_operator_emails."
+    required: false
+    default: ""
+  github_app_id:
+    description: "TF_VAR_github_app_id."
+    required: false
+    default: ""
+  github_app_private_key_secret_name:
+    description: "TF_VAR_github_app_private_key_secret_name."
+    required: false
+    default: ""
+  broker_use_firestore_registry:
+    description: "TF_VAR_broker_use_firestore_registry."
+    required: false
+    default: ""
+  cloud_run_min_instances:
+    description: "TF_VAR_cloud_run_min_instances."
+    required: false
+    default: "0"
+  cloud_run_max_instances:
+    description: "TF_VAR_cloud_run_max_instances."
+    required: false
+    default: "3"
+  # github_repo_owner / github_repo_name / github_token are intentionally not
+  # inputs: leaving them empty keeps the github provider offline (token-free plan).
+
+runs:
+  using: composite
+  steps:
+    - id: auth
+      uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+      with:
+        workload_identity_provider: ${{ inputs.wif_provider }}
+        service_account: ${{ inputs.service_account }}
+
+    - uses: opentofu/setup-opentofu@fc711fa910b93cba0f3fbecaafc9f42fd0c411cb # v2.0.0
+      with:
+        tofu_version: latest
+
+    - name: Init (remote state on GCS)
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      env:
+        STATE_BUCKET: ${{ inputs.state_bucket }}
+      run: |
+        set -euo pipefail
+        tofu init -input=false -reconfigure \
+          -backend-config="bucket=$STATE_BUCKET"
+
+    - name: Drift plan (-detailed-exitcode)
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      env:
+        TF_VAR_project_id: ${{ inputs.project_id }}
+        TF_VAR_image: ${{ inputs.image }}
+        TF_VAR_allowed_slack_users: ${{ inputs.allowed_slack_users }}
+        TF_VAR_github_repo: ${{ inputs.github_repo }}
+        TF_VAR_tofu_state_bucket: ${{ inputs.state_bucket }}
+        TF_VAR_slack_default_channel_id: ${{ inputs.slack_default_channel_id }}
+        TF_VAR_otel_traces_sampler_arg: ${{ inputs.otel_traces_sampler_arg }}
+        TF_VAR_exe_coder_vm_sa_email: ${{ inputs.exe_coder_vm_sa_email }}
+        TF_VAR_dlq_alert_email: ${{ inputs.dlq_alert_email }}
+        TF_VAR_broker_audience: ${{ inputs.broker_audience }}
+        TF_VAR_broker_gateway_service_sas: ${{ inputs.broker_gateway_service_sas }}
+        TF_VAR_broker_workspace_daemon_sas: ${{ inputs.broker_workspace_daemon_sas }}
+        TF_VAR_broker_operator_emails: ${{ inputs.broker_operator_emails }}
+        TF_VAR_github_app_id: ${{ inputs.github_app_id }}
+        TF_VAR_github_app_private_key_secret_name: ${{ inputs.github_app_private_key_secret_name }}
+        TF_VAR_broker_use_firestore_registry: ${{ inputs.broker_use_firestore_registry }}
+        TF_VAR_cloud_run_min_instances: ${{ inputs.cloud_run_min_instances }}
+        TF_VAR_cloud_run_max_instances: ${{ inputs.cloud_run_max_instances }}
+        EXCLUDES: ${{ inputs.exclude_addresses }}
+      run: |
+        set -euo pipefail
+        exclude_args=()
+        while IFS= read -r addr; do
+          addr="$(echo "$addr" | xargs)"
+          [ -n "$addr" ] && exclude_args+=("-exclude=$addr")
+        done <<< "$EXCLUDES"
+
+        # Capture the detailed exit code without aborting on 2 (drift).
+        set +e
+        tofu plan -detailed-exitcode -input=false -no-color -lock=false "${exclude_args[@]}"
+        code=$?
+        set -e
+
+        case "$code" in
+          0)
+            echo "::notice::tofu drift gate: no drift, proceeding." ;;
+          2)
+            echo "::error::tofu drift gate: drift in google_* resources (state vs live infra). Deploy blocked." >&2
+            echo "::error::Likely a manual gcloud/console change or an un-applied tofu change check-changes missed." >&2
+            echo "::error::Remediate, then re-run ALL jobs (re-running deploy alone skips this gate)." >&2
+            exit 1 ;;
+          *)
+            echo "::error::tofu drift gate: plan failed (exit $code). Failing closed." >&2
+            exit 1 ;;
+        esac
