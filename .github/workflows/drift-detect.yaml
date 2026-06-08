@@ -1,9 +1,11 @@
 name: Drift detect
 
-# Scheduled + on-demand drift radar (ADR 0044). Reuses the tofu-drift-gate
-# composite action in report mode (fail_on_drift=false) and opens a GitHub
-# issue when google_* infra has drifted from OpenTofu state — without waiting
-# for a deploy. Detective only; the deploy-time gate lives in cd.yaml (ADR 0043).
+# Scheduled + on-demand drift radar (ADR 0044, superseded by ADR 0045). Reuses
+# the tofu-drift-gate composite action and FAILS THE JOB when google_* infra has
+# drifted from OpenTofu state — without waiting for a deploy. This repo has issues
+# disabled (ADR 0045), so drift is surfaced via the GitHub Actions workflow
+# failure notification, not an issue. Detective only; the deploy-time gate lives
+# in cd.yaml (ADR 0043).
 #
 # The `with:` inputs MUST stay in parity with cd.yaml's infra/drift-gate and the
 # action (enforced by scripts/check-drift-gate-parity.sh): an omitted var falls
@@ -23,7 +25,6 @@ concurrency:
 permissions:
   contents: read
   id-token: write   # Workload Identity Federation to GCP
-  issues: write     # open / comment the drift issue
 
 jobs:
   radar:
@@ -33,10 +34,11 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
+      # drift => the action exits 1 => this job fails => GitHub Actions failure
+      # notification is the signal (repo has issues disabled, ADR 0045).
       - id: gate
         uses: ./.github/actions/tofu-drift-gate
         with:
-          fail_on_drift: "false"   # report mode: never fail, expose drift via output
           wif_provider:    ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
           state_bucket:    ${{ vars.TOFU_STATE_BUCKET }}
@@ -58,21 +60,3 @@ jobs:
           broker_use_firestore_registry:      ${{ vars.BROKER_USE_FIRESTORE_REGISTRY }}
           cloud_run_min_instances:            ${{ vars.CLOUD_RUN_MIN_INSTANCES || '0' }}
           cloud_run_max_instances:            ${{ vars.CLOUD_RUN_MAX_INSTANCES || '3' }}
-
-      - name: Open or update drift issue
-        if: steps.gate.outputs.drift == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          # Idempotent: reuse the open drift issue if one exists, else open one.
-          existing=$(gh issue list --search 'in:title Tofu drift detected' --state open \
-            --json number --jq '.[0].number // empty')
-          if [ -n "$existing" ]; then
-            gh issue comment "$existing" --body "Still drifting as of ${RUN_URL}"
-          else
-            gh issue create \
-              --title "Tofu drift detected" \
-              --body "google_* drift detected by the scheduled radar (ADR 0044). See run: ${RUN_URL}"
-          fi
