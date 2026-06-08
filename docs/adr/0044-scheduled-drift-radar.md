@@ -1,7 +1,7 @@
 # 0044. Scheduled drift radar
 
 **Date:** 2026-06-02
-**Status:** Accepted
+**Status:** Superseded by [0045](0045-drift-radar-job-fail-notification.md)
 
 ## Context
 

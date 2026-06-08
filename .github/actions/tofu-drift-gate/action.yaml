@@ -96,17 +96,8 @@ inputs:
     description: "TF_VAR_cloud_run_max_instances."
     required: false
     default: "3"
-  fail_on_drift:
-    description: "true: exit 1 on drift (gate). false: exit 0 and set the drift output (report/radar)."
-    required: false
-    default: "true"
   # github_repo_owner / github_repo_name / github_token are intentionally not
   # inputs: leaving them empty keeps the github provider offline (token-free plan).
-
-outputs:
-  drift:
-    description: "true when google_* drift was detected; false when clean."
-    value: ${{ steps.plan.outputs.drift }}
 
 runs:
   using: composite
@@ -132,11 +123,9 @@ runs:
           -backend-config="bucket=$STATE_BUCKET"
 
     - name: Drift plan (-detailed-exitcode)
-      id: plan
       shell: bash
       working-directory: ${{ inputs.working_directory }}
       env:
-        FAIL_ON_DRIFT: ${{ inputs.fail_on_drift }}
         TF_VAR_project_id: ${{ inputs.project_id }}
         TF_VAR_image: ${{ inputs.image }}
         TF_VAR_allowed_slack_users: ${{ inputs.allowed_slack_users }}
@@ -172,18 +161,13 @@ runs:
 
         case "$code" in
           0)
-            echo "drift=false" >> "$GITHUB_OUTPUT"
             echo "::notice::tofu drift gate: no drift." ;;
           2)
-            echo "drift=true" >> "$GITHUB_OUTPUT"
-            echo "::warning::tofu drift gate: drift in google_* resources (state vs live infra)."
-            echo "::warning::Likely a manual gcloud/console change or an un-applied tofu change check-changes missed."
-            if [ "$FAIL_ON_DRIFT" = "true" ]; then
-              echo "::error::Deploy blocked (fail_on_drift=true). Remediate, then re-run ALL jobs (re-running deploy alone skips this gate)." >&2
-              exit 1
-            fi ;;
+            echo "::error::tofu drift gate: drift in google_* resources (state vs live infra). Blocked." >&2
+            echo "::error::Likely a manual gcloud/console change or an un-applied tofu change check-changes missed." >&2
+            echo "::error::Remediate, then re-run ALL jobs (re-running deploy alone skips this gate)." >&2
+            exit 1 ;;
           *)
-            echo "drift=error" >> "$GITHUB_OUTPUT"
             echo "::error::tofu drift gate: plan failed (exit $code). Failing closed." >&2
             exit 1 ;;
         esac
