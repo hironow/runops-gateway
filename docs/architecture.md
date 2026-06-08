@@ -19,8 +19,8 @@ cmd/server                              cmd/runops      - dmail-receiver  (docke
        +------+------+------+------+------+    +-->| dmail-outbound    |
                                                    | + DLQ * 2         |
                   ^                                +-------------------+
-                  |       OTLP gRPC (ADR 0020)
-                  +------> Jaeger v2 (local) / telemetry.googleapis.com (prod)
+                  |       OTLP gRPC (ADR 0020/0042)
+                  +------> dotfiles tel collector :4317 (local) / telemetry.googleapis.com (prod)
 ```
 
 Legend / 凡例:
@@ -68,8 +68,8 @@ runops-gateway/
 │       └── observability/  # OTel TracerProvider + ADC + Sampler (ADR 0020)
 ├── scripts/
 │   ├── notify-slack.sh     # Cloud Build から呼ばれる Slack 通知スクリプト
-│   ├── init-pubsub.sh      # local emulator 用 topic/subscription 初期化
-│   └── smoke/              # Pub/Sub 手動 smoke スクリプト
+│   ├── init-app.sh / check-app.sh  # 管理対象アプリの初期化 / 検証
+│   └── smoke/              # Pub/Sub 手動 smoke スクリプト (init-pubsub.sh は ADR 0041 で廃止)
 ├── tofu/                   # GCP インフラ定義 (OpenTofu) ← gateway 自体のインフラ
 │   ├── pubsub.tf           # dmail-* topics + DLQ
 │   ├── subscriptions.tf    # working subscriptions + DLQ pull subscriptions
