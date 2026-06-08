@@ -9,9 +9,9 @@
 #   (c) .github/workflows/drift-detect.yaml radar job       with: inputs  (mapped to TF_VAR names)
 #   (d) .github/actions/tofu-drift-gate/action.yaml         TF_VAR_* env
 #
-# wif_provider / service_account / fail_on_drift are action control inputs, not
-# tofu vars, so they are dropped from the mapping. state_bucket maps to the
-# non-obvious TF_VAR_tofu_state_bucket.
+# wif_provider / service_account are action control inputs, not tofu vars, so
+# they are dropped from the mapping. state_bucket maps to the non-obvious
+# TF_VAR_tofu_state_bucket.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -25,7 +25,7 @@ tfvars_from_keys() {
   while IFS= read -r k; do
     [ -z "$k" ] && continue
     case "$k" in
-      wif_provider | service_account | fail_on_drift) continue ;;
+      wif_provider | service_account) continue ;;
       state_bucket) echo "TF_VAR_tofu_state_bucket" ;;
       *) echo "TF_VAR_${k}" ;;
     esac
