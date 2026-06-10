@@ -135,6 +135,9 @@ jobs:
             echo "hit=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Set up Takumi Guard (PyPI)
+        uses: flatt-security/setup-takumi-guard-pypi@v1
+
       - name: Run Semgrep auth-boundary signature rules (base-ref rules, fail-closed)
         id: semgrep
         env:
