@@ -40,6 +40,10 @@ test:
 test-v:
     go test -v ./...
 
+# Run all tests with the race detector (same flag as the CI test job)
+test-race:
+    go test -race ./...
+
 # Run linting (go vet + golangci-lint + semgrep + tofu test)
 lint:
     go vet ./...
@@ -151,6 +155,14 @@ pre-commit:
 # CI-equivalent gate: prek hooks + check + full test suite
 check-all: pre-commit check test
     @echo "✅ all checks passed"
+
+# Local parity with .github/workflows/ci.yaml: vet + golangci-lint (lint),
+# race-detector tests, build, tofu test (lint -> test-iac), and integration
+# (testcontainers; needs a running Docker daemon). lint is a superset of the
+# CI test job's lint steps — it adds semgrep + drift-gate parity, which CI
+# runs in release-gate.yaml / cd.yaml instead.
+ci: lint test-race build test-integration
+    @echo "✅ ci parity gate passed"
 
 # Copy initial setup files to a managed app repository.
 # Usage: just init-app ../my-app my-project my-service,my-other-service my-migrate-job [asia-northeast1] [my-artifact-repo] [gateway-project]
