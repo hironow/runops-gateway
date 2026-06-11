@@ -136,7 +136,7 @@ jobs:
           fi
 
       - name: Set up Takumi Guard (PyPI)
-        uses: flatt-security/setup-takumi-guard-pypi@v1
+        uses: flatt-security/setup-takumi-guard-pypi@733047c120b6377fa05fb77f714df8d8cd3a41a9 # v1
 
       - name: Run Semgrep auth-boundary signature rules (base-ref rules, fail-closed)
         id: semgrep
