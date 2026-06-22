@@ -118,7 +118,7 @@ jobs:
       # ref was not actually used by build/deploy.
       deploy_sha: ${{ steps.resolve.outputs.deploy_sha }}
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
 
@@ -232,7 +232,7 @@ jobs:
     outputs:
       tofu: ${{ steps.filter.outputs.tofu }}
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 2
       # Self-impl of dorny/paths-filter (kept out of the action allow list
@@ -278,7 +278,7 @@ jobs:
       # resolved to a 40-char SHA, or github.sha for push). Without
       # this, dispatch deploys would silently apply infra from the
       # branch HEAD instead of the input ref (codex review v6 #2).
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ needs.gate-check.outputs.deploy_sha }}
 
@@ -356,7 +356,7 @@ jobs:
       contents: read
       id-token: write   # required for Workload Identity Federation
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ needs.gate-check.outputs.deploy_sha }}
       - uses: ./.github/actions/tofu-drift-gate
@@ -427,7 +427,7 @@ jobs:
       DEPLOY_SHA: ${{ needs.gate-check.outputs.deploy_sha }}
 
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ needs.gate-check.outputs.deploy_sha }}
           fetch-depth: 0  # need history for prod-* tag creation step
