@@ -118,7 +118,7 @@ jobs:
       # ref was not actually used by build/deploy.
       deploy_sha: ${{ steps.resolve.outputs.deploy_sha }}
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
 
@@ -232,7 +232,7 @@ jobs:
     outputs:
       tofu: ${{ steps.filter.outputs.tofu }}
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 2
       # Self-impl of dorny/paths-filter (kept out of the action allow list
@@ -278,7 +278,7 @@ jobs:
       # resolved to a 40-char SHA, or github.sha for push). Without
       # this, dispatch deploys would silently apply infra from the
       # branch HEAD instead of the input ref (codex review v6 #2).
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ needs.gate-check.outputs.deploy_sha }}
 
@@ -288,7 +288,7 @@ jobs:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
 
-      - uses: opentofu/setup-opentofu@847eaa4afeb791b06daa46e8eafa8b1b68d7cfb4 # v2.0.1
+      - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
         with:
           tofu_version: latest
 
@@ -356,7 +356,7 @@ jobs:
       contents: read
       id-token: write   # required for Workload Identity Federation
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ needs.gate-check.outputs.deploy_sha }}
       - uses: ./.github/actions/tofu-drift-gate
@@ -427,7 +427,7 @@ jobs:
       DEPLOY_SHA: ${{ needs.gate-check.outputs.deploy_sha }}
 
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ needs.gate-check.outputs.deploy_sha }}
           fetch-depth: 0  # need history for prod-* tag creation step
@@ -440,7 +440,7 @@ jobs:
 
       - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
 
-      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
       - name: Configure Docker for Artifact Registry
         run: |
@@ -448,7 +448,7 @@ jobs:
             ${{ vars.ARTIFACT_REGISTRY_LOCATION }}-docker.pkg.dev --quiet
 
       - name: Build and push (runops-gateway)
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           push: true
@@ -466,7 +466,7 @@ jobs:
       # experiment). No Cloud Run deploy step — the workspace VM
       # systemd unit handles lifecycle.
       - name: Build and push (dmail-receiver)
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           file: docker/dmail-receiver.Dockerfile
@@ -478,7 +478,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=dmail-receiver
 
       - name: Build and push (dmail-emitter)
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           file: docker/dmail-emitter.Dockerfile
