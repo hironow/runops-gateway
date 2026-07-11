@@ -6,7 +6,7 @@
 # does NOT re-check these (per the repo IaC test policy).
 #
 # command = plan keeps the test side-effect free: mock_provider stubs
-# google, no auth, no resources created.
+# google and github, no auth, no resources created.
 #
 # Test matrix:
 #   1. defaults are all ""                                  -> dormant (assert)
@@ -17,6 +17,7 @@
 #   6. broker_use_firestore_registry invalid enum           -> rejected
 
 mock_provider "google" {}
+mock_provider "github" {}
 
 # Same auto-fill workaround as sa_validation: the google provider
 # re-validates SA names referenced by IAM bindings against a strict
