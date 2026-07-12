@@ -10,7 +10,7 @@
 #
 # command = plan keeps the test free of side effects: no provider
 # auth required, no resources created. mock_provider stubs the
-# google provider so the rest of the configuration evaluates.
+# google and github providers so the rest of the configuration evaluates.
 #
 # Test matrix:
 #   1. workspace SA pattern (exe-workspace@…)         -> plan succeeds
@@ -19,6 +19,7 @@
 #   4. empty (bootstrap before SA exists)              -> plan succeeds (allowed by validation)
 
 mock_provider "google" {}
+mock_provider "github" {}
 
 # google_service_account.* resources auto-generate computed `name` /
 # `email` strings via mock_provider, but the google provider's own

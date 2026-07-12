@@ -3,7 +3,7 @@
 #
 # command = plan keeps the test free of side effects: no provider auth
 # required, no resources actually created. mock_provider stubs the google
-# provider so the rest of the configuration evaluates.
+# and github providers so the rest of the configuration evaluates.
 #
 # Test matrix:
 #   1. firestore_database_name="runops-registry" -> plan succeeds
@@ -12,6 +12,7 @@
 #   4. firestore_location_id=""                  -> plan fails (non-empty required)
 
 mock_provider "google" {}
+mock_provider "github" {}
 
 # Same provider IAM regex workaround as sa_validation.tofutest.hcl: the
 # google provider re-validates SA names against a strict regex that
