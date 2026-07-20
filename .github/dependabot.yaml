@@ -21,6 +21,13 @@ updates:
       google-actions:
         patterns:
           - "google-github-actions/*"
+      # codeql-action の init と analyze は同一バージョンでないと
+      # "CodeQL Action major versions v3 and below..." 等で解析が落ちる。
+      # 個別 PR に分割されると片方だけ上がってバージョン不一致になるため、
+      # サブアクションを1グループに束ねて必ず同時に上げる。
+      codeql:
+        patterns:
+          - "github/codeql-action*"
       github-actions-misc:
         patterns:
           - "actions/*"
