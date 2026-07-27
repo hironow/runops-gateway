@@ -33,7 +33,7 @@ jobs:
     steps:
       # SHA pin: 既存 workflow と同一 pin を流用 (org policy "Require actions
       # to be pinned to a full-length commit SHA")。
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Go toolchain は setup-go で揃える (mise.toml の go = "latest" 相当の
       # stable 解決)。CI test job と同じ流儀で dev/CI を lockstep に保つ。
