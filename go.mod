@@ -3,7 +3,7 @@ module github.com/hironow/runops-gateway
 go 1.26.1
 
 require (
-	cloud.google.com/go/firestore v1.24.0
+	cloud.google.com/go/firestore v1.25.0
 	cloud.google.com/go/pubsub/v2 v2.6.1
 	cloud.google.com/go/run v1.22.0
 	cloud.google.com/go/secretmanager v1.21.0
@@ -22,7 +22,7 @@ require (
 	go.opentelemetry.io/otel/sdk v1.45.0
 	go.opentelemetry.io/otel/trace v1.45.0
 	golang.org/x/sync v0.22.0
-	google.golang.org/api v0.291.0
+	google.golang.org/api v0.292.0
 	google.golang.org/grpc v1.83.0
 	modernc.org/sqlite v1.55.0
 	sigs.k8s.io/yaml v1.6.0
