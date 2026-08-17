@@ -4,6 +4,9 @@
 # full-length commit SHA") なので、Dependabot は SHA pin を新リリースの SHA に
 # 自動で更新する。
 #
+# Supply-chain cooldown (org standard): 新規公開から 7 日待って採用する
+# (侵害リリースをエコシステム側の検知が先回りできる猶予)。
+#
 # Go modules: 本リポは多数の OTel / GCP SDK に依存しているので、関連 module を
 # group にまとめて 1 PR で更新する。
 version: 2
@@ -14,6 +17,8 @@ updates:
       interval: weekly
       day: monday
     open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
     groups:
       docker-actions:
         patterns:
@@ -40,6 +45,8 @@ updates:
       interval: weekly
       day: monday
     open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
     groups:
       otel:
         patterns:
