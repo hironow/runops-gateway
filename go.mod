@@ -24,7 +24,7 @@ require (
 	golang.org/x/sync v0.22.0
 	google.golang.org/api v0.293.0
 	google.golang.org/grpc v1.83.1
-	modernc.org/sqlite v1.56.0
+	modernc.org/sqlite v1.57.0
 	sigs.k8s.io/yaml v1.6.0
 )
 
