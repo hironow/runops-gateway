@@ -12,6 +12,7 @@ on:
   push:
     branches: [develop, main]
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     branches: [develop]
   schedule:
     # 週次 (月 03:27 UTC)。依存・ルール更新を定期的に再スキャン。
@@ -28,6 +29,7 @@ permissions:
 
 jobs:
   analyze:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     name: Analyze (Go)
     runs-on: ubuntu-24.04
     steps:

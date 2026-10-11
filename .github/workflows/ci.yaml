@@ -6,6 +6,7 @@ on:
   push:
     branches: [develop, main]
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     branches: [develop, main]
 
 concurrency:
@@ -17,6 +18,7 @@ permissions:
 
 jobs:
   test:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     name: Test
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -28,9 +30,6 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: stable
-
-      - name: Set up Takumi Guard (Go)
-        uses: flatt-security/setup-takumi-guard-golang@37631ecffa6faf06754444a4807451b7a55c64b5 # v1
 
       - name: Download modules
         run: go mod download
@@ -53,6 +52,7 @@ jobs:
   # pull in tofu. Matches the local 'just test-iac' recipe so dev
   # and CI stay in lockstep.
   test-iac:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     name: Test (OpenTofu)
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -80,6 +80,7 @@ jobs:
   # Pub/Sub bridge (Issue #0006, ADR 0028); internal/adapter/output/state
   # covers the Firestore registry (Issue #0011, ADR 0026).
   integration:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     name: Integration (testcontainers)
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -91,9 +92,6 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: stable
-
-      - name: Set up Takumi Guard (Go)
-        uses: flatt-security/setup-takumi-guard-golang@37631ecffa6faf06754444a4807451b7a55c64b5 # v1
 
       - name: Download modules
         run: go mod download

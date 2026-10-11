@@ -44,6 +44,10 @@ test-v:
 test-race:
     go test -race ./...
 
+# Update the isolated golangci-lint tool module
+update-lint-tool version:
+    go get -modfile=tools/go.mod -tool github.com/golangci/golangci-lint/v2/cmd/golangci-lint@{{version}}
+
 # Run linting (go vet + golangci-lint + semgrep + tofu test)
 lint:
     go vet ./...
@@ -67,6 +71,10 @@ check-drift-gate-parity:
 # cache forces a clean -backend=false init.
 test-iac:
     cd tofu && rm -f .terraform/terraform.tfstate && tofu init -backend=false >/dev/null && tofu test
+
+# Install the release gate scanner from official PyPI
+install-release-gate-semgrep:
+    uv tool install --python 3.12 "semgrep==1.179.0"
 
 # Run project semgrep rules.
 #
