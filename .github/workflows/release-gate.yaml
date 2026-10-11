@@ -36,6 +36,7 @@ permissions:
 
 jobs:
   classify:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     name: Classify change category
     runs-on: ubuntu-latest
     outputs:
@@ -135,8 +136,13 @@ jobs:
             echo "hit=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Set up Takumi Guard (PyPI)
-        uses: flatt-security/setup-takumi-guard-pypi@bac24f8a97255d96a277f60de6906154ce0be096 # v1
+      - name: Set up uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+
+      - name: Install release-gate Semgrep
+        run: |
+          uv tool install --python 3.12 "semgrep==1.179.0"
+          echo "$(uv tool dir --bin)" >> "$GITHUB_PATH"
 
       - name: Run Semgrep auth-boundary signature rules (base-ref rules, fail-closed)
         id: semgrep
@@ -168,11 +174,6 @@ jobs:
             exit 0
           fi
           echo "rules_present=true" >> "$GITHUB_OUTPUT"
-
-          # Semgrep is preinstalled on ubuntu-latest via pip (the
-          # python step also handled the path globs). Pin to a known
-          # release for reproducibility.
-          python3 -m pip install --quiet "semgrep==1.94.0"
 
           # Limit Semgrep to the changed files only — both the new
           # path and any previous path of renamed files. The diff
@@ -299,7 +300,7 @@ jobs:
         id: globs
         run: |
           set -euo pipefail
-          python3 - <<'PY' /tmp/release-gate/paths.yaml /tmp/release-gate/changed.txt > /tmp/release-gate/globs.json
+          uv run --no-project --python 3.12 python - <<'PY' /tmp/release-gate/paths.yaml /tmp/release-gate/changed.txt > /tmp/release-gate/globs.json
           import json, sys, re
 
           paths_yaml, changed_txt = sys.argv[1], sys.argv[2]

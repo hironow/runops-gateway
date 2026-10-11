@@ -72,6 +72,10 @@ check-drift-gate-parity:
 test-iac:
     cd tofu && rm -f .terraform/terraform.tfstate && tofu init -backend=false >/dev/null && tofu test
 
+# Install the release gate scanner from official PyPI
+install-release-gate-semgrep:
+    uv tool install --python 3.12 "semgrep==1.179.0"
+
 # Run project semgrep rules.
 #
 # Local `just semgrep` only fails on ERROR-severity findings. WARNING

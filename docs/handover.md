@@ -15,12 +15,16 @@ The Markdown formatter also repaired old documents; those edits were restored to
 
 Branch: `ci/remove-flatt`, based on develop.
 The lint update is a separate preparatory commit.
-Three Takumi Guard steps still need removal from CI and release-gate.
+Three Takumi Guard steps are removed from CI and release-gate.
+The release-gate scanner updates Semgrep to 1.179.0 to avoid the removed pkg_resources dependency and uses official PyPI through uv.
+The protected workflow pins its install command directly; it does not execute the PR head justfile while classifying changes.
+Release-gate Python runs through uv with Python 3.12.
+PR jobs in CI, release-gate, and CodeQL skip drafts and resume on ready_for_review.
 
 ## Next Actions
 
-1. Remove the Guard steps and keep release-gate classification unchanged.
-2. Run the local gate, then create a ready PR targeting develop.
+1. Run the local gate and review the diff.
+2. Create a ready PR targeting develop.
 3. Verify every CI check, squash merge, and remove the Flatt Actions allowlist entry.
 
 ## Known Risks / Blockers
