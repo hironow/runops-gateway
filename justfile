@@ -44,6 +44,10 @@ test-v:
 test-race:
     go test -race ./...
 
+# Update the isolated golangci-lint tool module
+update-lint-tool version:
+    go get -modfile=tools/go.mod -tool github.com/golangci/golangci-lint/v2/cmd/golangci-lint@{{version}}
+
 # Run linting (go vet + golangci-lint + semgrep + tofu test)
 lint:
     go vet ./...
