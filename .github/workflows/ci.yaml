@@ -6,6 +6,7 @@ on:
   push:
     branches: [develop, main]
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     branches: [develop, main]
 
 concurrency:
@@ -17,20 +18,18 @@ permissions:
 
 jobs:
   test:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     name: Test
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Go toolchain は setup-go で供給 (mise.toml の go = "latest" 相当の
       # stable 解決)。CI は mise 非依存。
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: stable
-
-      - name: Set up Takumi Guard (Go)
-        uses: flatt-security/setup-takumi-guard-golang@2e3c7c40b538cd68b2ac483def12982ebc8bc02e # v1
 
       - name: Download modules
         run: go mod download
@@ -53,11 +52,12 @@ jobs:
   # pull in tofu. Matches the local 'just test-iac' recipe so dev
   # and CI stay in lockstep.
   test-iac:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     name: Test (OpenTofu)
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
         with:
@@ -80,20 +80,18 @@ jobs:
   # Pub/Sub bridge (Issue #0006, ADR 0028); internal/adapter/output/state
   # covers the Firestore registry (Issue #0011, ADR 0026).
   integration:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     name: Integration (testcontainers)
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Go toolchain は setup-go で供給 (mise.toml の go = "latest" 相当の
       # stable 解決)。CI は mise 非依存。
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: stable
-
-      - name: Set up Takumi Guard (Go)
-        uses: flatt-security/setup-takumi-guard-golang@2e3c7c40b538cd68b2ac483def12982ebc8bc02e # v1
 
       - name: Download modules
         run: go mod download

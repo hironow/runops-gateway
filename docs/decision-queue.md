@@ -15,6 +15,12 @@ Entry format:
 
 ---
 
+## 2026-07-11
+
+- [ ] **iac-test-github-provider**: Audit found 3 of 4 tofu test files missing `mock_provider "github" {}`, silently skipping GitHub provider init during `tofu test`. Fixed in branch test/tf-coverage. No further action needed unless you want a CI lint rule to enforce mock_provider declarations for every declared provider.
+
+---
+
 ## Open Items
 
 (none yet)
