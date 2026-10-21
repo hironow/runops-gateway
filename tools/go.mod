@@ -1,6 +1,6 @@
 module github.com/hironow/runops-gateway/tools
 
-go 1.26.1
+go 1.26.10
 
 tool github.com/golangci/golangci-lint/v2/cmd/golangci-lint
 

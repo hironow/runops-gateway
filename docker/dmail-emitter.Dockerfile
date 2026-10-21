@@ -13,7 +13,7 @@
 # Same multi-stage / distroless-nonroot recipe as docker/dmail-receiver
 # .Dockerfile so all runops-gateway daemons share an image discipline.
 
-FROM golang:1.26-alpine AS builder
+FROM golang:1.26.10-alpine AS builder
 
 WORKDIR /app
 
