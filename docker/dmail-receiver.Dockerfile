@@ -13,7 +13,7 @@
 # distroless static, runs as non-root via the `nonroot` UID 65532
 # baked into gcr.io/distroless/static-debian12:nonroot).
 
-FROM golang:1.26-alpine AS builder
+FROM golang:1.26.10-alpine AS builder
 
 WORKDIR /app
 
