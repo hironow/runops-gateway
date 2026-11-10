@@ -10,57 +10,33 @@
 # Go modules: 本リポは多数の OTel / GCP SDK に依存しているので、関連 module を
 # group にまとめて 1 PR で更新する。
 version: 2
+
+# One Dependabot pull request per week for the whole repo (owner ruling
+# 2026-09-14): every ecosystem below joins the `weekly` group, whose schedule is
+# this repo's slot on a weeknight JST (hub `just dependabot-slot <repo>`) — one CI
+# run on the runner pool per repo per week instead of one per ecosystem, and no
+# org-wide Monday burst. The per-ecosystem cooldown and labels are unchanged;
+# commit-message and open-pull-requests-limit live on the group (Dependabot
+# refuses them on the entries).
+multi-ecosystem-groups:
+  weekly:
+    schedule:
+      interval: "weekly"
+      day: "friday"
+      time: "18:02"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 5
+
 updates:
   - package-ecosystem: github-actions
+    patterns: ["*"]
+    multi-ecosystem-group: "weekly"
     directory: /
-    schedule:
-      interval: weekly
-      day: monday
-    open-pull-requests-limit: 5
     cooldown:
       default-days: 7
-    groups:
-      docker-actions:
-        patterns:
-          - "docker/*"
-      google-actions:
-        patterns:
-          - "google-github-actions/*"
-      # codeql-action の init と analyze は同一バージョンでないと
-      # "CodeQL Action major versions v3 and below..." 等で解析が落ちる。
-      # 個別 PR に分割されると片方だけ上がってバージョン不一致になるため、
-      # サブアクションを1グループに束ねて必ず同時に上げる。
-      codeql:
-        patterns:
-          - "github/codeql-action*"
-      github-actions-misc:
-        patterns:
-          - "actions/*"
-          - "jdx/*"
-          - "opentofu/*"
-
   - package-ecosystem: gomod
+    patterns: ["*"]
+    multi-ecosystem-group: "weekly"
     directory: /
-    schedule:
-      interval: weekly
-      day: monday
-    open-pull-requests-limit: 5
     cooldown:
       default-days: 7
-    groups:
-      otel:
-        patterns:
-          - "go.opentelemetry.io/*"
-      gcp:
-        patterns:
-          - "cloud.google.com/go*"
-          - "google.golang.org/*"
-          - "github.com/googleapis/*"
-      go-deps-rest:
-        patterns:
-          - "*"
-        exclude-patterns:
-          - "go.opentelemetry.io/*"
-          - "cloud.google.com/go*"
-          - "google.golang.org/*"
-          - "github.com/googleapis/*"
